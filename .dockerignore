@@ -1,0 +1,7 @@
+/target
+/data
+/run
+/secrets
+/.git
+config/wallet.toml
+*.local.toml

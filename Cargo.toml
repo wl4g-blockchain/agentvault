@@ -1,0 +1,55 @@
+[package]
+name = "agent-wallet"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Process-isolated EOA signing service for agent runtimes"
+rust-version = "1.85"
+
+[lib]
+name = "agent_wallet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "walletd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+fs2 = "0.4"
+hex = "0.4"
+hkdf = "0.12"
+k256 = { version = "0.13", features = ["ecdsa"] }
+libc = "0.2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rumqttc = "0.25"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sha3 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.18", features = ["serde", "v4"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.21"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

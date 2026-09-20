@@ -1,0 +1,32 @@
+[store]
+directory = "/var/lib/wallet"
+master_key_file = "/run/secrets/wallet/master.key"
+
+[security]
+max_request_bytes = 16384
+max_request_ttl_seconds = 30
+clock_skew_seconds = 5
+dedup_ttl_seconds = 300
+max_dedup_entries = 10000
+
+[[security.client_policies]]
+client_id_prefix = "flowgent-"
+wallet_ids = ["payer"]
+purposes = ["x402.payment"]
+
+[transports.local]
+enabled = false
+socket_path = "/run/wallet/wallet.sock"
+
+[transports.mqtt]
+enabled = true
+host = "emqx"
+port = 1883
+client_id = "wallet-01"
+consumer_group = "wallet-pool"
+request_topic_prefix = "wallet/v1/sign/requests"
+response_topic_prefix = "wallet/v1/sign/responses"
+qos = 1
+tls = false
+username = ""
+password_file = ""

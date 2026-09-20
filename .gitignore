@@ -1,0 +1,13 @@
+# Rust build and tooling output
+/target/
+/debug/
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+
+# Local runtime data and secrets
+/data/
+/run/
+/secrets/
+/config/wallet.toml
+*.local.toml
