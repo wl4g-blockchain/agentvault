@@ -1,13 +1,23 @@
+pub mod api;
 pub mod config;
 pub mod crypto;
 pub mod error;
+mod framing;
+pub mod history;
+pub mod management;
+pub mod model;
+pub mod observability;
 pub mod protocol;
 mod secret;
+pub mod server;
 pub mod service;
+pub mod signer;
 pub mod store;
 pub mod transport;
 
-pub use config::Config;
+pub use config::{AppConfig, Config};
 pub use error::{Error, Result};
-pub use service::WalletService;
+pub use server::AgentVaultServer;
+pub use service::{PaymentSignService, WalletService};
+pub use signer::{IPaymentSigner, LocalPaymentSigner, MqttPaymentSigner};
 pub use store::EncryptedFileStore;

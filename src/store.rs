@@ -144,7 +144,17 @@ impl EncryptedFileStore {
     /// Returns an error for an invalid or existing ID or a storage failure.
     pub fn generate(&self, id: &str) -> Result<KeyInfo> {
         let private_key = crypto::generate_private_key();
-        self.insert(id, &private_key)
+        self.write_key(id, &private_key, WriteMode::Create)
+    }
+
+    /// Atomically replaces an existing wallet with a newly generated key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid or missing ID or a storage failure.
+    pub fn rotate(&self, id: &str) -> Result<KeyInfo> {
+        let private_key = crypto::generate_private_key();
+        self.write_key(id, &private_key, WriteMode::Replace)
     }
 
     /// Imports raw secp256k1 private-key bytes.
@@ -154,7 +164,7 @@ impl EncryptedFileStore {
     /// Returns an error for an invalid key/ID, duplicate ID, or storage failure.
     pub fn import(&self, id: &str, private_key: &[u8]) -> Result<KeyInfo> {
         crypto::validate_private_key(private_key)?;
-        self.insert(id, private_key)
+        self.write_key(id, private_key, WriteMode::Create)
     }
 
     /// Imports a hex private key from an owner-only regular file.
@@ -284,7 +294,7 @@ impl EncryptedFileStore {
         write_json_atomic(&metadata_path, &encrypt_data_key(&self.data_key, &replacement)?)
     }
 
-    fn insert(&self, id: &str, private_key: &[u8]) -> Result<KeyInfo> {
+    fn write_key(&self, id: &str, private_key: &[u8], mode: WriteMode) -> Result<KeyInfo> {
         validate_identifier("wallet_id", id)?;
         crypto::validate_private_key(private_key)?;
         let _guard = self
@@ -292,8 +302,10 @@ impl EncryptedFileStore {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.key_path(id);
-        if path.exists() {
-            return Err(Error::KeyExists(id.to_owned()));
+        match (mode, path.exists()) {
+            (WriteMode::Create, true) => return Err(Error::KeyExists(id.to_owned())),
+            (WriteMode::Replace, false) => return Err(Error::KeyNotFound(id.to_owned())),
+            _ => {}
         }
 
         let info = KeyInfo {
@@ -361,6 +373,12 @@ impl EncryptedFileStore {
         let digest = Sha256::digest(id.as_bytes());
         self.root.join(KEYS_DIR).join(format!("{}.json", hex::encode(digest)))
     }
+}
+
+#[derive(Clone, Copy)]
+enum WriteMode {
+    Create,
+    Replace,
 }
 
 impl KeyRecord {
@@ -650,5 +668,15 @@ mod tests {
 
         fs::set_permissions(&private_key_file, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(store.import_file("payer", &private_key_file).is_ok());
+    }
+
+    #[test]
+    fn rotates_existing_wallet_atomically() {
+        let (_temp, _, store) = store();
+        let first = store.generate("payer").unwrap();
+        let rotated = store.rotate("payer").unwrap();
+        assert_eq!(rotated.id, first.id);
+        assert_ne!(rotated.address, first.address);
+        assert!(matches!(store.rotate("missing"), Err(Error::KeyNotFound(_))));
     }
 }

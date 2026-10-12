@@ -1,17 +1,16 @@
 use std::{path::PathBuf, sync::Arc};
 
 use agent_wallet::{
-    store::generate_master_key_file,
-    transport::{local, mqtt},
-    Config, EncryptedFileStore, WalletService,
+    store::{generate_master_key_file, KeyInfo},
+    AgentVaultServer, AppConfig, EncryptedFileStore,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "walletd", version, about = "Process-isolated EOA signing service")]
+#[command(name = "walletd", version, about = "Process-isolated payment signing service")]
 struct Cli {
-    #[arg(long, default_value = "config/wallet.toml", global = true)]
+    #[arg(long, default_value = "etc/agentvault.yaml", global = true)]
     config: PathBuf,
     #[command(subcommand)]
     command: Command,
@@ -19,12 +18,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the configured MQTT and/or Unix-socket signing transports.
+    /// Run configured API, management, local, and MQTT components.
     Serve,
-    /// Manage EOA keys while walletd is stopped.
-    Key {
+    /// Manage EOA wallets while walletd is stopped.
+    #[command(alias = "key")]
+    Wallet {
         #[command(subcommand)]
-        command: KeyCommand,
+        command: WalletCommand,
     },
     /// Manage the store master key while walletd is stopped.
     MasterKey {
@@ -34,7 +34,7 @@ enum Command {
 }
 
 #[derive(Debug, Subcommand)]
-enum KeyCommand {
+enum WalletCommand {
     Generate {
         id: String,
     },
@@ -47,6 +47,9 @@ enum KeyCommand {
         id: String,
     },
     List,
+    Rotate {
+        id: String,
+    },
     Delete {
         id: String,
     },
@@ -66,11 +69,6 @@ enum MasterKeyCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with_target(false)
-        .init();
-
     let cli = Cli::parse();
     if let Command::MasterKey {
         command: MasterKeyCommand::Generate { output },
@@ -81,18 +79,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let config = Config::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
-    if matches!(&cli.command, Command::Serve) {
-        config.validate_for_serve().context("validate service configuration")?;
-    }
+    let config = AppConfig::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
     let store = Arc::new(
         EncryptedFileStore::open(&config.store.directory, &config.store.master_key_file)
             .context("open encrypted wallet store")?,
     );
 
     match cli.command {
-        Command::Serve => serve(config, store).await,
-        Command::Key { command } => manage_key(command, &store),
+        Command::Serve => AgentVaultServer::new(config, store).run().await,
+        Command::Wallet { command } => manage_wallet(command, &store),
         Command::MasterKey {
             command: MasterKeyCommand::Rotate { new_key_file },
         } => {
@@ -108,61 +103,29 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn serve(config: Config, store: Arc<EncryptedFileStore>) -> Result<()> {
-    let service = Arc::new(WalletService::new(store, config.security.clone()));
-    let local_enabled = config.transports.local.enabled;
-    let mqtt_enabled = config.transports.mqtt.enabled;
-    let local_config = config.transports.local;
-    let mqtt_config = config.transports.mqtt;
-
-    match (local_enabled, mqtt_enabled) {
-        (true, true) => {
-            tokio::select! {
-                result = local::run(local_config.socket_path, Arc::clone(&service)) => result.context("local transport"),
-                result = mqtt::run(mqtt_config, service) => result.context("MQTT transport"),
-                result = tokio::signal::ctrl_c() => result.context("wait for shutdown signal"),
-            }
-        }
-        (true, false) => {
-            tokio::select! {
-                result = local::run(local_config.socket_path, service) => result.context("local transport"),
-                result = tokio::signal::ctrl_c() => result.context("wait for shutdown signal"),
-            }
-        }
-        (false, true) => {
-            tokio::select! {
-                result = mqtt::run(mqtt_config, service) => result.context("MQTT transport"),
-                result = tokio::signal::ctrl_c() => result.context("wait for shutdown signal"),
-            }
-        }
-        (false, false) => unreachable!("configuration validation requires a transport"),
-    }
-}
-
-fn manage_key(command: KeyCommand, store: &EncryptedFileStore) -> Result<()> {
+fn manage_wallet(command: WalletCommand, store: &EncryptedFileStore) -> Result<()> {
     match command {
-        KeyCommand::Generate { id } => print_key(&store.generate(&id).context("generate EOA key")?),
-        KeyCommand::Import { id, private_key_file } => {
-            print_key(
-                &store
-                    .import_file(&id, &private_key_file)
-                    .with_context(|| format!("import EOA key from {}", private_key_file.display()))?,
-            );
-        }
-        KeyCommand::Show { id } => print_key(&store.get(&id).context("read wallet key")?),
-        KeyCommand::List => {
-            for key in store.list().context("list wallet keys")? {
-                print_key(&key);
+        WalletCommand::Generate { id } => print_wallet(&store.generate(&id).context("generate EOA wallet")?),
+        WalletCommand::Import { id, private_key_file } => print_wallet(
+            &store
+                .import_file(&id, &private_key_file)
+                .with_context(|| format!("import EOA wallet from {}", private_key_file.display()))?,
+        ),
+        WalletCommand::Show { id } => print_wallet(&store.get(&id).context("read wallet")?),
+        WalletCommand::List => {
+            for wallet in store.list().context("list wallets")? {
+                print_wallet(&wallet);
             }
         }
-        KeyCommand::Delete { id } => {
-            store.delete(&id).context("delete wallet key")?;
+        WalletCommand::Rotate { id } => print_wallet(&store.rotate(&id).context("rotate EOA wallet")?),
+        WalletCommand::Delete { id } => {
+            store.delete(&id).context("delete wallet")?;
             println!("deleted {id}");
         }
     }
     Ok(())
 }
 
-fn print_key(key: &agent_wallet::store::KeyInfo) {
-    println!("{}\t{}\t{}", key.id, key.algorithm, key.address);
+fn print_wallet(wallet: &KeyInfo) {
+    println!("{}\t{}\t{}", wallet.id, wallet.algorithm, wallet.address);
 }

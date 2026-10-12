@@ -1,112 +1,127 @@
-# Agent Wallet
+# AgentVault
 
-Agent Wallet is a small, process-isolated Rust service that owns EOA private
-keys and signs precomputed EIP-712 digests. Flowgent, Sigbot, and other clients
-remain payment orchestrators; they never load or decrypt a private key.
+AgentVault is a process-isolated Rust service for EOA wallet custody and
+payment signing. Flowgent, Sigbot, and other agent runtimes submit a stable
+`PaymentSignRequest`; they never load or decrypt private keys.
 
 ```mermaid
 flowchart LR
-    C[Client runtime] -->|wallet.sign.v1 over MQTT or Unix socket| W[walletd]
-    W --> V[authorize client/key/purpose; validate TTL, digest, replay]
-    V --> S[encrypted key store]
-    S -->|65-byte r,s,v signature| C
-    M[master key file] -->|unwrap data key at startup| S
+    A[Flowgent / Sigbot] -->|IPaymentSigner| L[Unix socket]
+    A -->|IPaymentSigner| Q[MQTT]
+    A -->|POST /api/v1/sign| H[HTTP API]
+    L --> S[PaymentSignService]
+    Q --> S
+    H --> S
+    S --> V[policy + TTL + replay checks]
+    V --> K[encrypted EOA store]
+    S --> D[bounded audit history]
+    M[management listener] --> P[health + Prometheus]
+    S -. spans .-> O[OTLP collector]
 ```
 
-## Boundary
+## What is included
 
-- `walletd` owns secp256k1 key generation/import, EOA address derivation,
-  encrypted storage, request validation, and recoverable digest signatures.
-- The client owns business policy, x402 payload construction, EIP-712 hashing,
-  and the signed resource retry. Resource servers own facilitator settlement.
-- The protocol carries a 32-byte digest. It does not carry a private key or
-  embed Flowgent/Sigbot domain models.
-- Key administration is offline through `walletd key ...`; stop the daemon
-  before mutating keys or rotating the master key.
+- Wallet CRUD at `/api/v1/wallet`; update atomically rotates the private key.
+- Direct signing and searchable history at `/api/v1/sign`.
+- Public `IPaymentSigner::execute` interface with `LocalPaymentSigner` and
+  `MqttPaymentSigner` implementations for external agent runtimes.
+- Unix-socket and MQTT server endpoints using the same JSON contract.
+- XChaCha20-Poly1305 encrypted key records, HKDF-wrapped data key, owner-only
+  files, process-exclusive store locking, bounded request TTL, policy checks,
+  and idempotent request IDs.
+- A separate management listener with liveness, readiness, OpenMetrics, and
+  optional OTLP/gRPC trace export.
+- A real-process E2E under `use-cases/payment-signing/e2e`.
 
-## Storage and signing
+The signing audit log deliberately excludes private keys, digest bytes, and
+signatures. It records request identity, bounded routing metadata, outcome, and
+timestamps only.
 
-On first open, the store creates a random 256-bit data-encryption key. A key
-derived from the configured master key with HKDF-SHA-256 wraps that data key.
-Each EOA private key is independently encrypted with XChaCha20-Poly1305 and
-metadata-bound associated data. Master-key rotation only replaces the small,
-atomic data-key envelope.
+## Build and verify
 
-Private key material is zeroized after use where Rust ownership permits. The
-crate forbids its own `unsafe` code. These controls reduce memory-corruption and
-accidental disclosure risks; they do not protect a compromised host or broker.
-
-## Build and test
+Rust `1.91.1` is pinned by `rust-toolchain.toml`.
 
 ```bash
-make lock
+make fmt-check
+make lint
 make test
 make e2e
-make lint
-make verify
 make build
-make image
+# or run the complete gate
+make verify
 ```
 
-`make verify` is the complete acceptance gate. Flowgent's root Makefile
-intentionally has no Wallet targets.
-
-`make image` uses overridable `BUILDER_IMAGE`, `RUNTIME_IMAGE`, and
-`DOCKER_BUILD_ARGS` variables. The defaults use reachable mirrored Alpine
-images and install the distribution Rust toolchain in the build stage; a Wallet
-release pipeline MAY pin equivalent internal images by digest.
+`make e2e` starts a real `walletd` child process, exercises HTTP plus the Unix
+socket, verifies the recoverable EOA signature, queries history, and inspects
+Prometheus output. No middleware or secret token is needed for this loopback
+test.
 
 ## Configure and run
 
-```bash
-cp config/wallet.example.toml config/wallet.toml
-walletd master-key generate --output /run/secrets/wallet/master.key
-walletd --config config/wallet.toml key generate payer
-walletd --config config/wallet.toml serve
-```
-
-`key import` reads a 32-byte secp256k1 private key as hex from a file so the
-secret is not exposed in process arguments. Secret input files MUST be regular,
-owner-only files and MUST NOT be symlinks:
+The canonical configuration is [`etc/agentvault.yaml`](etc/agentvault.yaml).
+Built-in defaults are overlaid by that YAML and then by `AGENTVAULT__...`
+environment variables:
 
 ```bash
-walletd --config config/wallet.toml key import payer \
-  --private-key-file /run/secrets/wallet/payer.hex
+export AGENTVAULT__LOGGING__LEVEL=debug
+export AGENTVAULT__MGMT__OTEL__ENABLED=true
 ```
 
-Use `master-key rotate --new-key-file PATH` while the service is stopped, then
-update `store.master_key_file` before restart. The old key cannot reopen the
-rotated envelope.
+Provision and start a local instance:
 
-## Wire contract
+```bash
+install -d -m 0700 ./data ./run ./secrets
+walletd master-key generate --output ./secrets/master.key
 
-MQTT clients publish to `wallet/v1/sign/requests/{client_id}`. Wallet consumes
-`$share/{group}/wallet/v1/sign/requests/+` and responds on
-`wallet/v1/sign/responses/{client_id}`. Wallet requires the topic suffix to
-match the JSON client ID. The local transport exchanges the same single-line
-JSON request and response over a mode-`0600` Unix socket.
+# Copy etc/agentvault.yaml to a local YAML and point store/master-key/socket
+# paths at the directories above.
+walletd --config ./agentvault.local.yaml wallet generate payer
+walletd --config ./agentvault.local.yaml serve
+```
 
-Request fields are `version`, UUID `request_id`, safe `client_id`, `wallet_id`,
-`purpose`, `scheme=eip712-secp256k1`, base64 `digest_b64`, and a bounded
-`issued_at`/`expires_at` window. A client policy MUST authorize the combined
-client ID, wallet ID, and purpose. When prefixes overlap, only the longest
-(most specific) matching prefix applies; duplicate prefixes are invalid. A
-success returns the EOA address and a hex-encoded 65-byte `r || s || v`
-signature where `v` is 27 or 28.
+The HTTP API may run without a token only on a loopback address. A non-loopback
+binding requires `server.api_token_file`, an owner-only file containing the raw
+bearer token. MQTT deployments must additionally enforce broker TLS,
+authentication, and per-client topic ACLs.
 
-MQTT is at-least-once by default. `walletd` caches a response by request ID;
-an identical delivery is idempotent and a different digest under the same ID
-is rejected.
+Private-key import remains an offline CLI operation so key material is never
+placed in an HTTP or MQTT request:
 
-## Operational rules
+```bash
+walletd --config ./agentvault.local.yaml wallet import payer \
+  --private-key-file ./secrets/payer.hex
+```
 
-- The master key file MUST be generated by `walletd master-key generate` and
-  MUST be a regular owner-only file, not a symlink.
-- Production MQTT MUST use broker authentication, ACLs, and TLS.
-- Broker ACLs MUST bind each credential to its own client request/response
-  topics; the in-process policy independently binds client prefixes to keys.
-- One process owns one encrypted store. Instances in a shared consumer group
-  require separately provisioned stores with the same logical key identities.
-- Logs and metrics MUST NOT contain private keys, master keys, digests, or
-  signatures.
+## API and SDK contract
+
+The main endpoints are:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/wallet` | Generate a wallet |
+| `GET` | `/api/v1/wallet` | List wallets |
+| `GET` | `/api/v1/wallet/{id}` | Read public wallet metadata |
+| `PUT` | `/api/v1/wallet/{id}` | Rotate the wallet key atomically |
+| `DELETE` | `/api/v1/wallet/{id}` | Delete a wallet |
+| `POST` | `/api/v1/sign` | Sign one validated payment digest |
+| `GET` | `/api/v1/sign` | Search signing history |
+| `GET` | `/api/v1/sign/{request_id}` | Read the latest matching audit event |
+
+Agent projects should depend on `model::sign::PaymentSignRequest` and the
+`IPaymentSigner` trait rather than transport internals. The contract carries a
+precomputed 32-byte EIP-712 digest as base64 and returns a 65-byte Ethereum
+`r || s || v` signature as hex (`v` is 27 or 28).
+
+See [API reference](docs/api.md), [architecture](docs/architecture/overview.md),
+and [observability](docs/observability.md).
+
+## Security boundary
+
+- AgentVault owns key generation/import, encrypted storage, request validation,
+  EOA address derivation, and digest signing.
+- Calling agents own payment policy, x402 payload creation, EIP-712 hashing,
+  and the signed-resource retry.
 - Raw-message and arbitrary-transaction signing are intentionally unsupported.
+- One process owns one encrypted store. Replicas need independently provisioned
+  stores with equivalent logical wallet identities.
+- These controls do not protect a compromised host, broker, or operator account.

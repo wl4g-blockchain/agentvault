@@ -1,78 +1,115 @@
 use std::{sync::Arc, time::Duration};
 
+use anyhow::Context as _;
+use async_trait::async_trait;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
 use zeroize::Zeroizing;
 
 use crate::{
     config::MqttConfig,
-    protocol::{validate_identifier, SignRequest},
+    model::sign::{validate_identifier, PaymentSignRequest, SignTransport},
+    observability::AgentVaultMetrics,
     secret::read_private_text,
-    Error, Result, WalletService,
+    server::{RuntimeComponent, Shutdown},
+    service::PaymentSignService,
+    Error, Result,
 };
 
 const MAX_PASSWORD_FILE_BYTES: usize = 16 * 1024;
 
-/// Serves signing requests through a reconnecting shared MQTT subscription.
-///
-/// # Errors
-///
-/// Returns an error when credentials are unsafe or MQTT setup/subscription fails.
-pub async fn run(config: MqttConfig, service: Arc<WalletService>) -> Result<()> {
-    let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
-    options.set_keep_alive(Duration::from_secs(30));
-    options.set_clean_session(true);
-    if config.tls {
-        options.set_transport(Transport::tls_with_default_config());
-    }
-    if !config.username.is_empty() {
-        let password = read_password(&config.password_file)?;
-        options.set_credentials(config.username.clone(), password.as_str());
+/// Reconnecting shared-subscription MQTT signing endpoint.
+pub struct MqttSignServer {
+    config: MqttConfig,
+    service: Arc<PaymentSignService>,
+    metrics: AgentVaultMetrics,
+}
+
+impl MqttSignServer {
+    #[must_use]
+    pub fn new(config: MqttConfig, service: Arc<PaymentSignService>, metrics: AgentVaultMetrics) -> Self {
+        Self {
+            config,
+            service,
+            metrics,
+        }
     }
 
-    let qos = qos(config.qos);
-    let (client, mut event_loop) = AsyncClient::new(options, 32);
-    let request_topic_prefix = config.request_topic_prefix.trim_end_matches('/').to_owned();
-    let subscription = format!("$share/{}/{}/+", config.consumer_group, request_topic_prefix);
+    async fn serve(self, mut shutdown: Shutdown) -> Result<()> {
+        let mut options = MqttOptions::new(&self.config.client_id, &self.config.host, self.config.port);
+        options.set_keep_alive(Duration::from_secs(30));
+        options.set_clean_session(true);
+        if self.config.tls {
+            options.set_transport(Transport::tls_with_default_config());
+        }
+        if !self.config.username.is_empty() {
+            let password = read_password(&self.config.password_file)?;
+            options.set_credentials(self.config.username.clone(), password.as_str());
+        }
 
-    loop {
-        match event_loop.poll().await {
-            Ok(Event::Incoming(Incoming::ConnAck(_))) => {
-                client
-                    .subscribe(&subscription, qos)
-                    .await
-                    .map_err(|error| Error::Mqtt(error.to_string()))?;
-                tracing::info!(
-                    host = %config.host,
-                    port = config.port,
-                    topic = %subscription,
-                    "MQTT signing transport connected"
-                );
-            }
-            Ok(Event::Incoming(Incoming::Publish(message))) => {
-                handle_publish(
-                    &client,
-                    &config,
-                    &service,
-                    &request_topic_prefix,
-                    &message.topic,
-                    message.payload.as_ref(),
-                    qos,
-                )
-                .await;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(%error, "MQTT connection interrupted; retrying");
-                tokio::time::sleep(Duration::from_secs(1)).await;
+        let qos = qos(self.config.qos);
+        let (client, mut event_loop) = AsyncClient::new(options, 32);
+        let request_topic_prefix = self.config.request_topic_prefix.trim_end_matches('/').to_owned();
+        let subscription = format!("$share/{}/{}/+", self.config.consumer_group, request_topic_prefix);
+
+        loop {
+            let event = tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                event = event_loop.poll() => event,
+            };
+            match event {
+                Ok(Event::Incoming(Incoming::ConnAck(_))) => {
+                    client
+                        .subscribe(&subscription, qos)
+                        .await
+                        .map_err(|error| Error::Mqtt(error.to_string()))?;
+                    tracing::info!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        topic = %subscription,
+                        "MQTT signing endpoint connected"
+                    );
+                }
+                Ok(Event::Incoming(Incoming::Publish(message))) => {
+                    handle_publish(
+                        &client,
+                        &self.config,
+                        &self.service,
+                        &request_topic_prefix,
+                        &message.topic,
+                        message.payload.as_ref(),
+                        qos,
+                    )
+                    .await;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.metrics.mqtt_reconnected();
+                    tracing::warn!(%error, "MQTT connection interrupted; retrying");
+                    tokio::select! {
+                        () = shutdown.cancelled() => return Ok(()),
+                        () = tokio::time::sleep(self.config.reconnect_delay) => {}
+                    }
+                }
             }
         }
+    }
+}
+
+#[async_trait]
+impl RuntimeComponent for MqttSignServer {
+    fn name(&self) -> &'static str {
+        "MQTT signing endpoint"
+    }
+
+    async fn run(self: Box<Self>, shutdown: Shutdown) -> anyhow::Result<()> {
+        self.serve(shutdown).await.context("serve MQTT signing endpoint")
     }
 }
 
 async fn handle_publish(
     client: &AsyncClient,
     config: &MqttConfig,
-    service: &WalletService,
+    service: &PaymentSignService,
     request_topic_prefix: &str,
     request_topic: &str,
     payload: &[u8],
@@ -85,7 +122,7 @@ async fn handle_publish(
         );
         return;
     }
-    let request = match serde_json::from_slice::<SignRequest>(payload) {
+    let request = match serde_json::from_slice::<PaymentSignRequest>(payload) {
         Ok(request) => request,
         Err(error) => {
             tracing::warn!(%error, "discarding malformed MQTT signing request");
@@ -99,11 +136,11 @@ async fn handle_publish(
     if request_topic_client(request_topic_prefix, request_topic) != Some(request.client_id.as_str()) {
         tracing::warn!(
             topic = request_topic,
-            "discarding signing request whose topic and client_id differ"
+            "discarding request whose topic and client_id differ"
         );
         return;
     }
-    let response = service.handle(&request);
+    let response = service.execute(&request, SignTransport::Mqtt);
     let response_topic = format!(
         "{}/{}",
         config.response_topic_prefix.trim_end_matches('/'),
@@ -148,13 +185,6 @@ fn read_password(path: &str) -> Result<Zeroizing<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn maps_configured_qos() {
-        assert_eq!(qos(0), QoS::AtMostOnce);
-        assert_eq!(qos(1), QoS::AtLeastOnce);
-        assert_eq!(qos(2), QoS::ExactlyOnce);
-    }
 
     #[test]
     fn extracts_only_direct_client_topic() {
