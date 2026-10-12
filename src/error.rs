@@ -40,6 +40,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("MQTT error: {0}")]
     Mqtt(String),
+    #[error("operation timed out: {0}")]
+    Timeout(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

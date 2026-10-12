@@ -9,5 +9,5 @@
 /data/
 /run/
 /secrets/
-/config/wallet.toml
-*.local.toml
+/etc/agentvault.local.yaml
+*.local.yaml

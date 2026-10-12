@@ -1,0 +1,88 @@
+# =============================================================================
+# AgentVault runtime configuration
+#
+# Canonical keys use snake_case. Environment overrides use double underscores:
+# AGENTVAULT__SERVER__PORT=8080
+# AGENTVAULT__MGMT__OTEL__ENABLED=true
+# =============================================================================
+
+server:
+  enabled: true
+  service_name: agentvault
+  host: 127.0.0.1
+  port: 8080
+  context_path: /api/v1
+  # Required whenever host is non-loopback. The owner-only file contains the
+  # raw bearer token; do not put the token itself in this YAML file.
+  api_token_file: ""
+  shutdown_timeout: 15s
+  request:
+    max_body_bytes: 16384
+    timeout: 5s
+
+# Management traffic belongs on a private listener and follows the same shape
+# used by AuthGuard services.
+mgmt:
+  enabled: true
+  host: 127.0.0.1
+  port: 9091
+  context_path: /
+  health:
+    liveness_path: /healthz
+    readiness_path: /readyz
+  metrics:
+    enabled: true
+    path: /metrics
+  otel:
+    enabled: false
+    endpoint: http://otel-collector.observability.svc:4317
+    protocol: grpc
+    timeout: 5s
+    sample_rate: 1.0
+
+logging:
+  mode: HUMAN # HUMAN | JSON
+  level: "info"
+
+store:
+  directory: /var/lib/agentvault
+  master_key_file: /run/secrets/agentvault/master.key
+  # Relative paths resolve below store.directory. History excludes digest and
+  # signature material and remains mode 0600.
+  sign_history_file: sign-history.jsonl
+
+security:
+  max_request_bytes: 16384
+  max_request_ttl_seconds: 30
+  clock_skew_seconds: 5
+  dedup_ttl_seconds: 300
+  max_dedup_entries: 10000
+  max_history_entries: 10000
+  client_policies:
+    - client_id_prefix: flowgent-
+      wallet_ids: [payer]
+      purposes: [x402.payment]
+    - client_id_prefix: sigbot-
+      wallet_ids: [payer]
+      purposes: [x402.payment]
+
+signers:
+  local:
+    enabled: true
+    socket_path: /run/agentvault/agentvault.sock
+    max_connections: 64
+    request_timeout: 5s
+  mqtt:
+    enabled: false
+    host: 127.0.0.1
+    port: 1883
+    client_id: agentvault-01
+    consumer_group: agentvault-pool
+    request_topic_prefix: wallet/v1/sign/requests
+    response_topic_prefix: wallet/v1/sign/responses
+    qos: 1
+    tls: false
+    username: ""
+    password_file: ""
+    request_timeout: 10s
+    reconnect_delay: 1s

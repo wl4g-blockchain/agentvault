@@ -3,5 +3,5 @@
 /run
 /secrets
 /.git
-config/wallet.toml
-*.local.toml
+etc/agentvault.local.yaml
+*.local.yaml

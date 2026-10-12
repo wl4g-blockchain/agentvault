@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Process-isolated EOA signing service for agent runtimes"
-rust-version = "1.85"
+rust-version = "1.91"
 
 [lib]
 name = "agent_wallet"
@@ -14,16 +14,28 @@ path = "src/lib.rs"
 name = "walletd"
 path = "src/main.rs"
 
+[[test]]
+name = "payment_signing_e2e"
+path = "use-cases/payment-signing/e2e/payment_signing.rs"
+
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 clap = { version = "4.5", features = ["derive"] }
+config = { version = "0.15", default-features = false, features = ["convert-case", "yaml"] }
 fs2 = "0.4"
 hex = "0.4"
 hkdf = "0.12"
+humantime-serde = "1.1"
 k256 = { version = "0.13", features = ["ecdsa"] }
 libc = "0.2"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+prometheus-client = "0.25"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rumqttc = "0.25"
 serde = { version = "1.0", features = ["derive"] }
@@ -32,13 +44,14 @@ sha2 = "0.10"
 sha3 = "0.10"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
-toml = "0.9"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.18", features = ["serde", "v4"] }
 zeroize = "1.8"
 
 [dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 tempfile = "3.21"
 
 [profile.release]

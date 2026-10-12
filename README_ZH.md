@@ -1,102 +1,115 @@
-# Agent Wallet
+# AgentVault
 
-Agent Wallet 是一个小型、进程隔离的 Rust 服务，独占 EOA 私钥并签署已经
-计算好的 EIP-712 digest。Flowgent、Sigbot 等客户端负责支付编排，但永远
-不加载或解密私钥。
+AgentVault 是一个用 Rust 编写、进程隔离的 EOA 钱包托管与支付签名服务。
+Flowgent、Sigbot 等 agent 运行时只提交稳定的 `PaymentSignRequest`，不会加载或
+解密私钥。
 
 ```mermaid
 flowchart LR
-    C[客户端运行时] -->|MQTT 或 Unix socket 上的 wallet.sign.v1| W[walletd]
-    W --> V[授权 client/key/purpose；校验 TTL、digest 与重放]
-    V --> S[加密密钥存储]
-    S -->|65 字节 r,s,v 签名| C
-    M[主密钥文件] -->|启动时解包数据密钥| S
+    A[Flowgent / Sigbot] -->|IPaymentSigner| L[Unix socket]
+    A -->|IPaymentSigner| Q[MQTT]
+    A -->|POST /api/v1/sign| H[HTTP API]
+    L --> S[PaymentSignService]
+    Q --> S
+    H --> S
+    S --> V[策略、TTL、防重放校验]
+    V --> K[加密 EOA 存储]
+    S --> D[有界审计历史]
+    M[独立管理端口] --> P[健康检查与 Prometheus]
+    S -. spans .-> O[OTLP Collector]
 ```
 
-## 边界
+## 已实现能力
 
-- `walletd` 负责 secp256k1 密钥生成/导入、EOA 地址派生、加密存储、请求
-  校验和可恢复 digest 签名。
-- 客户端负责业务策略、x402 payload 构造、EIP-712 hash 与 signed resource
-  retry；resource server 负责 Facilitator settlement。
-- 协议只携带 32 字节 digest，不携带私钥，也不嵌入 Flowgent/Sigbot
-  领域模型。
-- 使用 `walletd key ...` 离线管理密钥；修改密钥或轮换主密钥前应停止
-  daemon。
+- `/api/v1/wallet` 钱包 CRUD；更新操作会原子轮换私钥。
+- `/api/v1/sign` 直接签名、历史列表与组合搜索。
+- 面向外部 agent 的 `IPaymentSigner::execute` 接口，以及
+  `LocalPaymentSigner`、`MqttPaymentSigner` 两种实现。
+- Unix socket 与 MQTT 服务端共享同一份 JSON 协议模型。
+- XChaCha20-Poly1305 密钥加密、HKDF 数据密钥封装、owner-only 文件、存储
+  进程锁、TTL/授权策略校验与幂等 request ID。
+- 独立管理端口提供 liveness、readiness、OpenMetrics，并可通过 OTLP/gRPC
+  导出 trace。
+- `use-cases/payment-signing/e2e` 中包含真实子进程 E2E，不使用 handler/store
+  mock。
 
-## 存储与签名
+签名历史刻意不保存私钥、digest 或签名，只保存请求标识、有限路由元数据、
+结果和时间戳。
 
-存储首次打开时生成随机 256 位数据加密密钥。由主密钥通过 HKDF-SHA-256
-派生出的密钥仅负责包装数据密钥。每个 EOA 私钥使用 XChaCha20-Poly1305
-和绑定元数据的 AAD 独立加密。因此主密钥轮换只需原子替换很小的数据密钥
-信封，无需批量解密、重写私钥。
+## 构建与验证
 
-Rust 所有权允许的私钥内存会在使用后清零，本 crate 禁止自身使用
-`unsafe`。这些措施降低内存破坏和意外泄露风险，但不能抵御已失陷的宿主机
-或消息代理。
-
-## 构建与运行
+项目通过 `rust-toolchain.toml` 固定 Rust `1.91.1`：
 
 ```bash
-make lock
+make fmt-check
+make lint
 make test
 make e2e
-make lint
-make verify
 make build
-make image
-
-cp config/wallet.example.toml config/wallet.toml
-walletd master-key generate --output /run/secrets/wallet/master.key
-walletd --config config/wallet.toml key generate payer
-walletd --config config/wallet.toml serve
+# 完整验收
+make verify
 ```
 
-`make verify` 是完整验收入口；Flowgent 根 Makefile 刻意不包含任何 Wallet
-target。
+`make e2e` 会启动真实 `walletd` 子进程，经 HTTP 和 Unix socket 完成钱包管理
+与签名，恢复验证 EOA 地址，并检查历史和 Prometheus 指标。
 
-`make image` 暴露可覆盖的 `BUILDER_IMAGE`、`RUNTIME_IMAGE` 与
-`DOCKER_BUILD_ARGS`。默认使用可达的 Alpine mirror，并在 build stage 安装发行版
-Rust toolchain；Wallet release pipeline **MAY** 改用按 digest 固定的等价内部镜像。
+## 配置与启动
 
-导入命令从文件读取 32 字节 secp256k1 私钥的十六进制文本，避免将秘密暴露
-在进程参数中。Secret input **MUST** 是 owner-only 普通文件且 **MUST NOT**
-为 symlink：
+唯一标准配置是 [`etc/agentvault.yaml`](etc/agentvault.yaml)。加载优先级为
+内置默认值 < YAML < `AGENTVAULT__...` 环境变量：
 
 ```bash
-walletd --config config/wallet.toml key import payer \
-  --private-key-file /run/secrets/wallet/payer.hex
+export AGENTVAULT__LOGGING__LEVEL=debug
+export AGENTVAULT__MGMT__OTEL__ENABLED=true
 ```
 
-停止服务后执行 `master-key rotate --new-key-file PATH`，并在重启前更新
-`store.master_key_file`。旧主密钥不能再打开轮换后的信封。
+本地运行示例：
 
-## 线协议
+```bash
+install -d -m 0700 ./data ./run ./secrets
+walletd master-key generate --output ./secrets/master.key
 
-MQTT client 发布到 `wallet/v1/sign/requests/{client_id}`，Wallet 通过
-`$share/{group}/wallet/v1/sign/requests/+` 消费，并在
-`wallet/v1/sign/responses/{client_id}` 响应。Wallet 要求 topic suffix 与
-JSON client ID 一致。本地模式在权限为 `0600` 的 Unix socket 上交换相同的
-单行 JSON 协议。
+# 复制 etc/agentvault.yaml，并将 store/master-key/socket 改成本地路径。
+walletd --config ./agentvault.local.yaml wallet generate payer
+walletd --config ./agentvault.local.yaml serve
+```
 
-请求包含 `version`、UUID `request_id`、安全的 `client_id`、`wallet_id`、
-`purpose`、`scheme=eip712-secp256k1`、base64 `digest_b64`，以及受限的
-`issued_at`/`expires_at` 时间窗。Client policy **MUST** 同时授权 client ID、
-wallet ID 与 purpose。前缀重叠时只应用最长、最具体的匹配规则；重复前缀为
-非法配置。成功响应返回 EOA 地址和十六进制 65 字节 `r || s || v` 签名，
-其中 `v` 为 27 或 28。
+HTTP API 只有绑定 loopback 时才允许不配置 token；绑定非 loopback 地址时，
+必须设置 `server.api_token_file`，该 owner-only 文件中保存原始 bearer token。
+MQTT 生产环境还必须启用 broker TLS、认证和按 client 隔离的 topic ACL。
 
-MQTT 默认至少一次投递。`walletd` 按 request ID 缓存响应：相同请求重复
-投递是幂等的；同一 ID 携带不同 digest 会被拒绝。
+私钥导入仍是离线 CLI 操作，避免把私钥放进 HTTP/MQTT 请求：
 
-## 运维规则
+```bash
+walletd --config ./agentvault.local.yaml wallet import payer \
+  --private-key-file ./secrets/payer.hex
+```
 
-- 主密钥文件 **MUST** 由 `walletd master-key generate` 生成，且
-  **MUST** 是 owner-only 普通文件，**MUST NOT** 为 symlink。
-- 生产 MQTT MUST 启用认证、ACL 和 TLS。
-- Broker ACL **MUST** 将每套 credential 绑定到自己的 client request/response
-  topics；进程内 policy 再独立绑定 client prefix 与 key。
-- 一个进程独占一个加密 store。同一消费组中的实例需要分别 provision
-  具有相同逻辑 key identity 的 store。
-- 日志与指标 MUST NOT 包含私钥、主密钥、digest 或签名。
-- 服务刻意不支持原始消息签名和任意交易签名。
+## API 与 SDK 契约
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/v1/wallet` | 生成钱包 |
+| `GET` | `/api/v1/wallet` | 查询钱包列表 |
+| `GET` | `/api/v1/wallet/{id}` | 查询公开钱包元数据 |
+| `PUT` | `/api/v1/wallet/{id}` | 原子轮换钱包密钥 |
+| `DELETE` | `/api/v1/wallet/{id}` | 删除钱包 |
+| `POST` | `/api/v1/sign` | 校验并签署支付 digest |
+| `GET` | `/api/v1/sign` | 搜索签名历史 |
+| `GET` | `/api/v1/sign/{request_id}` | 查询该请求最新审计事件 |
+
+Flowgent/Sigbot 应依赖 `model::sign::PaymentSignRequest` 与 `IPaymentSigner`，不要
+依赖传输实现内部。请求传输 base64 编码的 32 字节 EIP-712 digest，成功响应
+返回十六进制 65 字节 Ethereum `r || s || v` 签名，其中 `v` 为 27 或 28。
+
+更多内容见 [API 文档](docs/api_ZH.md)、
+[架构说明](docs/architecture/overview_ZH.md) 和
+[可观测性](docs/observability_ZH.md)。
+
+## 安全边界
+
+- AgentVault 负责密钥生成/导入、加密存储、请求校验、地址派生与 digest 签名。
+- 调用方负责支付策略、x402 payload、EIP-712 hash 及签名后的资源重试。
+- 明确不支持原始消息签名和任意交易签名。
+- 一个进程独占一个加密 store；多副本需分别安全配置等价的逻辑钱包。
+- 这些机制无法抵御已失陷的宿主机、broker 或运维账号。
