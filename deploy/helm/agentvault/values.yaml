@@ -1,0 +1,213 @@
+global:
+  imagePullSecrets: []
+
+replicaCount: 2
+image:
+  repository: ghcr.io/wl4g/agentvault
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount: { create: true, name: "", annotations: {} }
+podAnnotations: {}
+podLabels: {}
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+service:
+  type: ClusterIP
+  apiPort: 8080
+  managementPort: 9091
+  grpcPort: 50051
+
+web:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ghcr.io/wl4g/agentvault-web
+    tag: ""
+    pullPolicy: IfNotPresent
+  service: { type: ClusterIP, port: 8080 }
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+
+# HTTP API traffic uses the AuthGuard-managed Gateway by default. When the
+# dependency is disabled, no route is created and service.type must explicitly
+# expose the intentionally open AgentVault service.
+routes:
+  enabled: true
+  gatewayName: agentvault-authguard
+  sectionName: http
+  hostnames: [agentvault.example.com]
+
+# Pick exactly one provider. Every source carries one KEY=VALUE payload using
+# the names documented by bootstrap/agentvault-secrets.env.example. Kubernetes
+# projects the keys as environment variables; GCP/AWS/Vault project the same
+# payload as a read-only file selected by AGENTVAULT_SECRETS_ENV_FILE.
+secrets:
+  provider: kubernetes  # kubernetes | gcp | aws | vault
+  kubernetes:
+    existingSecret: agentvault-secrets
+  gcp:
+    secretResourceName: ""
+  aws:
+    region: ""
+    secretName: ""
+  vault:
+    vaultRole: ""
+    secretPath: ""
+  serviceAccount:
+    annotations: {}
+
+runtime:
+  server:
+    serviceName: agentvault
+    shutdownTimeout: 15s
+    maxBodyBytes: 16384
+    requestTimeout: 5s
+  postgres: { maxConnections: 32, connectTimeout: 5s }
+  redis:
+    enabled: true
+    keyPrefix: agentvault
+    maxValueBytes: 1048576
+    connectTimeout: 3s
+    operationTimeout: 2s
+    defaultTtl: 5m
+    retryAttempts: 5
+    minRetryWait: 100ms
+    maxRetryWait: 2s
+  memory:
+    maxEntries: 10000
+    maxValueBytes: 1048576
+    defaultTtl: 5m
+  grpc:
+    enabled: false
+    maxMessageBytes: 2097152
+    requestTimeout: 30s
+  mqtt:
+    enabled: false
+    host: ""
+    port: 8883
+    tls: true
+    username: agentvault
+    clientId: agentvault
+    consumerGroup: agentvault
+    topicPrefix: agentvault/v1/clients
+    qos: 1
+    requestTimeout: 30s
+    reconnectDelay: 1s
+  payer:
+    enabled: true
+    x402:
+      enabled: true
+      maxChallengeTtl: 5m
+      assets:
+        - network: eip155:8453
+          contract: "0x0000000000000000000000000000000000001001"
+          symbol: USDC
+          decimals: 6
+  payee:
+    enabled: true
+    x402:
+      enabled: true
+      maxChallengeTtl: 5m
+      assets:
+        - network: eip155:8453
+          contract: "0x0000000000000000000000000000000000001001"
+          symbol: USDC
+          decimals: 6
+      facilitator:
+        id: x402-primary
+        baseUrl: https://facilitator.example/x402/
+        verifyPath: verify
+        settlePath: settle
+        timeout: 10s
+        maxResponseBytes: 262144
+        allowInsecureLoopback: false
+  chains:
+    - network: eip155:8453
+      family: evm
+      rpc:
+        endpoint: https://mainnet.base.org
+        timeout: 5s
+        maxResponseBytes: 262144
+        allowInsecureLoopback: false
+      minimumNativeBalance: "1000000000000000"
+      confirmationDepth: 1
+  approval:
+    enabled: true
+    requestTtl: 15m
+    grantTtl: 5m
+    expiryInterval: 15s
+    expiryBatchSize: 100
+    issuer: agentvault
+    audience: agentvault:approval-grant
+  reconciliation:
+    enabled: true
+    interval: 15s
+    leaseTtl: 45s
+    batchSize: 100
+    initialBackoff: 5s
+    maxBackoff: 5m
+
+management:
+  otel:
+    enabled: false
+    endpoint: http://otel-collector.observability.svc:4317
+    protocol: grpc
+    timeout: 5s
+    sampleRate: 1.0
+  serviceMonitor: { enabled: false, interval: 30s, labels: {} }
+
+networkPolicy:
+  enabled: true
+  envoyNamespaceSelector: {}
+  envoyPodSelector: { app.kubernetes.io/name: envoy }
+  monitoringNamespaceSelector: {}
+  monitoringPodSelector: {}
+
+# Default-on umbrella dependency, matching Flowgent's integration pattern.
+# AuthGuard owns authentication/authorization; AgentVault is only a protected
+# workload and verifies the signed context produced by the edge.
+authguard-middleware:
+  enabled: true
+  envoy_gateway:
+    enabled: true
+    nameOverride: agentvault-envoy-gateway
+    ext_authz:
+      enabled: true
+      gateway:
+        create: true
+        name: agentvault-authguard
+        className: agentvault-authguard
+      authguardRoute: { enabled: false }
+      authnRoute:
+        enabled: true
+        name: agentvault-authn
+        hostnames: [agentvault.example.com]
+  authguard:
+    authn:
+      applications:
+        agentvault:
+          hosts: [agentvault.example.com]
+          displayName: AgentVault
+          logo: /mark.svg
+          returnUris: [https://agentvault.example.com/**]
+    web:
+      enabled: true
+      route:
+        enabled: true
+        hostnames: [agentvault.example.com]
+    authz: { enabled: true }
+  secrets:
+    provider: kubernetes
+    kubernetes: { existingSecret: authguard-secrets }
+  postgresql:
+    auth: { existingSecret: authguard-secrets }
+  redis_cluster:
+    existingSecret: authguard-secrets

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QuantStream Payment Approvals</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #08111f; color: #e5eefb; }
+      body { margin: 0; padding: 3rem 1rem; }
+      main { max-width: 900px; margin: auto; }
+      h1 { font-size: clamp(2rem, 5vw, 3.8rem); margin-bottom: .4rem; }
+      .hint { color: #9eb0c7; margin-bottom: 2rem; }
+      article { background: #101d30; border: 1px solid #263b58; border-radius: 14px; padding: 1.25rem; margin: 1rem 0; }
+      dl { display: grid; grid-template-columns: 10rem 1fr; gap: .4rem; }
+      dt { color: #89a2c3; } dd { margin: 0; overflow-wrap: anywhere; }
+      button { border: 0; border-radius: 8px; padding: .7rem 1rem; margin-right: .6rem; font-weight: 700; cursor: pointer; }
+      .approve { background: #35d07f; color: #04150c; } .reject { background: #f06b78; color: #230408; }
+      .session { display: flex; gap: .6rem; margin: 1.2rem 0 2rem; }
+      .session input { flex: 1; min-width: 12rem; border: 1px solid #39516f; border-radius: 8px; padding: .7rem; background: #0b1728; color: inherit; }
+      .session button { background: #7dd3fc; color: #062033; }
+      #status { min-height: 1.5rem; color: #7dd3fc; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Payment approvals</h1>
+      <p class="hint">QuantStream finance administrators approve one intent at a time. No wallet key or grant token reaches this UI.</p>
+      <form class="session" id="session-form">
+        <input id="admin-token" type="password" autocomplete="off" required aria-label="Administrator access token" placeholder="Administrator access token">
+        <button type="submit">Open approval queue</button>
+      </form>
+      <p id="status"></p>
+      <section id="approvals"></section>
+    </main>
+    <script>
+      let token = "";
+      const sessionForm = document.querySelector("#session-form");
+      sessionForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        token = document.querySelector("#admin-token").value;
+        document.querySelector("#admin-token").value = "";
+        await refresh();
+      });
+      function authorizedHeaders() { return { authorization: `Bearer ${token}` }; }
+      async function refresh() {
+        if (!token) return setStatus("Enter the administrator token to open the queue.");
+        const response = await fetch("/api/approvals", { headers: authorizedHeaders(), cache: "no-store" });
+        if (!response.ok) {
+          if (response.status === 401) token = "";
+          return setStatus(`Unable to load approvals (${response.status})`);
+        }
+        const { items } = await response.json();
+        const root = document.querySelector("#approvals");
+        root.replaceChildren(...items.map(render));
+        if (!items.length) setStatus("No payment is waiting for approval.");
+      }
+      function render(item) {
+        const article = document.createElement("article");
+        const fields = [
+          ["Approval", item.approvalId], ["Intent", item.intentId],
+          ["Amount", `${item.requestedAmount ?? "?"} ${item.asset ?? ""}`],
+          ["Expires", new Date((item.expiresAt ?? 0) * 1000).toISOString()]
+        ];
+        const dl = document.createElement("dl");
+        for (const [label, value] of fields) {
+          const dt = document.createElement("dt"); dt.textContent = label;
+          const dd = document.createElement("dd"); dd.textContent = value;
+          dl.append(dt, dd);
+        }
+        article.append(dl, button("Approve", "approve", item.approvalId), button("Reject", "reject", item.approvalId));
+        return article;
+      }
+      function button(label, decision, approvalId) {
+        const element = document.createElement("button");
+        element.textContent = label; element.className = decision;
+        element.onclick = async () => {
+          element.disabled = true;
+          const response = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/decision`, {
+            method: "POST", headers: { ...authorizedHeaders(), "content-type": "application/json" },
+            body: JSON.stringify({ decision })
+          });
+          setStatus(response.ok ? `${label}d ${approvalId}` : `Decision failed (${response.status})`);
+          await refresh();
+        };
+        return element;
+      }
+      function setStatus(message) { document.querySelector("#status").textContent = message; }
+      refresh(); setInterval(() => { if (token) refresh(); }, 2000);
+    </script>
+  </body>
+</html>

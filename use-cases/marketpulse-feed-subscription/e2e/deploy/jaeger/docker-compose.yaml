@@ -1,0 +1,15 @@
+services:
+  jaeger:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/jaegertracing_all-in-one:1.76.0
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    ports:
+      - "127.0.0.1:${E2E_JAEGER_UI_PORT:-26686}:16686"
+      - "127.0.0.1:${E2E_JAEGER_OTLP_GRPC_PORT:-24317}:4317"
+      - "127.0.0.1:${E2E_JAEGER_OTLP_HTTP_PORT:-24318}:4318"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:14269/"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped

@@ -1,0 +1,30 @@
+services:
+  quantstream-admin-ui:
+    image: ${E2E_QUANTSTREAM_UI_IMAGE:-quantstream-admin-ui-e2e:local}
+    build:
+      context: ${E2E_QUANTSTREAM_UI_REPOSITORY_ROOT:-../../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-ui/Dockerfile
+      network: host
+      args:
+        HTTPS_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_QUANTSTREAM_UI_BUILD_IMAGE: ${E2E_QUANTSTREAM_UI_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+    environment:
+      QUANTSTREAM_UI_HOST: ${E2E_QUANTSTREAM_UI_BIND_HOST:-0.0.0.0}
+      QUANTSTREAM_UI_PORT: "${E2E_QUANTSTREAM_UI_BIND_PORT:-8086}"
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
+      QUANTSTREAM_APPROVER_PRINCIPAL: ${E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL:-principal-quantstream-admin}
+      QUANTSTREAM_ADMIN_UI_TOKEN: ${E2E_QUANTSTREAM_UI_TOKEN:-quantstream-e2e-ui-token-0000000000000000001}
+      AGENTVAULT_MQTT_URL: ${E2E_QUANTSTREAM_UI_MQTT_URL:-mqtt://emqx:1883}
+      AGENTVAULT_MQTT_APPROVER_USERNAME: ${E2E_QUANTSTREAM_UI_MQTT_USERNAME:-quantstream-approver}
+      AGENTVAULT_MQTT_APPROVER_PASSWORD: ${E2E_QUANTSTREAM_UI_MQTT_PASSWORD:-agentvault-e2e-approver}
+      AGENTVAULT_URL: ${E2E_QUANTSTREAM_UI_AGENTVAULT_URL:-http://agentvault:8080/api/v1}
+    ports: ["127.0.0.1:${E2E_QUANTSTREAM_UI_PORT:-38083}:8086"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped

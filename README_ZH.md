@@ -1,115 +1,118 @@
 # AgentVault
 
-AgentVault 是一个用 Rust 编写、进程隔离的 EOA 钱包托管与支付签名服务。
-Flowgent、Sigbot 等 agent 运行时只提交稳定的 `PaymentSignRequest`，不会加载或
-解密私钥。
+面向自主 AI Agent 的企业级双向机器支付基础设施。
 
-```mermaid
-flowchart LR
-    A[Flowgent / Sigbot] -->|IPaymentSigner| L[Unix socket]
-    A -->|IPaymentSigner| Q[MQTT]
-    A -->|POST /api/v1/sign| H[HTTP API]
-    L --> S[PaymentSignService]
-    Q --> S
-    H --> S
-    S --> V[策略、TTL、防重放校验]
-    V --> K[加密 EOA 存储]
-    S --> D[有界审计历史]
-    M[独立管理端口] --> P[健康检查与 Prometheus]
-    S -. spans .-> O[OTLP Collector]
+AgentVault 是一个 Rust 中间件，同时承载两类业务：
+
+- Payer / OUTBOUND：购买付费 HTTP/MCP 服务，执行预算预留、超额审批、Intent 绑定签名和结算对账。
+- Payee / INBOUND：按固定 Offer 对 HTTP Route/MCP Tool 收费，签发 402 Challenge，经外部 Provider 验证/结算并生成可信 Receipt。
+
+私钥和所有资金状态只保存在 PostgreSQL 或 SQLite。私钥采用 AES-256-GCM 信封加密、完整 UUID v4 Nonce 和不可变版本；Ledger 只追加。Memory/Redis 只缓存可重建数据，不能决定预算、审批、幂等、结算或余额。
+
+## 架构定位
+
+```text
+Flowgent / Sigbot / 第三方 Agent
+        │ Rust / Go / Python / TypeScript / Java SDK
+        ▼
+AuthGuard + Envoy（默认集成，可显式关闭）── HTTP 身份与 IAM
+        ▼
+AgentVault ── Scenario / Policy / Approval / Signer / Settlement / Ledger
+        ▼
+外部 x402 Facilitator / MPP Provider / 固定 RPC
 ```
 
-## 已实现能力
+AgentVault 不实现登录、OAuth2/OIDC、会话和 IAM 策略引擎。标准 Docker/Helm 部署默认由 AuthGuard 保护所有 HTTP 支付和 Admin API；显式关闭后，HTTP 按设计完全开放。MQTT 不复用 HTTP 身份，而是使用 Broker 认证、默认拒绝的 Topic ACL 和持久化 Client/Scenario 映射。审批决策使用独立认证的管理员 Topic，AgentVault 将其中的 Client 与审批 Principal 再绑定到 SQL Scenario/Approver 映射，报文体不能自报这两种身份。
 
-- `/api/v1/wallet` 钱包 CRUD；更新操作会原子轮换私钥。
-- `/api/v1/sign` 直接签名、历史列表与组合搜索。
-- 面向外部 agent 的 `IPaymentSigner::execute` 接口，以及
-  `LocalPaymentSigner`、`MqttPaymentSigner` 两种实现。
-- Unix socket 与 MQTT 服务端共享同一份 JSON 协议模型。
-- XChaCha20-Poly1305 密钥加密、HKDF 数据密钥封装、owner-only 文件、存储
-  进程锁、TTL/授权策略校验与幂等 request ID。
-- 独立管理端口提供 liveness、readiness、OpenMetrics，并可通过 OTLP/gRPC
-  导出 trace。
-- `use-cases/payment-signing/e2e` 中包含真实子进程 E2E，不使用 handler/store
-  mock。
+资源关系为：
 
-签名历史刻意不保存私钥、digest 或签名，只保存请求标识、有限路由元数据、
-结果和时间戳。
+```text
+Client 1 ── N Scenario 1 ── N Policy 1 ── N Wallet
+                                      N ── 1 共享 Wallet
+```
 
-## 构建与验证
+同一 Wallet 可以被多个 Policy 共享，用于企业公共资金池；共享时必须设置 Wallet 聚合硬限额。Policy 对 INBOUND 与 OUTBOUND 分别设置单笔、每日、审批阈值和审批追加额度，收款侧同样可以防止资源超卖。
 
-项目通过 `rust-toolchain.toml` 固定 Rust `1.91.1`：
+完整流程、数据表关系、一致性、安全和部署边界见 [架构白皮书](docs/index.md)。
+
+## 仓库结构
+
+```text
+src/          Rust 服务：apm、cache、cmd、config、controller、handler、
+              model、protocol、storage、utils
+migrations/   PostgreSQL/SQLite 对齐的 001_init DDL/DML
+src/adapters/ Rust、Go、Python、TypeScript、Java SDK 与共享传输 Proto
+web/          AgentVault 运维 Dashboard
+deploy/       Grafana、Docker、Helm 部署资源
+use-cases/    MarketPulse/QuantStream 真实多进程支付 E2E
+docs/         唯一架构白皮书入口
+```
+
+项目不维护对外 API 描述目录。多语言 SDK 的强类型 DTO 和契约测试是客户端调用边界。
+
+## 构建与测试
 
 ```bash
 make fmt-check
 make lint
 make test
-make e2e
 make build
-# 完整验收
-make verify
 ```
 
-`make e2e` 会启动真实 `walletd` 子进程，经 HTTP 和 Unix socket 完成钱包管理
-与签名，恢复验证 EOA 地址，并检查历史和 Prometheus 指标。
+Makefile 会在每次 Rust 构建前检查 `target/`，超过 10 GiB 时执行 `cargo clean`。
 
-## 配置与启动
-
-唯一标准配置是 [`etc/agentvault.yaml`](etc/agentvault.yaml)。加载优先级为
-内置默认值 < YAML < `AGENTVAULT__...` 环境变量：
+多语言 SDK：
 
 ```bash
-export AGENTVAULT__LOGGING__LEVEL=debug
-export AGENTVAULT__MGMT__OTEL__ENABLED=true
+(cd src/adapters/rust && cargo test --locked)
+(cd src/adapters/golang && go test ./...)
+(cd src/adapters/python && PYTHONPATH=. python3 -m unittest -v $(find tests -type f -name '*_test.py' | sort | sed 's#/#.#g;s#\.py$##'))
+(cd src/adapters/typescript && npm ci && npm test && npm run build)
+(cd src/adapters/java && mvn test)
 ```
 
-本地运行示例：
+Dashboard：
 
 ```bash
-install -d -m 0700 ./data ./run ./secrets
-walletd master-key generate --output ./secrets/master.key
-
-# 复制 etc/agentvault.yaml，并将 store/master-key/socket 改成本地路径。
-walletd --config ./agentvault.local.yaml wallet generate payer
-walletd --config ./agentvault.local.yaml serve
+(cd web && npm ci && npm test && npm run build)
 ```
 
-HTTP API 只有绑定 loopback 时才允许不配置 token；绑定非 loopback 地址时，
-必须设置 `server.api_token_file`，该 owner-only 文件中保存原始 bearer token。
-MQTT 生产环境还必须启用 broker TLS、认证和按 client 隔离的 topic ACL。
+## 部署
 
-私钥导入仍是离线 CLI 操作，避免把私钥放进 HTTP/MQTT 请求：
+默认 Docker 拓扑集成 AuthGuard 与 Envoy：
 
 ```bash
-walletd --config ./agentvault.local.yaml wallet import payer \
-  --private-key-file ./secrets/payer.hex
+cp deploy/docker/.env.example deploy/docker/.env
+${EDITOR:-vi} deploy/docker/.env
+docker compose --env-file deploy/docker/.env \
+  -f deploy/docker/docker-compose.yaml up -d
 ```
 
-## API 与 SDK 契约
+隔离可信网络可明确选择 `docker-compose.open.yaml`。Helm Chart 位于 `deploy/helm/agentvault/`，同样默认启用 AuthGuard 依赖。
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| `POST` | `/api/v1/wallet` | 生成钱包 |
-| `GET` | `/api/v1/wallet` | 查询钱包列表 |
-| `GET` | `/api/v1/wallet/{id}` | 查询公开钱包元数据 |
-| `PUT` | `/api/v1/wallet/{id}` | 原子轮换钱包密钥 |
-| `DELETE` | `/api/v1/wallet/{id}` | 删除钱包 |
-| `POST` | `/api/v1/sign` | 校验并签署支付 digest |
-| `GET` | `/api/v1/sign` | 搜索签名历史 |
-| `GET` | `/api/v1/sign/{request_id}` | 查询该请求最新审计事件 |
+仓库配置默认关闭 `agentvault.payer.enabled` 与 `agentvault.payee.enabled`。生产必须由运营方提供 SQL、Wallet KEK、按方向独立的协议/Provider、共享链注册表和可选的认证 MQTT 配置及 SecretRef。
 
-Flowgent/Sigbot 应依赖 `model::sign::PaymentSignRequest` 与 `IPaymentSigner`，不要
-依赖传输实现内部。请求传输 base64 编码的 32 字节 EIP-712 digest，成功响应
-返回十六进制 65 字节 Ethereum `r || s || v` 签名，其中 `v` 为 27 或 28。
+## 真实 E2E
 
-更多内容见 [API 文档](docs/api_ZH.md)、
-[架构说明](docs/architecture/overview_ZH.md) 和
-[可观测性](docs/observability_ZH.md)。
+`use-cases/marketpulse-feed-subscription/e2e/` 从零构建两个业务系统：
 
-## 安全边界
+- MarketPulse Payee：免费昨日新闻 MCP Tool 与付费实时新闻 Tool。
+- QuantStream Payer：逻辑等价的 Rust、Go、Python、TypeScript、Java 采集服务和管理员审批 UI。
 
-- AgentVault 负责密钥生成/导入、加密存储、请求校验、地址派生与 digest 签名。
-- 调用方负责支付策略、x402 payload、EIP-712 hash 及签名后的资源重试。
-- 明确不支持原始消息签名和任意交易签名。
-- 一个进程独占一个加密 store；多副本需分别安全配置等价的逻辑钱包。
-- 这些机制无法抵御已失陷的宿主机、broker 或运维账号。
+测试使用 PostgreSQL、带认证/ACL 的 EMQX、官方 x402 Facilitator、Anvil/TestUSDC、真实 Solana 节点健康依赖、AgentVault、Payee 和 SDK 进程，验证 402 重试、MQTT 签名、日限额审批、一次性 Grant、EVM 结算、Receipt、Ledger 与交付恢复。
+
+```bash
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s structure
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s infrastructure
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payer
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payee
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s full \
+  --payer-language rust --payee-language rust
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix
+```
+
+当前 E2E 的资金断言是 EVM 上的 x402 exact；Solana 使用真实节点验证依赖健康，不宣称已经完成 Solana 支付。
+
+## License
+
+Apache-2.0，见 [LICENSE](LICENSE)。

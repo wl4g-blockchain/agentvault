@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "clients": [
+    {"id": "client-marketpulse", "name": "MarketPulse Feed", "auth_principal": "principal-marketpulse"},
+    {"id": "client-quantstream", "name": "QuantStream Ingestor", "auth_principal": "principal-quantstream"}
+  ],
+  "wallets": [
+    {
+      "id": "wallet-marketpulse-revenue",
+      "custody": "external",
+      "algorithm": "secp256k1",
+      "address": "0x3c44cdddB6a900fa2b585dd299e03d12fa4293bc",
+      "public_key": ""
+    },
+    {
+      "id": "wallet-quantstream-primary",
+      "custody": "local",
+      "private_key_env": "AGENTVAULT_QUANTSTREAM_WALLET_PRIVATE_KEY",
+      "budget_unit": {"asset": "USDC", "decimals": 6},
+      "max_per_payment": "10000000",
+      "max_per_day": "51000000"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-marketpulse-feed",
+      "client_id": "client-marketpulse",
+      "external_ref": "real-time-news-sales",
+      "name": "MarketPulse paid real-time feed"
+    },
+    {
+      "id": "scenario-quantstream-market-ingestion",
+      "client_id": "client-quantstream",
+      "external_ref": "market-news-ingestion",
+      "name": "QuantStream market news ingestion"
+    }
+  ],
+  "policies": [
+    {
+      "id": "policy-marketpulse-sales",
+      "scenario_id": "scenario-marketpulse-feed",
+      "wallet_ids": ["wallet-marketpulse-revenue"],
+      "protocols": ["x402"],
+      "networks": ["eip155:31337"],
+      "assets": [{
+        "network": "eip155:31337", "asset": "USDC",
+        "token_contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3", "decimals": 6
+      }],
+      "budget_unit": {"asset": "USDC", "decimals": 6},
+      "allowed_recipients": ["0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"],
+      "allowed_origins": ["http://127.0.0.1:8081"],
+      "inbound_limits": {
+        "max_per_payment": "1000000", "max_per_day": "10000000",
+        "approval_enabled": false
+      }
+    },
+    {
+      "id": "policy-quantstream-market-data",
+      "scenario_id": "scenario-quantstream-market-ingestion",
+      "wallet_ids": ["wallet-quantstream-primary"],
+      "protocols": ["x402"],
+      "networks": ["eip155:31337"],
+      "assets": [{
+        "network": "eip155:31337", "asset": "USDC",
+        "token_contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3", "decimals": 6
+      }],
+      "budget_unit": {"asset": "USDC", "decimals": 6},
+      "allowed_recipients": ["0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"],
+      "allowed_origins": ["http://127.0.0.1:8081"],
+      "outbound_limits": {
+        "max_per_payment": "1000000", "max_per_day": "1000000",
+        "approval_threshold": "2000000", "approval_enabled": true,
+        "approval_overage": "50000000"
+      }
+    }
+  ],
+  "offers": [{
+    "id": "offer-realtime-news",
+    "scenario_id": "scenario-marketpulse-feed",
+    "policy_id": "policy-marketpulse-sales",
+    "resource": "http://127.0.0.1:8081/mcp",
+    "protocols": ["x402"],
+    "asset": {
+      "network": "eip155:31337", "asset": "USDC",
+      "token_contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3", "decimals": 6
+    },
+    "amount": "1000000",
+    "wallet_id": "wallet-marketpulse-revenue"
+  }],
+  "approvers": [{
+    "scenario_id": "scenario-quantstream-market-ingestion",
+    "auth_principal": "principal-quantstream-admin"
+  }]
+}

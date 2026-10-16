@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/pgvector_pgvector:pg16
+    environment:
+      POSTGRES_USER: agentvault
+      POSTGRES_PASSWORD: ${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}
+      POSTGRES_DB: agentvault
+    ports: ["127.0.0.1:${E2E_POSTGRES_PORT:-25432}:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentvault -d agentvault"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+volumes:
+  postgres-data: {}

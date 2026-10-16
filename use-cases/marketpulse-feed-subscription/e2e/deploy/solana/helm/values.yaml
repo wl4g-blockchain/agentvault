@@ -1,0 +1,44 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/anza_solana"
+  tag: "3.1.14"
+  pullPolicy: IfNotPresent
+command: []
+args:
+  - "--rpc-port=8899"
+  - "--faucet-port=8900"
+  - "--ledger=/tmp/solana-ledger"
+  - "--reset"
+env: {}
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: rpc, containerPort: 8899, servicePort: 8899 }
+  - { name: faucet, containerPort: 8900, servicePort: 8900 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 8899
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: true
+  mountPath: "/tmp/solana-ledger"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

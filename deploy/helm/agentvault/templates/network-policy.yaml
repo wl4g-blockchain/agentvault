@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentvault.fullname" . }}
+  labels:
+    {{- include "agentvault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentvault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
+          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+      ports: [{ protocol: TCP, port: {{ .Values.service.apiPort }} }]
+    {{- if .Values.runtime.grpc.enabled }}
+    - from:
+        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
+          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+      ports: [{ protocol: TCP, port: {{ .Values.service.grpcPort }} }]
+    {{- end }}
+    - from:
+        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
+          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+      ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
+    - from:
+        - namespaceSelector: {{ toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+          podSelector: {{ toYaml .Values.networkPolicy.monitoringPodSelector | nindent 12 }}
+      ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
+{{- end }}

@@ -1,0 +1,39 @@
+services:
+  quantstream-rust:
+    image: ${E2E_QUANTSTREAM_RUST_IMAGE:-quantstream-ingestor-rust-e2e:local}
+    build:
+      context: ${E2E_QUANTSTREAM_REPOSITORY_ROOT:-../../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust/Dockerfile
+      network: host
+      args:
+        HTTPS_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+    command: ["--once"]
+    environment:
+      MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}
+      MARKETPULSE_ORIGIN: ${E2E_QUANTSTREAM_MARKETPULSE_ORIGIN:-http://marketpulse:8081}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
+      QUANTSTREAM_WALLET_ID: ${E2E_QUANTSTREAM_WALLET_ID:-wallet-quantstream-primary}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+      QUANTSTREAM_YESTERDAY_CRON: "${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 0 2 * * *}"
+      QUANTSTREAM_REALTIME_CRON: "${E2E_QUANTSTREAM_REALTIME_CRON:-0 */1 * * * *}"
+      AGENTVAULT_APPROVAL_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_APPROVAL_TIMEOUT_SECONDS:-45}"
+      AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-emqx}
+      AGENTVAULT_MQTT_PORT: "${E2E_QUANTSTREAM_MQTT_PORT:-1883}"
+      AGENTVAULT_MQTT_TLS: "${E2E_QUANTSTREAM_MQTT_TLS:-false}"
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_MQTT_USERNAME:-quantstream-workload}
+      AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
+      AGENTVAULT_MQTT_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}"
+      PAYMENT_NETWORK: ${E2E_QUANTSTREAM_PAYMENT_NETWORK:-eip155:31337}
+      PAYMENT_ASSET: ${E2E_QUANTSTREAM_PAYMENT_ASSET:-USDC}
+      PAYMENT_TOKEN_CONTRACT: ${E2E_QUANTSTREAM_PAYMENT_TOKEN_CONTRACT:-0x5fbdb2315678afecb367f032d93f642f64180aa3}
+      PAYMENT_DECIMALS: "${E2E_QUANTSTREAM_PAYMENT_DECIMALS:-6}"
+      PAYMENT_AMOUNT: "${E2E_QUANTSTREAM_PAYMENT_AMOUNT:-1000000}"
+      PAYMENT_RECIPIENT: ${E2E_QUANTSTREAM_PAYMENT_RECIPIENT:-0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc}
+    volumes: ["quantstream-rust-data:/var/lib/quantstream"]
+    restart: "no"
+volumes:
+  quantstream-rust-data: {}

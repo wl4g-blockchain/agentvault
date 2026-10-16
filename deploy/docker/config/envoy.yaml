@@ -1,0 +1,125 @@
+# Default edge: public AuthGuard login/static routes, protected AgentVault API,
+# and a public static Dashboard shell. The browser never stores an AgentVault
+# token; the API receives only AuthGuard's signed workload context.
+static_resources:
+  listeners:
+    - name: edge
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: agentvault_edge
+                normalize_path: true
+                merge_slashes: true
+                route_config:
+                  name: agentvault_routes
+                  virtual_hosts:
+                    - name: agentvault
+                      domains: ["*"]
+                      routes:
+                        - match: { path: /auth/login }
+                          route: { cluster: authguard_web }
+                          typed_per_filter_config: &public_filters
+                            envoy.filters.http.jwt_authn:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.PerRouteConfig
+                              disabled: true
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match: { path: /auth/account/security }
+                          route: { cluster: authguard_web }
+                          typed_per_filter_config: *public_filters
+                        - match: { prefix: /auth/assets/ }
+                          route: { cluster: authguard_web }
+                          typed_per_filter_config: *public_filters
+                        - match: { prefix: /.well-known/ }
+                          route: { cluster: authguard_authn }
+                          typed_per_filter_config: *public_filters
+                        - match: { prefix: /auth/ }
+                          route: { cluster: authguard_authn }
+                          typed_per_filter_config: *public_filters
+                        - match: { prefix: /api/v1/ }
+                          route: { cluster: agentvault_api, timeout: 15s }
+                        - match: { prefix: /agentvault-management/ }
+                          route: { cluster: agentvault_management, prefix_rewrite: /, timeout: 5s }
+                        - match: { prefix: / }
+                          route: { cluster: agentvault_web }
+                          typed_per_filter_config: *public_filters
+                http_filters:
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        authguard:
+                          issuer: authguard-authn
+                          audiences: [authguard]
+                          from_headers:
+                            - name: authorization
+                              value_prefix: "Bearer "
+                          from_cookies: [authguard_token]
+                          forward: true
+                          remote_jwks:
+                            http_uri:
+                              uri: http://authguard-authn:8082/.well-known/jwks.json
+                              cluster: authguard_authn
+                              timeout: 2s
+                            cache_duration: 300s
+                      rules:
+                        - match: { prefix: / }
+                          requires: { provider_name: authguard }
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      failure_mode_allow: false
+                      transport_api_version: V3
+                      grpc_service:
+                        envoy_grpc: { cluster_name: authguard_authz }
+                        timeout: 2s
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - &http_cluster
+      name: agentvault_api
+      type: STRICT_DNS
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: agentvault_api
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: agentvault, port_value: 8080 } } } }] }]
+    - <<: *http_cluster
+      name: agentvault_web
+      load_assignment:
+        cluster_name: agentvault_web
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: agentvault-web, port_value: 8080 } } } }] }]
+    - <<: *http_cluster
+      name: agentvault_management
+      load_assignment:
+        cluster_name: agentvault_management
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: agentvault, port_value: 9091 } } } }] }]
+    - <<: *http_cluster
+      name: authguard_authn
+      load_assignment:
+        cluster_name: authguard_authn
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: authguard-authn, port_value: 8082 } } } }] }]
+    - <<: *http_cluster
+      name: authguard_web
+      load_assignment:
+        cluster_name: authguard_web
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: authguard-web, port_value: 8080 } } } }] }]
+    - name: authguard_authz
+      type: STRICT_DNS
+      connect_timeout: 2s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config: { http2_protocol_options: {} }
+      load_assignment:
+        cluster_name: authguard_authz
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: authguard-authz, port_value: 8080 } } } }] }]
+
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }

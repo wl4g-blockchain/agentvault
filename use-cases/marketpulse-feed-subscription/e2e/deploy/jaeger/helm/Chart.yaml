@@ -1,0 +1,7 @@
+apiVersion: v2
+name: jaeger
+description: MarketPulse subscription E2E jaeger component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+

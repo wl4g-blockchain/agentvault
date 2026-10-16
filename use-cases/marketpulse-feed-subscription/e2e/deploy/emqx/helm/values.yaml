@@ -1,0 +1,79 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/emqx_emqx"
+  tag: "5.5.0-elixir-amd64"
+  pullPolicy: IfNotPresent
+command: []
+args: []
+env:
+  EMQX_AUTHORIZATION__NO_MATCH: "deny"
+  EMQX_AUTHORIZATION__DENY_ACTION: "ignore"
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: mqtt, containerPort: 1883, servicePort: 1883 }
+  - { name: dashboard, containerPort: 18083, servicePort: 18083 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 1883
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: true
+  key: acl.conf
+  mountPath: "/opt/emqx/etc/acl.conf"
+  content: |
+    %% AgentVault server: receive commands for registered clients and publish results/events.
+    {allow, {username, "agentvault-vault"}, subscribe, [
+      "agentvault/v1/clients/+/commands/authorize",
+      "agentvault/v1/clients/+/commands/outbound-response",
+      "agentvault/v1/clients/+/commands/resolve-offer",
+      "agentvault/v1/clients/+/commands/create-challenge",
+      "agentvault/v1/clients/+/commands/verify-payment",
+      "agentvault/v1/clients/+/commands/settle-payment",
+      "agentvault/v1/clients/+/approvers/+/decisions"
+    ]}.
+    {allow, {username, "agentvault-vault"}, publish, [
+      "agentvault/v1/clients/+/results/+",
+      "agentvault/v1/clients/+/approvals/required",
+      "agentvault/v1/clients/+/approvers/+/results/+",
+      "agentvault/v1/clients/+/payments/events/+"
+    ]}.
+    
+    %% QuantStream workload is pinned to its own registered client topic tree.
+    {allow, {username, "quantstream-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream/commands/authorize",
+      "agentvault/v1/clients/client-quantstream/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream/results/+",
+      "agentvault/v1/clients/client-quantstream/approvals/required",
+      "agentvault/v1/clients/client-quantstream/payments/events/+"
+    ]}.
+    
+    %% Approval decisions use an independent business administrator credential.
+    {allow, {username, "quantstream-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream/approvals/required",
+      "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/results/+"
+    ]}.
+    
+    {deny, all}.
+persistence:
+  enabled: true
+  mountPath: "/opt/emqx/data"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

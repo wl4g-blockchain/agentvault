@@ -1,0 +1,42 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/jaegertracing_all-in-one"
+  tag: "1.76.0"
+  pullPolicy: IfNotPresent
+command: []
+args: []
+env:
+  COLLECTOR_OTLP_ENABLED: "true"
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: ui, containerPort: 16686, servicePort: 16686 }
+  - { name: otlp-grpc, containerPort: 4317, servicePort: 4317 }
+  - { name: otlp-http, containerPort: 4318, servicePort: 4318 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 16686
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

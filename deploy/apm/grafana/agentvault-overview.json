@@ -1,0 +1,53 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Payment success rate",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(agentvault_payment_operations_total{outcome=\"success\"}[$__rate_interval])) / clamp_min(sum(rate(agentvault_payment_operations_total[$__rate_interval])), 1e-9)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}
+    },
+    {
+      "type": "stat",
+      "title": "Payments in flight",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "targets": [{"expr": "sum(agentvault_payments_in_flight)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "HTTP 5xx rate",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "targets": [{"expr": "sum(rate(agentvault_http_requests_total{status=~\"5..\"}[$__rate_interval]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Payment operations",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 6},
+      "targets": [{"expr": "sum by (operation, direction, outcome) (rate(agentvault_payment_operations_total[$__rate_interval]))", "legendFormat": "{{operation}} {{direction}} {{outcome}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payment latency",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le, operation, direction) (rate(agentvault_payment_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p50 {{operation}} {{direction}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le, operation, direction) (rate(agentvault_payment_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p95 {{operation}} {{direction}}", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le, operation, direction) (rate(agentvault_payment_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p99 {{operation}} {{direction}}", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["agentvault", "payments"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "AgentVault Overview",
+  "uid": "agentvault-overview",
+  "version": 1
+}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: marketpulse-rust
+description: MarketPulse subscription E2E marketpulse component
+type: application
+version: 0.1.0
+appVersion: "e2e"

@@ -84,7 +84,7 @@ jobs:
         run: |
           package="agentvault-${VERSION}-linux-amd64"
           mkdir -p "dist/${package}/etc"
-          install -m 0755 target/release/walletd "dist/${package}/walletd"
+          install -m 0755 target/release/agentvault "dist/${package}/agentvault"
           install -m 0644 etc/agentvault.yaml "dist/${package}/etc/agentvault.yaml"
           install -m 0644 README.md README_ZH.md LICENSE "dist/${package}/"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"

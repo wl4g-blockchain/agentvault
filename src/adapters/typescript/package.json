@@ -1,0 +1,16 @@
+{
+  "name": "@agentvault/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/agentvault/agentvault.js",
+  "types": "dist/agentvault/agentvault.d.ts",
+  "exports": { ".": { "types": "./dist/agentvault/agentvault.d.ts", "default": "./dist/agentvault/agentvault.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/agentvault/agentvault_test.ts tests/agentvault/*/*_test.ts"
+  },
+  "dependencies": { "@grpc/grpc-js": "^1.14.0", "express": "^5.1.0", "mqtt": "^5.14.1" },
+  "devDependencies": { "@types/express": "^5.0.3", "@types/node": "^22.18.10", "tsx": "^4.20.6", "typescript": "^5.9.3" },
+  "engines": { "node": ">=20" }
+}
