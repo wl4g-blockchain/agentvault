@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
+      actions: read
       contents: read
       issues: write
       packages: write
@@ -23,17 +24,6 @@ jobs:
       dirty_tag: ${{ steps.dirty-tag.outputs.value }}
       dirty_chart_version: ${{ steps.dirty-tag.outputs.chart_version }}
     steps:
-      - name: Reclaim ephemeral runner disk
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: false
-          swap-storage: false
-          tool-cache: true
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -44,10 +34,22 @@ jobs:
           AGENTVAULT_PR_NUMBER: ${{ github.event.pull_request.number }}
           AGENTVAULT_COMMENT_KIND: ci
           AGENTVAULT_COMMENT_PHASE: started
+          AGENTVAULT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AGENTVAULT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           node .github/scripts/upsert-pr-status-comment.mjs || \
             echo "::warning title=AgentVault PR CI comment::Could not publish the CI status comment."
+
+      - name: Reclaim ephemeral runner disk
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+          tool-cache: true
 
       - name: Derive immutable dirty tag
         id: dirty-tag
@@ -138,6 +140,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: src/adapters/python/pyproject.toml
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -168,6 +172,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src/adapters/python
         run: |
+          python3 -m pip install --disable-pip-version-check --editable 'src/adapters/python[test]'
           for suite in tests/agentvault tests/agentvault/config tests/agentvault/model \
             tests/agentvault/payer tests/agentvault/payee tests/agentvault/transport; do
             python3 -m unittest discover -s "src/adapters/python/${suite}" -p '*_test.py' -v
@@ -226,6 +231,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       issues: write
       pull-requests: write
     steps:
@@ -239,6 +245,7 @@ jobs:
           AGENTVAULT_PR_NUMBER: ${{ github.event.pull_request.number }}
           AGENTVAULT_COMMENT_KIND: ci
           AGENTVAULT_COMMENT_PHASE: build
+          AGENTVAULT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AGENTVAULT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AGENTVAULT_BUILD_RESULT: ${{ needs.build-and-test.result }}
           AGENTVAULT_DIRTY_TAG: ${{ needs.build-and-test.outputs.dirty_tag }}
@@ -257,6 +264,7 @@ jobs:
       packages: read
     outputs:
       summary_base64: ${{ steps.summary.outputs.base64 }}
+      evidence_url: ${{ steps.evidence.outputs.artifact-url }}
     env:
       E2E_AGENTVAULT_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_RUNNER_PREBUILT_AGENTVAULT: "1"
@@ -310,18 +318,21 @@ jobs:
         run: |
           summary=$(find use-cases/marketpulse-feed-subscription/e2e/reports \
             -mindepth 2 -maxdepth 2 -name summary.md -printf '%T@ %p\n' \
-            | sort -nr | head -1 | cut -d' ' -f2-)
-          if [[ -n "${summary}" && -s "${summary}" ]]; then
-            echo "base64=$(base64 -w 0 "${summary}")" >> "$GITHUB_OUTPUT"
+            2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)
+          if [[ -z "${summary}" || ! -s "${summary}" ]]; then
+            echo "::error title=Missing E2E summary::The E2E job did not produce a non-empty summary.md."
+            exit 1
           fi
+          echo "base64=$(base64 -w 0 "${summary}")" >> "$GITHUB_OUTPUT"
 
       - name: Upload E2E evidence
+        id: evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: marketpulse-e2e-docker-${{ needs.build-and-test.outputs.dirty_tag }}
           path: use-cases/marketpulse-feed-subscription/e2e/reports/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   comment-final:
@@ -330,6 +341,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       issues: write
       pull-requests: write
     steps:
@@ -343,10 +355,12 @@ jobs:
           AGENTVAULT_PR_NUMBER: ${{ github.event.pull_request.number }}
           AGENTVAULT_COMMENT_KIND: ci
           AGENTVAULT_COMMENT_PHASE: final
+          AGENTVAULT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AGENTVAULT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AGENTVAULT_BUILD_RESULT: ${{ needs.build-and-test.result }}
           AGENTVAULT_E2E_DOCKER_RESULT: ${{ needs.e2e-docker.result }}
           AGENTVAULT_E2E_DOCKER_SUMMARY_BASE64: ${{ needs.e2e-docker.outputs.summary_base64 }}
+          AGENTVAULT_E2E_DOCKER_EVIDENCE_URL: ${{ needs.e2e-docker.outputs.evidence_url }}
           AGENTVAULT_DIRTY_TAG: ${{ needs.build-and-test.outputs.dirty_tag }}
           AGENTVAULT_DIRTY_CHART_VERSION: ${{ needs.build-and-test.outputs.dirty_chart_version }}
         run: |
