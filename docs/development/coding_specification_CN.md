@@ -145,7 +145,7 @@ use-cases/<case-name>/e2e/
     └── <module>/s0x_<scenario>.md
 ```
 
-- `runner.py` 统一参数/部署/报告/cleanup；Verifier 仅导出 `verify(context)`、按领域 `sNN_`；可保留环境验收。
+- `runner.py` 统一 CLI/部署/报告/cleanup：重复/逗号 `--scenario`、`--rounds/--deployer/--timeout`、复用构建及 `cleanup/--cleanup/--cleanup-after-run`；生成时间戳报告。Verifier 仅 `verify(context)`、按领域 `sNN_`；不清理供人工验收。
 
 ## 11. Helm 模板（模块/分层）
 
