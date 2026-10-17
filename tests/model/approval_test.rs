@@ -26,6 +26,7 @@ fn api_serialization_never_contains_the_sealed_jwt() {
     let approval = ApprovalRequest {
         id: "approval-1".to_owned(),
         intent_id: "intent-1".to_owned(),
+        run_id: "run-1".to_owned(),
         requested_amount: Amount::new(100),
         approved_amount: Some(Amount::new(100)),
         requested_by: "requester".to_owned(),

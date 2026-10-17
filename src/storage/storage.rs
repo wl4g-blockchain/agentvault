@@ -96,6 +96,12 @@ mod catalog {
             /// a `LIMIT 1` selection.
             async fn resolve(&self, scenario_id: &str, resource: &str, protocol: &str) -> Result<Option<PaymentOffer>>;
 
+            /// Resolves the single enabled offer for a scenario resource before
+            /// the caller has selected one of the offer's supported protocols.
+            /// This must be a direct authority query; callers must not infer the
+            /// result from an arbitrary page of catalog rows.
+            async fn resolve_resource(&self, scenario_id: &str, resource: &str) -> Result<Option<PaymentOffer>>;
+
             /// Replaces pricing or lifecycle fields with optimistic concurrency.
             async fn update(&self, offer: &PaymentOffer, expected_updated_at: i64) -> Result<PaymentOffer>;
 
@@ -131,6 +137,10 @@ mod catalog {
             async fn list_for_scenario(&self, scenario_id: &str, page: PageRequest) -> Result<Page<PaymentPolicy>>;
 
             async fn list_for_wallet(&self, wallet_id: &str, page: PageRequest) -> Result<Page<PaymentPolicy>>;
+
+            /// Returns whether an enabled policy currently binds the wallet to
+            /// the scenario. This authority check must not depend on pagination.
+            async fn has_enabled_wallet_binding(&self, scenario_id: &str, wallet_id: &str) -> Result<bool>;
         }
     }
 
@@ -311,6 +321,17 @@ mod catalog {
             #[must_use]
             pub const fn signing_ready(&self) -> bool {
                 self.enabled && matches!(self.custody, WalletCustody::Local) && self.active_key_version.is_some()
+            }
+
+            /// Returns whether the built-in local signer can use this wallet on
+            /// the requested payment network. EIP-155 payments require both a
+            /// canonical EVM address and the secp256k1/EVM algorithm family.
+            #[must_use]
+            pub fn signing_ready_for_payment_network(&self, network: &str) -> bool {
+                self.signing_ready()
+                    && (!crate::model::wallet::is_evm_payment_network(network)
+                        || crate::model::wallet::is_evm_wallet_algorithm(&self.wallet.algorithm))
+                    && self.clone().canonicalized_for_payment_network(network).is_ok()
             }
         }
 
@@ -957,6 +978,8 @@ mod transaction {
         pub struct BudgetSnapshot {
             pub budget_unit: BudgetUnit,
             pub wallet_enabled: bool,
+            pub wallet_algorithm: String,
+            pub wallet_address: String,
             pub wallet_updated_at: i64,
             pub wallet_active_key_version: Option<u32>,
             /// Whether enabled policies from more than one scenario share the wallet.
@@ -973,6 +996,8 @@ mod transaction {
                 Self {
                     budget_unit,
                     wallet_enabled: false,
+                    wallet_algorithm: String::new(),
+                    wallet_address: String::new(),
                     wallet_updated_at: 0,
                     wallet_active_key_version: None,
                     wallet_shared_across_scenarios: false,
@@ -988,11 +1013,7 @@ mod transaction {
         pub trait PaymentStorage: Send + Sync {
             /// Looks up the authoritative replay identity before re-evaluating mutable
             /// policy. Callers compare `request_hash` and reject mismatches.
-            async fn find_idempotency(
-                &self,
-                scenario_id: &str,
-                idempotency_key: &str,
-            ) -> Result<Option<AuthorizationRecord>>;
+            async fn find_run(&self, scenario_id: &str, run_id: &str) -> Result<Option<AuthorizationRecord>>;
 
             /// Atomically inserts an authorization aggregate, reserves both policy and
             /// wallet budgets when no approval is needed, and appends its events and
@@ -1297,7 +1318,11 @@ mod transaction {
             pub event_type: String,
             pub destination: String,
             pub correlation_id: String,
-            pub idempotency_key: String,
+            /// Business run that produced this event. Together with
+            /// `destination` and `event_type` this is the durable delivery
+            /// identity; retries increment `attempt_count` without inventing
+            /// another business key.
+            pub run_id: String,
             pub payload: Value,
             pub status: OutboxStatus,
             pub attempt_count: u32,
@@ -1416,6 +1441,11 @@ pub trait IStorage: Send + Sync {
 
     fn init(&self) -> StorageLifecycleFuture;
 
+    /// Checks whether the authoritative SQL provider can serve a trivial
+    /// query. Management readiness uses this signal to stop routing new
+    /// payment work when durable authority is unavailable.
+    fn ping(&self) -> StorageHealthFuture;
+
     fn close(&self) -> StorageCloseFuture;
 
     fn ports(self: Arc<Self>) -> StoragePorts;
@@ -1438,6 +1468,7 @@ pub trait IStorage: Send + Sync {
 /// Initialization performs `SQLx` migration batches whose executor futures are
 /// intentionally awaited only by the single-threaded composition phase.
 pub type StorageLifecycleFuture = Pin<Box<dyn Future<Output = Result<()>> + 'static>>;
+pub type StorageHealthFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 pub type StorageCloseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 
 struct RegisteredStorage {

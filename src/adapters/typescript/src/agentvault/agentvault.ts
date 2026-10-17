@@ -39,7 +39,6 @@ export class AgentVault {
       'POST',
       `/api/v1/approvals/${encodeURIComponent(request.approval_id)}/decision`,
       request,
-      request.idempotency_key,
     );
   }
 

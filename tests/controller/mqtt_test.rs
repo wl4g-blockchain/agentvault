@@ -5,18 +5,6 @@ fn request_body() -> Value {
     json!({
         "scenario_id": "scenario-quantstream",
         "run_id": "run-42",
-        "idempotency_key": "run-42:realtime-news",
-        "wallet_id": "wallet-buyer",
-        "protocol": "x402",
-        "asset": {
-            "network": "eip155:31337",
-            "asset": "USDC",
-            "token_contract": "0x0000000000000000000000000000000000001001",
-            "decimals": 6
-        },
-        "amount": "1000000",
-        "recipient": "0x0000000000000000000000000000000000002002",
-        "resource": "mcp://marketpulse/realtime_news",
         "challenge": {
             "protocol_hint": "x402",
             "origin": "http://127.0.0.1:8181",
@@ -38,8 +26,7 @@ fn request_envelope(body: &Value) -> Vec<u8> {
             "path": AUTHORIZE_PATH,
             "headers": {
                 "accept": "application/json",
-                "content-type": "application/json",
-                "idempotency-key": "run-42:realtime-news"
+                "content-type": "application/json"
             },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
@@ -55,10 +42,7 @@ fn decision_envelope(path_approval_id: &str, body: &Value) -> Vec<u8> {
         "request": {
             "method": "POST",
             "path": format!("/api/v1/approvals/{path_approval_id}/decision"),
-            "headers": {
-                "content-type": "application/json",
-                "idempotency-key": "decision-key-0001"
-            },
+            "headers": {"content-type": "application/json"},
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
     }))
@@ -75,8 +59,7 @@ fn outbound_response_envelope(intent_id: &str, body: &Value) -> Vec<u8> {
             "path": format!("/api/v1/payments/{intent_id}/outbound-response"),
             "headers": {
                 "accept": "application/json",
-                "content-type": "application/json",
-                "idempotency-key": "run-42:realtime-news"
+                "content-type": "application/json"
             },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
@@ -84,14 +67,11 @@ fn outbound_response_envelope(intent_id: &str, body: &Value) -> Vec<u8> {
     .unwrap()
 }
 
-fn payee_envelope(message_type: &str, path: &str, body: &Value, key: Option<&str>) -> Vec<u8> {
-    let mut headers = json!({
+fn payee_envelope(message_type: &str, path: &str, body: &Value) -> Vec<u8> {
+    let headers = json!({
         "accept": "application/json",
         "content-type": "application/json"
     });
-    if let Some(key) = key {
-        headers["idempotency-key"] = Value::String(key.to_owned());
-    }
     serde_json::to_vec(&json!({
         "type": message_type,
         "version": 1,
@@ -161,26 +141,40 @@ fn derives_client_only_from_exact_command_topic() {
 }
 
 #[test]
-fn subscribes_only_to_the_six_acl_authorized_command_filters() {
+fn subscribes_only_to_the_six_shared_acl_authorized_command_filters() {
     assert_eq!(
-        command_subscription_filters("agentvault/v1/clients"),
+        command_subscription_filters("agentvault/v1/clients", "agentvault-pool"),
         [
-            "agentvault/v1/clients/+/commands/authorize",
-            "agentvault/v1/clients/+/commands/outbound-response",
-            "agentvault/v1/clients/+/commands/resolve-offer",
-            "agentvault/v1/clients/+/commands/create-challenge",
-            "agentvault/v1/clients/+/commands/verify-payment",
-            "agentvault/v1/clients/+/commands/settle-payment",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/authorize",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/outbound-response",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/resolve-offer",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/create-challenge",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/verify-payment",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/settle-payment",
         ]
     );
 }
 
 #[test]
-fn payee_command_binds_wire_type_path_and_idempotency_key() {
+fn subscription_ack_fails_closed_on_partial_broker_authorization() {
+    let accepted = SubAck::new(1, vec![SubscribeReasonCode::Success(QoS::AtLeastOnce); 7]);
+    assert!(validate_subscription_ack(&accepted, 7).is_ok());
+
+    let rejected = SubAck::new(
+        2,
+        vec![
+            SubscribeReasonCode::Success(QoS::AtLeastOnce),
+            SubscribeReasonCode::Failure,
+        ],
+    );
+    assert!(validate_subscription_ack(&rejected, 2).is_err());
+}
+
+#[test]
+fn payee_command_binds_wire_type_path_and_run_id() {
     let body = json!({
         "scenario_id": "scenario-marketpulse",
         "run_id": "delivery-42",
-        "idempotency_key": "delivery-42.challenge",
         "offer_id": "offer-realtime-news",
         "resource": "mcp://marketpulse/realtime_news",
         "origin": "http://127.0.0.1:8181",
@@ -188,31 +182,18 @@ fn payee_command_binds_wire_type_path_and_idempotency_key() {
         "request_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     });
     let parsed = parse_payee_command::<CreateChallengeRequest>(
-        &payee_envelope(
-            "payment.create_challenge",
-            "/api/v1/payee/challenges",
-            &body,
-            Some("delivery-42.challenge"),
-        ),
+        &payee_envelope("payment.create_challenge", "/api/v1/payee/challenges", &body),
         "payment.create_challenge",
         "/api/v1/payee/challenges",
-        true,
-        |request| Some(request.context.idempotency_key.clone()),
     )
     .unwrap();
     assert_eq!(parsed.context.scenario_id, "scenario-marketpulse");
+    assert_eq!(parsed.context.run_id, "delivery-42");
 
     assert!(parse_payee_command::<CreateChallengeRequest>(
-        &payee_envelope(
-            "payment.verify",
-            "/api/v1/payee/challenges",
-            &body,
-            Some("delivery-42.challenge"),
-        ),
+        &payee_envelope("payment.verify", "/api/v1/payee/challenges", &body),
         "payment.create_challenge",
         "/api/v1/payee/challenges",
-        true,
-        |request| Some(request.context.idempotency_key.clone()),
     )
     .is_err());
 }
@@ -242,43 +223,26 @@ fn accepts_only_canonical_bounded_authorization_envelope() {
     let body = request_body();
     let decoded = parse_authorize_command(&request_envelope(&body)).unwrap();
     assert_eq!(decoded.context.scenario_id, "scenario-quantstream");
-    assert_eq!(decoded.context.idempotency_key, "run-42:realtime-news");
-
-    let mut mismatched = body;
-    mismatched["idempotency_key"] = Value::String("different-key".to_owned());
-    assert_eq!(
-        parse_authorize_command(&request_envelope(&mismatched)).unwrap_err(),
-        "idempotency-key header and body differ"
-    );
+    assert_eq!(decoded.context.run_id, "run-42");
 }
 
 #[test]
-fn outbound_response_command_binds_intent_run_and_idempotency() {
+fn outbound_response_command_binds_intent_and_run() {
     let body = json!({
         "scenario_id": "scenario-quantstream",
         "run_id": "run-42",
-        "idempotency_key": "run-42:realtime-news",
         "payment_response": "YWJjZA=="
     });
     let parsed = parse_outbound_response_command(&outbound_response_envelope("intent-1", &body)).unwrap();
     assert_eq!(parsed.intent_id, "intent-1");
     assert_eq!(parsed.request.context.scenario_id, "scenario-quantstream");
-    assert_eq!(parsed.request.context.run_id.as_deref(), Some("run-42"));
+    assert_eq!(parsed.request.context.run_id, "run-42");
 
-    let mut conflicting = body;
-    conflicting["idempotency_key"] = Value::String("different-key".to_owned());
-    assert_eq!(
-        parse_outbound_response_command(&outbound_response_envelope("intent-1", &conflicting))
-            .err()
-            .unwrap(),
-        "idempotency-key header and body differ"
-    );
     assert!(parse_outbound_response_command(&outbound_response_envelope(
         "../intent",
         &json!({
             "scenario_id": "scenario-quantstream",
             "run_id": "run-42",
-            "idempotency_key": "run-42:realtime-news",
             "payment_response": "YWJjZA=="
         })
     ))
@@ -289,7 +253,7 @@ fn outbound_response_command_binds_intent_run_and_idempotency() {
 fn approval_decision_binds_the_topic_client_and_exact_http_shape() {
     let body = json!({
         "scenario_id": "scenario-quantstream",
-        "idempotency_key": "decision-key-0001",
+        "run_id": "approval-run-1",
         "approval_id": "approval-1",
         "decision": "approve",
         "reason": "finance administrator approved"
@@ -363,10 +327,11 @@ fn maps_only_approval_required_outbox_destinations() {
         event_type: "approval_required".to_owned(),
         destination: "client:client-quantstream.approvals".to_owned(),
         correlation_id: "intent-1".to_owned(),
-        idempotency_key: "approval-required:approval-1".to_owned(),
+        run_id: "approval-run-1".to_owned(),
         payload: json!({
             "approval_id": "approval-1",
             "intent_id": "intent-1",
+            "run_id": "approval-run-1",
             "scenario_id": "scenario-quantstream",
             "amount": "50000000",
             "expires_at": 120
@@ -386,8 +351,13 @@ fn maps_only_approval_required_outbox_destinations() {
     );
     let envelope = serde_json::to_value(approval_envelope(&message).unwrap()).unwrap();
     assert_eq!(envelope["type"], "payment.approval_required");
+    assert_eq!(envelope["runId"], "approval-run-1");
     assert_eq!(envelope["scenarioId"], "scenario-quantstream");
     assert_eq!(envelope["requestedAmount"], "50000000");
+
+    let mut mismatched = message.clone();
+    mismatched.payload["run_id"] = Value::String("another-run".to_owned());
+    assert!(approval_envelope(&mismatched).is_err());
 
     let mut foreign = message;
     foreign.event_type = "payment_settled".to_owned();
@@ -396,7 +366,7 @@ fn maps_only_approval_required_outbox_destinations() {
 }
 
 #[test]
-fn payment_event_routing_is_tenant_scoped_and_idempotent() {
+fn payment_event_routing_is_tenant_and_run_scoped() {
     let message = OutboxMessage {
         id: "outbox-event-1".to_owned(),
         aggregate_type: "payment_intent".to_owned(),
@@ -404,7 +374,7 @@ fn payment_event_routing_is_tenant_scoped_and_idempotent() {
         event_type: "payment_settled".to_owned(),
         destination: "scenario:scenario-quantstream.payments".to_owned(),
         correlation_id: "intent-1".to_owned(),
-        idempotency_key: "settled:intent-1:tx-1".to_owned(),
+        run_id: "run-42".to_owned(),
         payload: json!({"intent_id": "intent-1", "tx_hash": "0x1234"}),
         status: OutboxStatus::Pending,
         attempt_count: 1,
@@ -429,7 +399,7 @@ fn payment_event_routing_is_tenant_scoped_and_idempotent() {
     let envelope = serde_json::to_value(payment_event_envelope(&message).unwrap()).unwrap();
     assert_eq!(envelope["type"], "payment.event");
     assert_eq!(envelope["correlationId"], "intent-1");
-    assert_eq!(envelope["idempotencyKey"], "settled:intent-1:tx-1");
+    assert_eq!(envelope["runId"], "run-42");
     assert_eq!(envelope["eventType"], "payment_settled");
 }
 

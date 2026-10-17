@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import type { SettledIncomingPayment } from '@agentvault/sdk';
 
 const ACTORS = [
   ['Donald Trump', 'United States president'], ['Marco Rubio', 'United States secretary of state'],
@@ -50,7 +51,7 @@ export class FeedSQLiteStorage {
         symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,sentiment_bps INTEGER NOT NULL,
         access_tier TEXT NOT NULL CHECK(access_tier IN ('yesterday','realtime')));
       CREATE TABLE IF NOT EXISTS mcp_delivery(
-        execution_key TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
+        run_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
         response_json TEXT,status TEXT NOT NULL CHECK(status IN ('settled','delivered')),
         failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL);`);
     this.seed();
@@ -95,36 +96,38 @@ export class FeedSQLiteStorage {
     }));
   }
 
-  delivery(executionKey: string, requestHash: string): DeliveryState {
+  delivery(runId: string, requestHash: string): DeliveryState {
     const row = this.database.prepare(`SELECT request_hash,intent_id,COALESCE(response_json,'') AS response,status
-      FROM mcp_delivery WHERE execution_key=?`).get(executionKey) as Record<string, unknown> | undefined;
+      FROM mcp_delivery WHERE run_id=?`).get(runId) as Record<string, unknown> | undefined;
     if (!row) return {};
     if (row.request_hash !== requestHash || !['settled', 'delivered'].includes(String(row.status))) {
-      throw new Error('MCP execution key conflicts with durable delivery');
+      throw new Error('MCP run_id conflicts with durable delivery');
     }
     return { intentId: String(row.intent_id), response: String(row.response) || undefined };
   }
 
-  recordSettled(executionKey: string, requestHash: string, intentId: string, vaultExecutionKey: string): void {
+  recordSettled(runId: string, requestHash: string, payment: SettledIncomingPayment): void {
+    if (payment.intent.run_id !== runId) throw new Error('settlement is not bound to the workflow run');
+    const intentId = payment.intent.id;
     this.database.prepare(`INSERT INTO mcp_delivery
-      (execution_key,request_hash,intent_id,settlement_json,response_json,status,updated_at)
-      VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(execution_key) DO NOTHING`).run(
-        executionKey, requestHash, intentId, JSON.stringify({ intentId, executionKey: vaultExecutionKey }), this.now());
-    if (this.delivery(executionKey, requestHash).intentId !== intentId) {
-      throw new Error('MCP execution key is already bound to another settlement');
+      (run_id,request_hash,intent_id,settlement_json,response_json,status,updated_at)
+      VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(run_id) DO NOTHING`).run(
+        runId, requestHash, intentId, JSON.stringify({ intentId, runId }), this.now());
+    if (this.delivery(runId, requestHash).intentId !== intentId) {
+      throw new Error('MCP run_id is already bound to another settlement');
     }
   }
 
-  recordDelivered(executionKey: string, requestHash: string, response: string): void {
+  recordDelivered(runId: string, requestHash: string, response: string): void {
     const result = this.database.prepare(`UPDATE mcp_delivery SET response_json=?,status='delivered',updated_at=?
-      WHERE execution_key=? AND request_hash=? AND status='settled'`).run(response, this.now(), executionKey, requestHash);
+      WHERE run_id=? AND request_hash=? AND status='settled'`).run(response, this.now(), runId, requestHash);
     if (result.changes !== 1) throw new Error('MCP delivery was not in settled state');
   }
 
-  recordFailure(executionKey: string, requestHash: string): boolean {
+  recordFailure(runId: string, requestHash: string): boolean {
     const result = this.database.prepare(`UPDATE mcp_delivery SET failure_injections=1,updated_at=?
-      WHERE execution_key=? AND request_hash=? AND status='settled' AND failure_injections=0`).run(
-        this.now(), executionKey, requestHash);
+      WHERE run_id=? AND request_hash=? AND status='settled' AND failure_injections=0`).run(
+        this.now(), runId, requestHash);
     return result.changes === 1;
   }
 

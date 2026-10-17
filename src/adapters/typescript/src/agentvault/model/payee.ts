@@ -1,5 +1,4 @@
 import {
-  assertIdempotencyKey,
   required,
   type AssetIdentity,
   type OperationContext,
@@ -31,7 +30,6 @@ export interface PaymentOffer {
 export interface PayeeOperation {
   scenarioId: string;
   runId: string;
-  executionKey: string;
   offerId: string;
   resource: string;
   origin: string;
@@ -61,25 +59,13 @@ export interface PaymentVerification {
 }
 
 export interface SettlePaymentRequest extends OperationContext {
-  execution_key: string;
   intent_id: string;
   verification_ref: string;
-}
-
-export interface IncomingPayment {
-  scenario_id: string;
-  run_id: string;
-  offer_id: string;
-  resource: string;
-  idempotency_key: string;
-  request_hash: string;
-  credential: PaymentCredentialWire;
 }
 
 export interface SettledIncomingPayment {
   intent: PaymentIntent;
   receipt: PaymentReceipt;
-  execution_key: string;
 }
 
 export interface HttpProtectionRequest extends OperationContext {
@@ -108,20 +94,17 @@ export function validateResolveOfferRequest(request: ResolveOfferRequest): void 
 export function validatePayeeOperation(operation: PayeeOperation): void {
   for (const [name, value] of [
     ['scenarioId', operation.scenarioId], ['runId', operation.runId],
-    ['executionKey', operation.executionKey], ['offerId', operation.offerId],
+    ['offerId', operation.offerId],
     ['resource', operation.resource], ['origin', operation.origin],
     ['protocol', operation.protocol], ['requestHash', operation.requestHash],
   ]) {
     required(name!, value!);
   }
-  if (!/^[A-Za-z0-9_.-]{1,96}$/.test(operation.executionKey)) throw new Error('invalid executionKey');
-  assertIdempotencyKey(`${operation.executionKey}.challenge`);
 }
 
-export function operationContext(operation: PayeeOperation, suffix: 'challenge' | 'settle'): OperationContext {
+export function operationContext(operation: PayeeOperation): OperationContext {
   return {
     scenario_id: operation.scenarioId,
     run_id: operation.runId,
-    idempotency_key: `${operation.executionKey}.${suffix}`,
   };
 }

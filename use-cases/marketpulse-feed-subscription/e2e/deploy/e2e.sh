@@ -28,6 +28,8 @@ export E2E_EMQX_DASHBOARD_PASSWORD=${E2E_EMQX_DASHBOARD_PASSWORD:-agentvault-e2e
 export E2E_AGENTVAULT_MQTT_PASSWORD=${E2E_AGENTVAULT_MQTT_PASSWORD:-agentvault-e2e-vault}
 export E2E_QUANTSTREAM_MQTT_PASSWORD=${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
 export E2E_QUANTSTREAM_UI_MQTT_PASSWORD=${E2E_QUANTSTREAM_UI_MQTT_PASSWORD:-agentvault-e2e-approver}
+export E2E_EVM_PAYER_ADDRESS=${E2E_EVM_PAYER_ADDRESS:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}
+export E2E_QUANTSTREAM_SECONDARY_PAYER_PRIVATE_KEY=${E2E_QUANTSTREAM_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
 
 if docker info >/dev/null 2>&1; then
   DOCKER=(docker)
@@ -372,12 +374,11 @@ preflight_mcp() {
   paid_headers=$(mktemp "${TMPDIR:-/tmp}/agentvault-paid-headers.XXXXXX")
   paid_body=$(mktemp "${TMPDIR:-/tmp}/agentvault-paid-body.XXXXXX")
   curl --fail --silent --show-error -H 'content-type: application/json' \
-    -H 'x-run-id: preflight-free' -H 'mcp-execution-key: preflight-free' \
+    -H 'x-run-id: preflight-free' \
     --data '{"jsonrpc":"2.0","id":"free","method":"tools/call","params":{"name":"marketpulse.yesterday_news","arguments":{}}}' \
     "http://127.0.0.1:${E2E_MARKETPULSE_PORT}/mcp" >"$free_body"
   status=$(curl --silent --show-error --output "$paid_body" --dump-header "$paid_headers" --write-out '%{http_code}' \
     -H 'content-type: application/json' -H 'x-run-id: preflight-paid' \
-    -H 'mcp-execution-key: preflight-paid' \
     --data '{"jsonrpc":"2.0","id":"paid","method":"tools/call","params":{"name":"marketpulse.realtime_news","arguments":{}}}' \
     "http://127.0.0.1:${E2E_MARKETPULSE_PORT}/mcp")
   if test "$status" != 402; then
@@ -458,15 +459,40 @@ PY
 }
 
 assert_token_balances() {
-  local payer payee
-  payer=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T anvil cast call \
+  local primary secondary secondary_address payee
+  secondary_address=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T anvil \
+    cast wallet address --private-key "0x${E2E_QUANTSTREAM_SECONDARY_PAYER_PRIVATE_KEY#0x}" | tr -d '\r')
+  primary=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T anvil cast call \
     --rpc-url http://127.0.0.1:8545 0x5fbdb2315678afecb367f032d93f642f64180aa3 \
-    'balanceOf(address)(uint256)' 0x70997970c51812dc3a010c7d01b50e0d17dc79c8 | awk '{print $1}')
+    'balanceOf(address)(uint256)' "$E2E_EVM_PAYER_ADDRESS" | awk '{print $1}')
+  secondary=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T anvil cast call \
+    --rpc-url http://127.0.0.1:8545 0x5fbdb2315678afecb367f032d93f642f64180aa3 \
+    'balanceOf(address)(uint256)' "$secondary_address" | awk '{print $1}')
   payee=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T anvil cast call \
     --rpc-url http://127.0.0.1:8545 0x5fbdb2315678afecb367f032d93f642f64180aa3 \
     'balanceOf(address)(uint256)' 0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc | awk '{print $1}')
-  test "$payer" = 999998000000 || die "unexpected payer TestUSDC balance: $payer"
+  test "$primary" = 999999000000 || die "unexpected primary payer TestUSDC balance: $primary"
+  test "$secondary" = 999999000000 || die "unexpected secondary payer TestUSDC balance: $secondary"
   test "$payee" = 2000000 || die "unexpected payee TestUSDC balance: $payee"
+}
+
+assert_wallet_pool_selection() {
+  local result intent_count wallet_count wallet_ids membership_count
+  result=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T postgres \
+    psql -U agentvault -d agentvault -Atc \
+    "SELECT count(*),count(DISTINCT wallet_id),string_agg(DISTINCT wallet_id, ',' ORDER BY wallet_id) FROM pay_intent WHERE scenario_id='scenario-quantstream-market-ingestion' AND direction='outbound' AND status='settled';" \
+    | tr -d '\r')
+  IFS='|' read -r intent_count wallet_count wallet_ids <<<"$result"
+  test "$intent_count" = 2 || die "wallet-pool proof expected two settled outbound intents: $result"
+  test "$wallet_count" = 2 || die "AgentVault did not distribute two payments across two wallets: $result"
+  test "$wallet_ids" = "wallet-quantstream-primary,wallet-quantstream-secondary" || \
+    die "AgentVault selected unexpected wallet-pool members: $wallet_ids"
+  membership_count=$(compose_full "$E2E_AUDITOR_PAYER_LANGUAGE" "$E2E_AUDITOR_PAYEE_LANGUAGE" exec -T postgres \
+    psql -U agentvault -d agentvault -Atc \
+    "SELECT count(*) FROM pay_policy_wallet WHERE policy_id='policy-quantstream-market-data' AND wallet_id IN ('wallet-quantstream-primary','wallet-quantstream-secondary');" \
+    | tr -d '\r')
+  test "$membership_count" = 2 || die "QuantStream policy is not bound to both wallet-pool members"
+  printf 'AgentVault selected wallet pool members: %s.\n' "$wallet_ids"
 }
 
 wait_and_approve() {
@@ -565,7 +591,7 @@ full_flow() {
   compose_full "$payer_language" "$payee_language" run --rm --no-deps \
     -e QUANTSTREAM_E2E_FAIL_AFTER_SETTLEMENT=once "quantstream-$payer_language"
   # Workflow run ids include wall-clock seconds; force the second logical
-  # operation into a distinct stable idempotency namespace.
+  # operation into a distinct stable run_id namespace.
   sleep 2
   local approval_container="agentvault-e2e-${payer_language}-${payee_language}-approval"
   if "${DOCKER[@]}" ps -a --format '{{.Names}}' | grep -qx "$approval_container"; then
@@ -591,6 +617,7 @@ full_flow() {
     assert_receipt scenario-marketpulse-feed "$intent" inbound
   done
   assert_consumed_approval
+  assert_wallet_pool_selection
   assert_token_balances
   printf '%s\n' "$audit_json"
   printf 'Full payer=%s/payee=%s x402 E2E passed: automatic payment + approved overage, receipts, ledgers, and delivery.\n' \

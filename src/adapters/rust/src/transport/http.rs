@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, error, fmt, future::Future, sync::Arc, time::Du
 use reqwest::{redirect::Policy as RedirectPolicy, Client, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{Error, IdempotencyKey, Result as SdkResult};
+use crate::{Error, Result as SdkResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {
@@ -150,19 +150,11 @@ impl<T: VaultTransport> ApiClient<T> {
         .await
     }
 
-    pub(crate) async fn post<B: Serialize, R: DeserializeOwned>(
-        &self,
-        path: String,
-        body: &B,
-        idempotency_key: Option<&IdempotencyKey>,
-    ) -> SdkResult<R> {
-        let mut headers = BTreeMap::from([
+    pub(crate) async fn post<B: Serialize, R: DeserializeOwned>(&self, path: String, body: &B) -> SdkResult<R> {
+        let headers = BTreeMap::from([
             ("accept".to_owned(), "application/json".to_owned()),
             ("content-type".to_owned(), "application/json".to_owned()),
         ]);
-        if let Some(key) = idempotency_key {
-            headers.insert("idempotency-key".to_owned(), key.as_str().to_owned());
-        }
         let body = serde_json::to_vec(body).map_err(|failure| Error::Encode(failure.to_string()))?;
         self.execute(TransportRequest {
             method: HttpMethod::Post,

@@ -421,7 +421,9 @@ fn validate_authorization(authorization: &OutboundSigningAuthorization, now: i64
         .validate()
         .map_err(|field| Error::Storage(format!("invalid signing policy {field}")))?;
     if authorization.wallet.wallet.id != wallet_id
-        || !authorization.wallet.signing_ready()
+        || !authorization
+            .wallet
+            .signing_ready_for_payment_network(&intent.asset.network)
         || !matches!(authorization.wallet.custody, WalletCustody::Local)
         || authorization.wallet.budget_unit.as_ref() != Some(&authorization.policy.budget_unit)
         || authorization
@@ -552,10 +554,11 @@ fn signed_message(
         event_type: "payment_signed".to_owned(),
         destination: format!("client:{}.payments", authorization.identity.client.id),
         correlation_id: intent.id.clone(),
-        idempotency_key: format!("payment-signed:{}", intent.id),
+        run_id: intent.run_id.clone(),
         payload: json!({
             "intent_id": intent.id,
             "scenario_id": intent.scenario_id,
+            "run_id": intent.run_id,
             "credential_hash": credential.credential_hash,
         }),
         status: OutboxStatus::Pending,

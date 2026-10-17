@@ -51,25 +51,19 @@ func (m *PayerMiddleware) Authorize(ctx context.Context, request model.PayerHTTP
 	if err := model.ValidateURLOrigin(request.URL, request.Origin); err != nil {
 		return nil, err
 	}
-	if err := operation.IdempotencyKey.Validate(); err != nil || operation.RunID == "" {
+	if err := model.ValidateIdentifier("run_id", operation.RunID); err != nil {
 		return nil, errors.New("paid request has an invalid workflow context")
 	}
 	if int64(len(response.Body)) > m.config.MaxChallengeBytes || !utf8.Valid(response.Body) {
 		return nil, errors.New("payment challenge is oversized or not UTF-8")
 	}
 	protocolHint := header(response.Headers, "payment-protocol")
-	if protocolHint != "" && protocolHint != m.config.Protocol {
-		return nil, errors.New("protocol must match the 402 protocol hint")
-	}
-	contextValue, err := model.NewOperationContext(m.config.ScenarioID, operation.IdempotencyKey)
+	contextValue, err := model.NewOperationContext(m.config.ScenarioID, operation.RunID)
 	if err != nil {
 		return nil, err
 	}
-	contextValue.RunID = operation.RunID
 	requestValue := model.AuthorizePaymentRequest{
 		OperationContext: contextValue,
-		WalletID:         m.config.WalletID, Protocol: m.config.Protocol, Asset: m.config.Asset,
-		Amount: m.config.Amount, Recipient: m.config.Recipient, Resource: request.URL,
 		Challenge: model.PaymentRequired{
 			ProtocolHint: protocolHint, Origin: request.Origin, Resource: request.URL,
 			ContentType: valueOr(header(response.Headers, "content-type"), "application/json"),
@@ -91,12 +85,10 @@ func (m *PayerMiddleware) Authorize(ctx context.Context, request model.PayerHTTP
 		credential := *authorization.Credential
 		intent := authorization.Intent
 		if intent.ID == "" || intent.ScenarioID != m.config.ScenarioID || intent.RunID != operation.RunID ||
-			intent.WalletID == nil || *intent.WalletID != m.config.WalletID ||
-			intent.Direction != model.PaymentDirectionOutbound || intent.Protocol != m.config.Protocol ||
-			intent.Protocol != credential.Protocol || intent.Asset != m.config.Asset ||
-			intent.Amount != m.config.Amount || intent.Recipient != m.config.Recipient ||
-			intent.Resource != request.URL || intent.ChallengeHash != credential.ChallengeHash ||
-			intent.IdempotencyKey != string(operation.IdempotencyKey) {
+			intent.WalletID == nil || *intent.WalletID == "" || intent.PolicyID == "" ||
+			intent.Direction != model.PaymentDirectionOutbound ||
+			(protocolHint != "" && intent.Protocol != protocolHint) || intent.Protocol != credential.Protocol ||
+			intent.Resource != request.URL || intent.ChallengeHash != credential.ChallengeHash {
 			return nil, errors.New("credential, outbound intent, and paid resource are not bound to the same payment")
 		}
 		return &model.AuthorizedPayment{Intent: intent, Credential: credential}, nil
@@ -116,11 +108,10 @@ func (m *PayerMiddleware) Report(ctx context.Context, operation model.PayerReque
 		}
 		return nil
 	}
-	operationContext, err := model.NewOperationContext(m.config.ScenarioID, operation.IdempotencyKey)
+	operationContext, err := model.NewOperationContext(m.config.ScenarioID, operation.RunID)
 	if err != nil {
 		return err
 	}
-	operationContext.RunID = operation.RunID
 	_, err = m.reportOutboundResponse(ctx, payment.Intent.ID, model.ReportOutboundResponseRequest{
 		OperationContext: operationContext,
 		PaymentResponse:  value,
@@ -200,7 +191,7 @@ func (m *PayerMiddleware) authorizePayment(ctx context.Context, request model.Au
 		return nil, err
 	}
 	var result model.AuthorizePaymentResponse
-	if err := m.api.Post(ctx, "/api/v1/payments/authorize", request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := m.api.Post(ctx, "/api/v1/payments/authorize", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -227,7 +218,7 @@ func (m *PayerMiddleware) authorizeUntilTerminal(ctx context.Context, request mo
 		if expectedIntent == "" {
 			expectedIntent = intentID
 		} else if expectedIntent != intentID {
-			return nil, errors.New("idempotent authorization changed payment intent")
+			return nil, errors.New("replayed run changed payment intent")
 		}
 		if response.Authorization.Outcome != model.AuthorizationOutcomeRequiresApproval {
 			return response, nil
@@ -251,7 +242,7 @@ func (m *PayerMiddleware) reportOutboundResponse(ctx context.Context, intentID s
 	}
 	path := "/api/v1/payments/" + url.PathEscape(intentID) + "/outbound-response"
 	var result model.ReportOutboundResponseResponse
-	if err := m.api.Post(ctx, path, request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := m.api.Post(ctx, path, request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

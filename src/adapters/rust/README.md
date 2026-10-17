@@ -17,7 +17,7 @@ let vault = AgentVault::new(transport);
 let paid_http = vault.payer(payer_config)?.standard().client()?;
 let response = paid_http
     .post(marketpulse_url)
-    .with_payment(PayerRequestContext::for_operation(run_id, "realtime-news")?)
+    .with_payment(PayerRequestContext::new(run_id)?)
     .send()
     .await?;
 ```
@@ -37,7 +37,7 @@ let app = Router::new().route("/mcp", post(mcp)).layer(layer);
 
 Available Vault transports are bounded HTTP, gRPC, and client-scoped MQTT.
 Remote gRPC and MQTT require TLS; redirects are never followed with payment
-credentials. Stable idempotency keys are created once per logical operation
+credentials. A stable `run_id` is created once per logical operation
 and reused across approval waits, process retries, and delivery retries.
 
 Run `cargo test --locked` from this directory.

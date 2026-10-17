@@ -27,12 +27,13 @@ middleware or the single facade.
 Business applications choose one `VaultTransport` at startup:
 
 - gRPC for synchronous service-to-service calls (TLS required off loopback);
-- MQTT for durable client-scoped commands and approval events;
+- MQTT for durable client-scoped commands and correlated results;
 - HTTP when AgentVault is reached through the AuthGuard/Envoy edge.
 
 With HTTP or gRPC, one transport instance can back both role middlewares and
-the approval methods on `AgentVault`. MQTT exposes the payer/payee command flow
-plus approval events, but not the administrative approval query/decision API.
+the approval methods on `AgentVault`. MQTT exposes only the payer/payee command
+flow and correlated results to workload credentials; approval events and the
+administrative query/decision API require a separate Admin identity.
 No SDK accepts
 a private key, arbitrary digest, `client_id`, or caller principal. Switching
 transport does not change middleware configuration or application handlers.

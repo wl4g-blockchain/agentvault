@@ -12,28 +12,15 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayerRequestContext {
     pub run_id: String,
-    pub idempotency_key: crate::IdempotencyKey,
 }
 
 impl PayerRequestContext {
-    pub fn for_operation(run_id: impl Into<String>, operation: &str) -> Result<Self> {
-        let run_id = run_id.into();
-        let idempotency_key = crate::IdempotencyKey::for_operation(&run_id, operation)?;
-        Ok(Self {
-            run_id,
-            idempotency_key,
-        })
-    }
-
-    pub fn new(run_id: impl Into<String>, idempotency_key: crate::IdempotencyKey) -> Result<Self> {
+    pub fn new(run_id: impl Into<String>) -> Result<Self> {
         let run_id = run_id.into();
         if run_id.trim().is_empty() {
             return Err(Error::InvalidArgument("run_id cannot be blank".to_owned()));
         }
-        Ok(Self {
-            run_id,
-            idempotency_key,
-        })
+        Ok(Self { run_id })
     }
 }
 
@@ -55,46 +42,18 @@ pub struct PaymentRequired {
 pub struct AuthorizePaymentRequest {
     #[serde(flatten)]
     pub context: OperationContext,
-    pub wallet_id: String,
-    pub protocol: String,
-    pub asset: AssetIdentity,
-    pub amount: String,
-    pub recipient: String,
-    pub resource: String,
     pub challenge: PaymentRequired,
 }
 
 impl AuthorizePaymentRequest {
     pub(crate) fn validate(&self) -> Result<()> {
-        self.context.validate_with_run_id()?;
+        self.context.validate()?;
         for (name, value) in [
-            ("wallet_id", self.wallet_id.as_str()),
-            ("protocol", self.protocol.as_str()),
-            ("asset.network", self.asset.network.as_str()),
-            ("asset.asset", self.asset.asset.as_str()),
-            ("amount", self.amount.as_str()),
-            ("recipient", self.recipient.as_str()),
-            ("resource", self.resource.as_str()),
             ("challenge.origin", self.challenge.origin.as_str()),
             ("challenge.resource", self.challenge.resource.as_str()),
             ("challenge.content_type", self.challenge.content_type.as_str()),
         ] {
             validate_required(name, value)?;
-        }
-        if self.resource != self.challenge.resource {
-            return Err(Error::InvalidArgument(
-                "resource must exactly match the challenge resource".to_owned(),
-            ));
-        }
-        if self
-            .challenge
-            .protocol_hint
-            .as_ref()
-            .is_some_and(|protocol| protocol != &self.protocol)
-        {
-            return Err(Error::InvalidArgument(
-                "protocol must match the 402 protocol hint".to_owned(),
-            ));
         }
         if self.challenge.origin != self.challenge.origin.trim() {
             return Err(Error::InvalidArgument(
@@ -153,7 +112,7 @@ pub struct ReportOutboundResponseRequest {
 
 impl ReportOutboundResponseRequest {
     pub(crate) fn validate(&self) -> Result<()> {
-        self.context.validate_with_run_id()?;
+        self.context.validate()?;
         if self.payment_response.is_empty()
             || self.payment_response.len() > 16 * 1024
             || !self.payment_response.bytes().all(|byte| byte.is_ascii_graphic())

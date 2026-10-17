@@ -191,10 +191,7 @@ impl X402FacilitatorProvider {
             payment_payload: payment.payment_payload.clone(),
             payment_requirements: payment.payment_requirements.clone(),
         };
-        let response = self
-            .transport
-            .post_json(endpoint, &request.idempotency_key, &wire)
-            .await?;
+        let response = self.transport.post_json(endpoint, &request.run_id, &wire).await?;
         if !accepted_facilitator_status(response.status) {
             let reason = safe_facilitator_reason(&response.body)
                 .map(|reason| format!(": {reason}"))

@@ -61,8 +61,7 @@ pub struct FeedSQLiteStorage {
 #[serde(rename_all = "camelCase")]
 pub struct StoredSettlement {
     pub intent_id: String,
-    pub execution_key: String,
-    pub vault_execution_key: String,
+    pub run_id: String,
     pub receipt: PaymentReceipt,
 }
 
@@ -75,13 +74,15 @@ pub enum DeliveryState {
 
 impl StoredSettlement {
     #[must_use]
-    pub fn from_payment(execution_key: &str, payment: &SettledIncomingPayment) -> Self {
-        Self {
-            intent_id: payment.intent.id.clone(),
-            execution_key: execution_key.to_owned(),
-            vault_execution_key: payment.execution_key.clone(),
-            receipt: payment.receipt.clone(),
+    pub fn from_payment(run_id: &str, payment: &SettledIncomingPayment) -> Result<Self, String> {
+        if payment.intent.run_id != run_id {
+            return Err("settlement is not bound to the workflow run".to_owned());
         }
+        Ok(Self {
+            intent_id: payment.intent.id.clone(),
+            run_id: run_id.to_owned(),
+            receipt: payment.receipt.clone(),
+        })
     }
 }
 
@@ -108,7 +109,7 @@ impl FeedSQLiteStorage {
                    sentiment_bps INTEGER NOT NULL,access_tier TEXT NOT NULL CHECK(access_tier IN ('yesterday','realtime'))
                  );
                  CREATE TABLE IF NOT EXISTS mcp_delivery(
-                   execution_key TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT,settlement_json TEXT NOT NULL,
+                   run_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT,settlement_json TEXT NOT NULL,
                    response_json TEXT,status TEXT NOT NULL CHECK(status IN ('settled','delivered')),
                    failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL
                  );",
@@ -169,21 +170,21 @@ impl FeedSQLiteStorage {
             .map_err(|error| format!("decode feed: {error}"))
     }
 
-    /// Loads a delivery while enforcing the execution-key/request-hash binding.
+    /// Loads a delivery while enforcing the run/request-hash binding.
     ///
     /// # Errors
     ///
     /// Returns an error for a `SQLite` failure, a conflicting request hash, or
     /// malformed durable settlement state.
-    pub fn delivery(&self, execution_key: &str, request_hash: &str) -> Result<DeliveryState, String> {
+    pub fn delivery(&self, run_id: &str, request_hash: &str) -> Result<DeliveryState, String> {
         let connection = self
             .connection
             .lock()
             .map_err(|_| "MarketPulse database lock is poisoned".to_owned())?;
         let row = connection
             .query_row(
-                "SELECT request_hash,settlement_json,response_json,status FROM mcp_delivery WHERE execution_key=?1",
-                [execution_key],
+                "SELECT request_hash,settlement_json,response_json,status FROM mcp_delivery WHERE run_id=?1",
+                [run_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -199,7 +200,7 @@ impl FeedSQLiteStorage {
             return Ok(DeliveryState::New);
         };
         if stored_hash != request_hash {
-            return Err("MCP execution key was reused for different request content".to_owned());
+            return Err("MCP run_id was reused for different request content".to_owned());
         }
         let settlement =
             serde_json::from_str(&settlement).map_err(|error| format!("decode durable settlement: {error}"))?;
@@ -210,15 +211,15 @@ impl FeedSQLiteStorage {
         }
     }
 
-    /// Persists the first confirmed settlement for an execution key.
+    /// Persists the first confirmed settlement for a run.
     ///
     /// # Errors
     ///
-    /// Returns an error for a `SQLite` failure or if the execution key is already
+    /// Returns an error for a `SQLite` failure or if the run ID is already
     /// bound to different request or settlement evidence.
     pub fn record_settled(
         &self,
-        execution_key: &str,
+        run_id: &str,
         request_hash: &str,
         settlement: &StoredSettlement,
     ) -> Result<(), String> {
@@ -232,16 +233,16 @@ impl FeedSQLiteStorage {
             .map_err(|error| format!("begin delivery transaction: {error}"))?;
         let inserted = transaction
             .execute(
-                "INSERT INTO mcp_delivery(execution_key,request_hash,intent_id,settlement_json,response_json,status,updated_at)
-                 VALUES(?1,?2,?3,?4,NULL,'settled',?5) ON CONFLICT(execution_key) DO NOTHING",
-                params![execution_key, request_hash, settlement.intent_id, encoded, unix_time()],
+                "INSERT INTO mcp_delivery(run_id,request_hash,intent_id,settlement_json,response_json,status,updated_at)
+                 VALUES(?1,?2,?3,?4,NULL,'settled',?5) ON CONFLICT(run_id) DO NOTHING",
+                params![run_id, request_hash, settlement.intent_id, encoded, unix_time()],
             )
             .map_err(|error| format!("record settled delivery: {error}"))?;
         if inserted == 0 {
             let existing = transaction
                 .query_row(
-                    "SELECT request_hash,intent_id,settlement_json FROM mcp_delivery WHERE execution_key=?1",
-                    [execution_key],
+                    "SELECT request_hash,intent_id,settlement_json FROM mcp_delivery WHERE run_id=?1",
+                    [run_id],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
@@ -252,7 +253,7 @@ impl FeedSQLiteStorage {
                 )
                 .map_err(|error| format!("read settled replay: {error}"))?;
             if existing != (request_hash.to_owned(), settlement.intent_id.clone(), encoded) {
-                return Err("MCP execution key is already bound to another settlement".to_owned());
+                return Err("MCP run_id is already bound to another settlement".to_owned());
             }
         }
         transaction
@@ -265,7 +266,7 @@ impl FeedSQLiteStorage {
     /// # Errors
     ///
     /// Returns an error for a `SQLite` failure or when no matching settled row exists.
-    pub fn record_delivered(&self, execution_key: &str, request_hash: &str, response: &str) -> Result<(), String> {
+    pub fn record_delivered(&self, run_id: &str, request_hash: &str, response: &str) -> Result<(), String> {
         let connection = self
             .connection
             .lock()
@@ -273,8 +274,8 @@ impl FeedSQLiteStorage {
         let changed = connection
             .execute(
                 "UPDATE mcp_delivery SET response_json=?1,status='delivered',updated_at=?2
-                 WHERE execution_key=?3 AND request_hash=?4 AND status='settled'",
-                params![response, unix_time(), execution_key, request_hash],
+                 WHERE run_id=?3 AND request_hash=?4 AND status='settled'",
+                params![response, unix_time(), run_id, request_hash],
             )
             .map_err(|error| format!("complete MCP delivery: {error}"))?;
         if changed != 1 {
@@ -288,7 +289,7 @@ impl FeedSQLiteStorage {
     /// # Errors
     ///
     /// Returns an error for a `SQLite` failure or if the injection was already consumed.
-    pub fn record_failure_injection(&self, execution_key: &str, request_hash: &str) -> Result<(), String> {
+    pub fn record_failure_injection(&self, run_id: &str, request_hash: &str) -> Result<(), String> {
         let connection = self
             .connection
             .lock()
@@ -296,8 +297,8 @@ impl FeedSQLiteStorage {
         let changed = connection
             .execute(
                 "UPDATE mcp_delivery SET failure_injections=1,updated_at=?1
-                 WHERE execution_key=?2 AND request_hash=?3 AND status='settled' AND failure_injections=0",
-                params![unix_time(), execution_key, request_hash],
+                 WHERE run_id=?2 AND request_hash=?3 AND status='settled' AND failure_injections=0",
+                params![unix_time(), run_id, request_hash],
             )
             .map_err(|error| format!("record failure injection: {error}"))?;
         if changed != 1 {

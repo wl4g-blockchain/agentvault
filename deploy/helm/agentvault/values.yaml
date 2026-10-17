@@ -65,6 +65,12 @@ secrets:
     annotations: {}
 
 runtime:
+  authguard:
+    scopeResolver:
+      enabled: true
+      # Empty derives http://<release>-authguard-middleware:8081.
+      target: ""
+      timeout: 2s
   server:
     serviceName: agentvault
     shutdownTimeout: 15s
@@ -140,7 +146,6 @@ runtime:
       minimumNativeBalance: "1000000000000000"
       confirmationDepth: 1
   approval:
-    enabled: true
     requestTtl: 15m
     grantTtl: 5m
     expiryInterval: 15s
@@ -156,6 +161,8 @@ runtime:
     maxBackoff: 5m
 
 management:
+  health:
+    probeTimeout: 1s
   otel:
     enabled: false
     endpoint: http://otel-collector.observability.svc:4317
@@ -169,7 +176,7 @@ networkPolicy:
   envoyNamespaceSelector: {}
   envoyPodSelector: { app.kubernetes.io/name: envoy }
   monitoringNamespaceSelector: {}
-  monitoringPodSelector: {}
+  monitoringPodSelector: { app.kubernetes.io/name: prometheus }
 
 # Default-on umbrella dependency, matching Flowgent's integration pattern.
 # AuthGuard owns authentication/authorization; AgentVault is only a protected

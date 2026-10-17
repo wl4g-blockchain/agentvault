@@ -8,14 +8,12 @@ import io.agentvault.sdk.model.Base.ApiException;
 import io.agentvault.sdk.model.Base.VaultTransport;
 import java.security.SecureRandom;
 import java.util.Base64;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.IMqttToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -36,23 +34,11 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
 
     private final MqttConfig config;
     private final String prefix;
-    private final Consumer<JsonNode> approvalHandler;
     private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
-    private final Map<String, JsonNode> completed = java.util.Collections.synchronizedMap(
-            new LinkedHashMap<>(256, 0.75f, true) {
-                @Override protected boolean removeEldestEntry(Map.Entry<String, JsonNode> eldest) {
-                    return size() > 256;
-                }
-            });
     private MqttClient client;
 
     public MqttVaultTransport(MqttConfig config) {
-        this(config, ignored -> {});
-    }
-
-    public MqttVaultTransport(MqttConfig config, Consumer<JsonNode> approvalHandler) {
         this.config = java.util.Objects.requireNonNull(config, "config");
-        this.approvalHandler = java.util.Objects.requireNonNull(approvalHandler, "approvalHandler");
         this.prefix = "agentvault/v1/clients/" + config.vaultClientId();
     }
 
@@ -80,11 +66,18 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
             options.setUserName(config.username());
             options.setPassword(config.password().toCharArray());
             client.connect(options);
-            client.subscribe(
-                    new String[]{prefix + "/results/+", prefix + "/approvals/required"},
-                    new int[]{1, 1});
+            IMqttToken subscription = client.subscribeWithResponse(
+                    new String[]{prefix + "/results/+"}, new int[]{1});
+            subscription.waitForCompletion(config.timeout().toMillis());
+            if (!subscriptionGranted(subscription.getGrantedQos(), 1)) {
+                throw new IllegalStateException("AgentVault MQTT subscriptions were rejected or downgraded");
+            }
         } catch (MqttException error) {
+            close();
             throw new IllegalStateException("MQTT connect/subscribe failed: " + error.getReasonCode(), error);
+        } catch (RuntimeException error) {
+            close();
+            throw error;
         }
     }
 
@@ -92,7 +85,7 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
         throw new IllegalArgumentException("MQTT transport does not support this GET operation");
     }
 
-    @Override public <T> T post(String path, Object body, String idempotencyKey, Class<T> type) {
+    @Override public <T> T post(String path, Object body, Class<T> type) {
         Operation operation = operation(path);
         if (body == null) throw new IllegalArgumentException("MQTT payment commands require a request body");
         if (client == null || !client.isConnected()) {
@@ -110,7 +103,6 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
             ObjectNode headers = JSON.createObjectNode();
             headers.put("accept", "application/json");
             headers.put("content-type", "application/json");
-            if (idempotencyKey != null) headers.put("idempotency-key", idempotencyKey);
             ObjectNode request = JSON.createObjectNode();
             request.put("method", "POST");
             request.put("path", path);
@@ -167,17 +159,6 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
         if (message.getPayload().length > config.maxResponseBytes()) return;
         try {
             JsonNode value = JSON.readTree(message.getPayload());
-            if (topic.equals(prefix + "/approvals/required")) {
-                if (value.path("version").asInt() == 1
-                        && "payment.approval_required".equals(value.path("type").asText())) {
-                    try {
-                        approvalHandler.accept(value);
-                    } catch (RuntimeException ignored) {
-                        // Application callbacks cannot break the transport consumer.
-                    }
-                }
-                return;
-            }
             String correlation = value.path("correlationId").asText("");
             Pending waiting = pending.get(correlation);
             int status = value.path("status").asInt(-1);
@@ -194,7 +175,6 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
                     || !headersAreStrings(value.path("headers"))) {
                 return;
             }
-            completed.putIfAbsent(correlation, value);
             waiting.future().complete(value);
         } catch (Exception ignored) {
             // Malformed broker input fails closed.
@@ -204,6 +184,14 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
     private static boolean headersAreStrings(JsonNode headers) {
         for (var property : headers.properties()) {
             if (!property.getValue().isTextual()) return false;
+        }
+        return true;
+    }
+
+    static boolean subscriptionGranted(int[] grants, int expectedCount) {
+        if (grants == null || grants.length != expectedCount) return false;
+        for (int qos : grants) {
+            if (qos != 1) return false;
         }
         return true;
     }

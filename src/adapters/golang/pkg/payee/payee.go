@@ -103,7 +103,6 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	}
 	payment, err := middleware.settlePayment(ctx, model.SettlePaymentRequest{
 		OperationContext: settlementContext,
-		ExecutionKey:     operation.ExecutionKey,
 		IntentID:         verification.Intent.ID,
 		VerificationRef:  verification.VerificationRef,
 	})
@@ -159,7 +158,7 @@ func validateSettlementBinding(operation model.PayeeOperation, verification *mod
 		payment.Receipt.Asset != payment.Intent.Asset || payment.Receipt.Recipient != payment.Intent.Recipient ||
 		payment.Receipt.RequestedAmount != payment.Intent.Amount ||
 		payment.Receipt.SettledAmount != payment.Intent.SettledAmount ||
-		payment.Receipt.Status != model.PaymentStatusSettled || payment.ExecutionKey != operation.ExecutionKey {
+		payment.Receipt.Status != model.PaymentStatusSettled {
 		return fmt.Errorf("invalid AgentVault settlement response")
 	}
 	return nil
@@ -173,14 +172,14 @@ func (middleware *PayeeMiddleware) ResolveOffer(ctx context.Context, request mod
 		return nil, err
 	}
 	var result model.PaymentOffer
-	if err := middleware.api.Post(ctx, "/api/v1/offers/resolve", request, &result, ""); err != nil {
+	if err := middleware.api.Post(ctx, "/api/v1/offers/resolve", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
 func (middleware *PayeeMiddleware) createChallenge(ctx context.Context, request model.CreateChallengeRequest) (*model.PaymentChallenge, error) {
-	if err := request.OperationContext.ValidateWithRunID(); err != nil {
+	if err := request.OperationContext.Validate(); err != nil {
 		return nil, err
 	}
 	for name, value := range map[string]string{
@@ -192,14 +191,14 @@ func (middleware *PayeeMiddleware) createChallenge(ctx context.Context, request 
 		}
 	}
 	var result model.PaymentChallenge
-	if err := middleware.api.Post(ctx, "/api/v1/payee/challenges", request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := middleware.api.Post(ctx, "/api/v1/payee/challenges", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
 func (middleware *PayeeMiddleware) verifyPayment(ctx context.Context, request model.VerifyPaymentRequest) (*model.PaymentVerification, error) {
-	if err := request.OperationContext.ValidateWithRunID(); err != nil {
+	if err := request.OperationContext.Validate(); err != nil {
 		return nil, err
 	}
 	for name, value := range map[string]string{
@@ -216,14 +215,14 @@ func (middleware *PayeeMiddleware) verifyPayment(ctx context.Context, request mo
 		return nil, errors.New("credential challenge_hash does not match the request")
 	}
 	var result model.PaymentVerification
-	if err := middleware.api.Post(ctx, "/api/v1/payee/verify", request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := middleware.api.Post(ctx, "/api/v1/payee/verify", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
 func (middleware *PayeeMiddleware) settlePayment(ctx context.Context, request model.SettlePaymentRequest) (*model.SettledIncomingPayment, error) {
-	if err := request.OperationContext.ValidateWithRunID(); err != nil {
+	if err := request.OperationContext.Validate(); err != nil {
 		return nil, err
 	}
 	if err := model.Required("intent_id", request.IntentID); err != nil {
@@ -233,7 +232,7 @@ func (middleware *PayeeMiddleware) settlePayment(ctx context.Context, request mo
 		return nil, err
 	}
 	var result model.SettledIncomingPayment
-	if err := middleware.api.Post(ctx, "/api/v1/payee/settle", request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := middleware.api.Post(ctx, "/api/v1/payee/settle", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

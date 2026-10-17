@@ -21,7 +21,6 @@ from .base import (
 from .payee import (
     CreateChallengeRequest,
     HttpProtectionRequest,
-    IncomingPayment,
     McpProtectionRequest,
     PayeeOperation,
     PaymentOffer,

@@ -10,6 +10,11 @@ pub mod storage;
 pub mod utils;
 
 #[allow(clippy::default_trait_access, clippy::doc_markdown)]
+pub(crate) mod authguard_access_wire {
+    tonic::include_proto!("authguard.access.v1");
+}
+
+#[allow(clippy::default_trait_access, clippy::doc_markdown)]
 pub(crate) mod grpc_wire {
     tonic::include_proto!("agentvault.transport.v1");
 }

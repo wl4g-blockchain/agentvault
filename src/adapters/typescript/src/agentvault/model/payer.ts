@@ -1,5 +1,5 @@
 import {
-  assertIdempotencyKey, PaymentCredential, required, type AssetIdentity, type OperationContext,
+  assertRunId, PaymentCredential, required, type AssetIdentity, type OperationContext,
   type PaymentCredentialWire, type PaymentIntent,
 } from './base.js';
 import type { ApprovalRequest } from './approval.js';
@@ -17,12 +17,6 @@ export interface PaymentRequired {
 }
 
 export interface AuthorizePaymentRequest extends OperationContext {
-  wallet_id: string;
-  protocol: string;
-  asset: AssetIdentity;
-  amount: string;
-  recipient: string;
-  resource: string;
   challenge: PaymentRequired;
 }
 
@@ -50,20 +44,13 @@ export interface ReportOutboundResponseResponse {
 }
 
 export class PayerRequestContext {
-  constructor(public readonly runId: string, public readonly idempotencyKey: string) {
+  constructor(public readonly runId: string) {
     if (!runId.trim()) throw new Error('runId cannot be blank');
-    assertIdempotencyKey(idempotencyKey);
-  }
-
-  static forOperation(runId: string, operation: string): PayerRequestContext {
-    required('runId', runId);
-    required('operation', operation);
-    if (runId.includes(':') || operation.includes(':')) throw new Error("runId and operation cannot contain ':'");
-    return new PayerRequestContext(runId, `${runId}:${operation}`);
+    assertRunId(runId);
   }
 
   operationContext(scenarioId: string): OperationContext {
-    return { scenario_id: scenarioId, run_id: this.runId, idempotency_key: this.idempotencyKey };
+    return { scenario_id: scenarioId, run_id: this.runId };
   }
 }
 

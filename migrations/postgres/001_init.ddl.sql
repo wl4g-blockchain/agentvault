@@ -454,7 +454,6 @@ CREATE TABLE pay_intent (
     resource            TEXT NOT NULL CHECK (length(trim(resource)) > 0),
     challenge_hash      TEXT CHECK (challenge_hash IS NULL OR length(trim(challenge_hash)) > 0),
     credential_hash     TEXT CHECK (credential_hash IS NULL OR length(trim(credential_hash)) > 0),
-    idempotency_key     TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
     request_hash        TEXT NOT NULL CHECK (length(trim(request_hash)) > 0),
     status              TEXT NOT NULL CHECK (status IN (
                             'created', 'pending_approval', 'authorized', 'signed',
@@ -475,9 +474,9 @@ CREATE TABLE pay_intent (
     updated_at          BIGINT NOT NULL CHECK (updated_at >= created_at),
     expires_at          BIGINT CHECK (expires_at IS NULL OR expires_at >= created_at),
     settled_at          BIGINT,
-    UNIQUE (scenario_id, idempotency_key),
+    UNIQUE (scenario_id, run_id),
     UNIQUE (id, scenario_id, wallet_id),
-    UNIQUE (id, request_hash),
+    UNIQUE (id, run_id, request_hash),
     FOREIGN KEY (policy_id, scenario_id)
         REFERENCES pay_policy(id, scenario_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     FOREIGN KEY (policy_id, wallet_id)
@@ -578,13 +577,13 @@ BEGIN
         OLD.scenario_id, OLD.run_id, OLD.wallet_id, OLD.policy_id, OLD.offer_id,
         OLD.direction, OLD.protocol, OLD.network, OLD.asset, OLD.token_contract,
         OLD.asset_decimals, OLD.recipient, OLD.amount, OLD.resource,
-        OLD.challenge_hash, OLD.idempotency_key, OLD.request_hash,
+        OLD.challenge_hash, OLD.request_hash,
         OLD.created_at, OLD.expires_at
     ) IS DISTINCT FROM ROW(
         NEW.scenario_id, NEW.run_id, NEW.wallet_id, NEW.policy_id, NEW.offer_id,
         NEW.direction, NEW.protocol, NEW.network, NEW.asset, NEW.token_contract,
         NEW.asset_decimals, NEW.recipient, NEW.amount, NEW.resource,
-        NEW.challenge_hash, NEW.idempotency_key, NEW.request_hash,
+        NEW.challenge_hash, NEW.request_hash,
         NEW.created_at, NEW.expires_at
     ) THEN
         RAISE EXCEPTION 'payment intent identity is immutable'
@@ -608,8 +607,6 @@ CREATE INDEX ix_pay_intent_scenario_direction_time
     ON pay_intent(scenario_id, direction, created_at DESC);
 CREATE INDEX ix_pay_intent_wallet_direction_time
     ON pay_intent(wallet_id, direction, created_at DESC);
-CREATE INDEX ix_pay_intent_run
-    ON pay_intent(scenario_id, run_id, created_at DESC);
 -- Pending reservations remain authoritative across UTC-day boundaries until
 -- released or atomically consumed with ledger posting. No created_at cutoff,
 -- network, or token_contract participates in these indexes.
@@ -650,7 +647,8 @@ CREATE INDEX ix_pay_event_intent_time
 
 CREATE TABLE pay_approval (
     id                  TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
-    intent_id           TEXT NOT NULL REFERENCES pay_intent(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    intent_id           TEXT NOT NULL,
+    run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     requested_amount    pay_uint128 NOT NULL CHECK (requested_amount > 0),
     approved_amount     pay_uint128,
     requested_by        TEXT NOT NULL CHECK (length(trim(requested_by)) > 0),
@@ -664,8 +662,8 @@ CREATE TABLE pay_approval (
     consumed_at         BIGINT,
     created_at          BIGINT NOT NULL CHECK (created_at >= 0),
     approved_at         BIGINT,
-    FOREIGN KEY (intent_id, intent_hash)
-        REFERENCES pay_intent(id, request_hash) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    FOREIGN KEY (intent_id, run_id, intent_hash)
+        REFERENCES pay_intent(id, run_id, request_hash) ON DELETE RESTRICT ON UPDATE RESTRICT,
     CHECK (approved_amount IS NULL OR approved_amount <= requested_amount),
     CHECK (expires_at > created_at),
     CHECK (
@@ -839,7 +837,7 @@ CREATE TABLE pay_outbox (
     event_type          TEXT NOT NULL CHECK (length(trim(event_type)) > 0),
     destination         TEXT NOT NULL CHECK (length(trim(destination)) > 0),
     correlation_id      TEXT NOT NULL CHECK (length(trim(correlation_id)) > 0),
-    idempotency_key     TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
+    run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     payload             JSONB NOT NULL,
     status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'dead_letter')),
     attempt_count       BIGINT NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 4294967295),
@@ -849,7 +847,7 @@ CREATE TABLE pay_outbox (
     last_error          TEXT,
     created_at          BIGINT NOT NULL CHECK (created_at >= 0),
     delivered_at        BIGINT,
-    UNIQUE (destination, idempotency_key),
+    UNIQUE (destination, event_type, run_id),
     CHECK (
         (lease_owner IS NULL AND lease_expires_at IS NULL)
         OR (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)

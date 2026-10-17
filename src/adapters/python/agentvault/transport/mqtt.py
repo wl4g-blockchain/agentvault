@@ -9,7 +9,7 @@ import ssl
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 import paho.mqtt.client as mqtt
 
@@ -24,12 +24,11 @@ _OUTBOUND_RESPONSE_PATH = re.compile(r"^/api/v1/payments/([^/?#]+)/outbound-resp
 class MqttVaultTransport:
     """Authenticated HTTP-over-MQTT transport for payer and payee flows."""
 
-    def __init__(self, config: MqttConfig,
-                 approval_handler: Callable[[Mapping[str, Any]], None] | None = None) -> None:
+    def __init__(self, config: MqttConfig) -> None:
         self.config = config
-        self._approval_handler = approval_handler
         self._condition = threading.Condition()
         self._connected = False
+        self._connection_error: RuntimeError | None = None
         self._responses: OrderedDict[str, Mapping[str, Any]] = OrderedDict()
         self._expected_types: dict[str, str] = {}
         connection_id = f"{config.connection_prefix}-{secrets.token_hex(6)}"
@@ -39,6 +38,7 @@ class MqttVaultTransport:
         if config.tls:
             self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
         self._client.on_connect = self._on_connect
+        self._client.on_subscribe = self._on_subscribe
         self._client.on_message = self._on_message
         self._prefix = f"agentvault/v1/clients/{config.vault_client_id}"
 
@@ -50,12 +50,16 @@ class MqttVaultTransport:
         self._client.loop_start()
         deadline = time.monotonic() + self.config.timeout
         with self._condition:
-            while not self._connected:
+            while not self._connected and self._connection_error is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self.close()
                     raise TimeoutError("MQTT connect/subscribe timed out")
                 self._condition.wait(remaining)
+            if self._connection_error is not None:
+                error = self._connection_error
+                self.close()
+                raise error
 
     def close(self) -> None:
         try:
@@ -70,16 +74,13 @@ class MqttVaultTransport:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None,
-                idempotency_key: str | None = None) -> dict[str, Any]:
+    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
         operation = self._operation(method, path)
         if body is None:
             raise ValueError("MQTT outbound payment commands require a request body")
         correlation = secrets.token_hex(16)
         encoded_body = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
         headers = {"accept": "application/json", "content-type": "application/json"}
-        if idempotency_key:
-            headers["idempotency-key"] = idempotency_key
         envelope = {
             "type": operation[1], "version": 1, "correlationId": correlation,
             "request": {"method": "POST", "path": path, "headers": headers,
@@ -162,13 +163,25 @@ class MqttVaultTransport:
     def _on_connect(self, client: mqtt.Client, _userdata: Any, _flags: Any,
                     reason_code: Any, _properties: Any) -> None:
         if reason_code != 0:
-            return
-        result, _ = client.subscribe([(f"{self._prefix}/results/+", 1),
-                                      (f"{self._prefix}/approvals/required", 1)])
-        if result == mqtt.MQTT_ERR_SUCCESS:
             with self._condition:
-                self._connected = True
+                self._connection_error = RuntimeError("AgentVault MQTT connection was rejected")
                 self._condition.notify_all()
+            return
+        result, _ = client.subscribe(f"{self._prefix}/results/+", qos=1)
+        with self._condition:
+            if result != mqtt.MQTT_ERR_SUCCESS:
+                self._connection_error = RuntimeError("AgentVault MQTT subscription could not be sent")
+                self._condition.notify_all()
+
+    def _on_subscribe(self, _client: mqtt.Client, _userdata: Any, _mid: int,
+                      reason_codes: list[Any], _properties: Any) -> None:
+        with self._condition:
+            if not _subscription_granted(reason_codes, 1):
+                self._connection_error = RuntimeError(
+                    "AgentVault MQTT subscriptions were rejected or downgraded")
+            else:
+                self._connected = True
+            self._condition.notify_all()
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
         if len(message.payload) > self.config.max_response_bytes:
@@ -178,13 +191,6 @@ class MqttVaultTransport:
         except (ValueError, UnicodeDecodeError):
             return
         if not isinstance(value, dict) or value.get("version") != 1:
-            return
-        if message.topic == f"{self._prefix}/approvals/required":
-            if value.get("type") == "payment.approval_required" and self._approval_handler:
-                try:
-                    self._approval_handler(value)
-                except Exception:
-                    pass
             return
         correlation = value.get("correlationId")
         expected_type = self._expected_types.get(correlation) if isinstance(correlation, str) else None
@@ -208,3 +214,8 @@ class MqttVaultTransport:
                 while len(self._responses) > 256:
                     self._responses.popitem(last=False)
             self._condition.notify_all()
+
+
+def _subscription_granted(reason_codes: list[Any], expected_count: int) -> bool:
+    return (len(reason_codes) == expected_count
+            and all(getattr(code, "value", code) == 1 for code in reason_codes))

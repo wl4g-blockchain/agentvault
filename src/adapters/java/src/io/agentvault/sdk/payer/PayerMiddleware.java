@@ -70,13 +70,8 @@ public final class PayerMiddleware {
                 response.headers(),
                 strictUtf8(response.body()),
                 header(response.headers(), "payment-expires-at"));
-        if (challenge.protocolHint() != null && !challenge.protocolHint().isBlank()
-                && !challenge.protocolHint().equals(config.protocol())) {
-            throw new IllegalStateException("protocol must match the 402 protocol hint");
-        }
         AuthorizePaymentResponse authorization = authorizeUntilTerminal(new AuthorizePaymentRequest(
-                config.scenarioId(), context.runId(), context.idempotencyKey(), config.walletId(),
-                config.protocol(), config.asset(), config.amount(), config.recipient(), request.url(), challenge));
+                config.scenarioId(), context.runId(), challenge));
         if (authorization.authorization().outcome() == AuthorizationOutcome.DENIED) {
             throw new SecurityException("AgentVault denied the payment: " + authorization.authorization().reason());
         }
@@ -89,16 +84,15 @@ public final class PayerMiddleware {
         if (intent.id() == null || intent.id().isBlank()
                 || !config.scenarioId().equals(intent.scenarioId())
                 || !context.runId().equals(intent.runId())
-                || !config.walletId().equals(intent.walletId())
+                || intent.walletId() == null || intent.walletId().isBlank()
+                || intent.policyId() == null || intent.policyId().isBlank()
                 || intent.direction() != Base.PaymentDirection.OUTBOUND
-                || !config.protocol().equals(intent.protocol())
+                || (challenge.protocolHint() != null && !challenge.protocolHint().isBlank()
+                    && !challenge.protocolHint().equals(intent.protocol()))
                 || !credential.protocol().equals(intent.protocol())
-                || !config.asset().equals(intent.asset())
-                || !config.amount().equals(intent.amount())
-                || !config.recipient().equals(intent.recipient())
                 || !request.url().equals(intent.resource())
                 || !credential.challengeHash().equals(intent.challengeHash())
-                || !context.idempotencyKey().equals(intent.idempotencyKey())) {
+                ) {
             throw new IllegalStateException("credential, intent, and resource are not bound to the same payment");
         }
         return new AuthorizedPayment(intent, credential);
@@ -124,7 +118,7 @@ public final class PayerMiddleware {
         String evidence = header(response.headers(), "payment-response");
         if (evidence != null && !evidence.isBlank()) {
             reportOutboundResponse(
-                    new OperationContext(config.scenarioId(), context.runId(), context.idempotencyKey()),
+                    new OperationContext(config.scenarioId(), context.runId()),
                     authorized.intent().id(),
                     evidence);
         } else if (response.status() >= 200 && response.status() < 300) {
@@ -139,7 +133,7 @@ public final class PayerMiddleware {
         String expectedIntent = null;
         for (;;) {
             AuthorizePaymentResponse response = transport.post(
-                    "/api/v1/payments/authorize", request, request.idempotencyKey(), AuthorizePaymentResponse.class);
+                    "/api/v1/payments/authorize", request, AuthorizePaymentResponse.class);
             if (response.authorization() == null || response.intent() == null) {
                 throw new IllegalStateException("invalid AgentVault authorization response");
             }
@@ -150,7 +144,7 @@ public final class PayerMiddleware {
             }
             if (expectedIntent == null) expectedIntent = intentId;
             else if (!expectedIntent.equals(intentId)) {
-                throw new IllegalStateException("idempotent authorization changed payment intent");
+                throw new IllegalStateException("replayed run changed payment intent");
             }
             if (outcome != AuthorizationOutcome.REQUIRES_APPROVAL) return response;
             long remaining = timeoutNanos - (System.nanoTime() - started);
@@ -197,11 +191,10 @@ public final class PayerMiddleware {
             OperationContext context, String intentId, String paymentResponse) {
         Base.required("intent_id", intentId);
         var request = new ReportOutboundResponseRequest(
-                context.scenarioId(), context.runId(), context.idempotencyKey(), paymentResponse);
+                context.scenarioId(), context.runId(), paymentResponse);
         return transport.post(
                 "/api/v1/payments/" + escape(intentId) + "/outbound-response",
                 request,
-                context.idempotencyKey(),
                 ReportOutboundResponseResponse.class);
     }
 

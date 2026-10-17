@@ -140,7 +140,7 @@ async fn outbox_class_claim_isolated_and_replayed_after_worker_restart() {
     ] {
         sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
-             correlation_id, idempotency_key, payload, status, attempt_count, available_at, created_at) \
+             correlation_id, run_id, payload, status, attempt_count, available_at, created_at) \
              VALUES ($1, 'payment_intent', 'intent-1', $2, $3, 'intent-1', $1, '{}'::jsonb, 'pending', 0, 10, 10)",
         )
         .bind(id)
@@ -563,7 +563,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         event_type: "settled".to_owned(),
         destination: format!("scenario:{}.payments", settled.scenario_id),
         correlation_id: settled.id.clone(),
-        idempotency_key: unique("pg-settled-notification"),
+        run_id: unique("pg-settled-notification"),
         payload: serde_json::json!({"intent_id": settled.id.clone()}),
         status: OutboxStatus::Pending,
         attempt_count: 0,
@@ -971,7 +971,6 @@ async fn record_expiring_inbound_challenge(
         settled_amount: Amount::ZERO,
         resource: challenge.resource.clone(),
         challenge_hash: Some(challenge.challenge_hash.clone()),
-        idempotency_key: unique("pg-expiring-idempotency"),
         request_hash: unique("pg-expiring-request"),
         status: PaymentStatus::Created,
         reservation_status: ReservationStatus::Reserved,
@@ -1147,7 +1146,7 @@ fn recover_address(bytes: &[u8], digest: &[u8; 32]) -> String {
 
 fn intent(
     id: &str,
-    idempotency_key: &str,
+    run_id: &str,
     scenario_id: &str,
     wallet_id: &str,
     policy_id: &str,
@@ -1157,7 +1156,7 @@ fn intent(
     PaymentIntent {
         id: id.to_owned(),
         scenario_id: scenario_id.to_owned(),
-        run_id: format!("run-{id}"),
+        run_id: run_id.to_owned(),
         wallet_id: Some(wallet_id.to_owned()),
         policy_id: Some(policy_id.to_owned()),
         offer_id: None,
@@ -1169,7 +1168,6 @@ fn intent(
         settled_amount: Amount::ZERO,
         resource: "https://feed.example/mcp/realtime".to_owned(),
         challenge_hash: Some(format!("challenge-{id}")),
-        idempotency_key: idempotency_key.to_owned(),
         request_hash: format!("request-{id}"),
         status: PaymentStatus::Authorized,
         reservation_status: ReservationStatus::Reserved,

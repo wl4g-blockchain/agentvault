@@ -1,72 +1,19 @@
 package model
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 )
 
-// IdempotencyKey identifies one logical operation and must be reused by retries.
-type IdempotencyKey string
-
-func NewIdempotencyKey(value string) (IdempotencyKey, error) {
-	key := IdempotencyKey(value)
-	if err := key.Validate(); err != nil {
-		return "", err
-	}
-	return key, nil
-}
-
-func OperationKey(runID, operation string) (IdempotencyKey, error) {
-	if err := Required("run_id", runID); err != nil {
-		return "", err
-	}
-	if err := Required("operation", operation); err != nil {
-		return "", err
-	}
-	if strings.ContainsRune(runID, ':') || strings.ContainsRune(operation, ':') {
-		return "", errors.New("run_id and operation cannot contain ':' when deriving an idempotency key")
-	}
-	return NewIdempotencyKey(runID + ":" + operation)
-}
-
-func (key IdempotencyKey) Validate() error {
-	if len(key) == 0 || len(key) > 128 {
-		return errors.New("idempotency_key must contain 1..=128 characters")
-	}
-	for _, character := range []byte(key) {
-		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') || strings.ContainsRune("-_.:", rune(character)) {
-			continue
-		}
-		return errors.New("idempotency_key may contain only ASCII letters, digits, '-', '_', '.', and ':'")
-	}
-	return nil
-}
-
-func (key *IdempotencyKey) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	parsed, err := NewIdempotencyKey(value)
-	if err != nil {
-		return err
-	}
-	*key = parsed
-	return nil
-}
-
 type OperationContext struct {
-	ScenarioID     string         `json:"scenario_id"`
-	RunID          string         `json:"run_id,omitempty"`
-	IdempotencyKey IdempotencyKey `json:"idempotency_key"`
+	ScenarioID string `json:"scenario_id"`
+	RunID      string `json:"run_id"`
 }
 
-func NewOperationContext(scenarioID string, key IdempotencyKey) (OperationContext, error) {
-	context := OperationContext{ScenarioID: scenarioID, IdempotencyKey: key}
+func NewOperationContext(scenarioID, runID string) (OperationContext, error) {
+	context := OperationContext{ScenarioID: scenarioID, RunID: runID}
 	if err := context.Validate(); err != nil {
 		return OperationContext{}, err
 	}
@@ -77,18 +24,19 @@ func (context OperationContext) Validate() error {
 	if err := Required("scenario_id", context.ScenarioID); err != nil {
 		return err
 	}
-	if context.RunID != "" && strings.TrimSpace(context.RunID) == "" {
-		return errors.New("run_id cannot be blank")
-	}
-	return context.IdempotencyKey.Validate()
+	return ValidateIdentifier("run_id", context.RunID)
 }
 
-func (context OperationContext) ValidateWithRunID() error {
-	if err := context.Validate(); err != nil {
-		return err
+func ValidateIdentifier(name, value string) error {
+	if len(value) == 0 || len(value) > 128 {
+		return fmt.Errorf("%s must contain 1..=128 safe ASCII characters", name)
 	}
-	if context.RunID == "" {
-		return errors.New("run_id is required for payment operations")
+	for _, character := range []byte(value) {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("-_.:", rune(character)) {
+			continue
+		}
+		return fmt.Errorf("%s must contain 1..=128 safe ASCII characters", name)
 	}
 	return nil
 }
@@ -186,7 +134,6 @@ type PaymentIntent struct {
 	SettledAmount     string            `json:"settled_amount"`
 	Resource          string            `json:"resource"`
 	ChallengeHash     string            `json:"challenge_hash,omitempty"`
-	IdempotencyKey    string            `json:"idempotency_key"`
 	RequestHash       string            `json:"request_hash"`
 	Status            PaymentStatus     `json:"status"`
 	ReservationStatus ReservationStatus `json:"reservation_status"`

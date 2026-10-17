@@ -27,35 +27,20 @@ type PaymentRequired struct {
 
 type AuthorizePaymentRequest struct {
 	OperationContext
-	WalletID  string          `json:"wallet_id"`
-	Protocol  string          `json:"protocol"`
-	Asset     AssetIdentity   `json:"asset"`
-	Amount    string          `json:"amount"`
-	Recipient string          `json:"recipient"`
-	Resource  string          `json:"resource"`
 	Challenge PaymentRequired `json:"challenge"`
 }
 
 func (request AuthorizePaymentRequest) Validate() error {
-	if err := request.OperationContext.ValidateWithRunID(); err != nil {
+	if err := request.OperationContext.Validate(); err != nil {
 		return err
 	}
 	for name, value := range map[string]string{
-		"wallet_id": request.WalletID, "protocol": request.Protocol,
-		"asset.network": request.Asset.Network, "asset.asset": request.Asset.Asset,
-		"amount": request.Amount, "recipient": request.Recipient, "resource": request.Resource,
 		"challenge.origin": request.Challenge.Origin, "challenge.resource": request.Challenge.Resource,
 		"challenge.content_type": request.Challenge.ContentType,
 	} {
 		if err := Required(name, value); err != nil {
 			return err
 		}
-	}
-	if request.Resource != request.Challenge.Resource {
-		return errors.New("resource must exactly match the challenge resource")
-	}
-	if request.Challenge.ProtocolHint != "" && request.Challenge.ProtocolHint != request.Protocol {
-		return errors.New("protocol must match the 402 protocol hint")
 	}
 	if request.Challenge.Origin != strings.TrimSpace(request.Challenge.Origin) {
 		return errors.New("challenge origin cannot contain surrounding whitespace")
@@ -84,7 +69,7 @@ type ReportOutboundResponseRequest struct {
 }
 
 func (request ReportOutboundResponseRequest) Validate() error {
-	if err := request.OperationContext.ValidateWithRunID(); err != nil {
+	if err := request.OperationContext.Validate(); err != nil {
 		return err
 	}
 	if len(request.PaymentResponse) == 0 || len(request.PaymentResponse) > 16*1024 {
@@ -124,16 +109,14 @@ type PaymentBalance struct {
 // PayerRequestContext is created once for one logical workflow operation and
 // must be reused unchanged by every HTTP/MCP retry.
 type PayerRequestContext struct {
-	RunID          string
-	IdempotencyKey IdempotencyKey
+	RunID string
 }
 
-func NewPayerRequestContext(runID, operation string) (PayerRequestContext, error) {
-	key, err := OperationKey(runID, operation)
-	if err != nil {
+func NewPayerRequestContext(runID string) (PayerRequestContext, error) {
+	if err := ValidateIdentifier("run_id", runID); err != nil {
 		return PayerRequestContext{}, err
 	}
-	return PayerRequestContext{RunID: runID, IdempotencyKey: key}, nil
+	return PayerRequestContext{RunID: runID}, nil
 }
 
 type PayerHTTPRequest struct {

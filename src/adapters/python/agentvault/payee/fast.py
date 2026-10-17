@@ -63,14 +63,13 @@ class FastPayeeMiddleware:
             return
         headers = _headers(scope.get("headers", []))
         run_id = headers.get("x-run-id", "").strip()
-        execution_key = headers.get("mcp-execution-key", "").strip()
-        if not run_id or not execution_key:
-            await _error(send, 400, "PAYMENT_CONTEXT_REQUIRED", "x-run-id and mcp-execution-key are required")
+        if not run_id:
+            await _error(send, 400, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
             return
         try:
             credential = _decode_credential(headers.get("payment-signature"), self.max_body_bytes)
             operation = PayeeOperation(
-                route.scenario_id, run_id, execution_key, route.offer_id, route.resource,
+                route.scenario_id, run_id, route.offer_id, route.resource,
                 route.origin, route.protocol, _request_hash(route.method, route.path, body), credential)
             outcome = await asyncio.to_thread(self.middleware.protect, operation)
         except PermissionError as error:

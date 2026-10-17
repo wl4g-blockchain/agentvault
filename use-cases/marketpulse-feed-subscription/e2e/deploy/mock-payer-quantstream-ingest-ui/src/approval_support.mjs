@@ -4,14 +4,14 @@ const MAX_AMOUNT = (1n << 128n) - 1n;
 const MAX_PAGE_BYTES = 256 * 1024;
 const DEFAULT_PAGE_SIZE = 100;
 
-export function approvalDecisionBody(approval, decision, idempotencyKey) {
+export function approvalDecisionBody(approval, decision) {
   if (decision !== "approve" && decision !== "reject") {
     throw new Error("decision must be approve or reject");
   }
   const normalized = normalizeApproval(approval, approval.scenarioId);
   const body = {
     scenario_id: normalized.scenarioId,
-    idempotency_key: requiredIdentifier(idempotencyKey, "idempotency key"),
+    run_id: normalized.runId,
     approval_id: normalized.approvalId,
     decision,
     reason: "QuantStream administrator decision"
@@ -171,6 +171,7 @@ export function normalizeApproval(raw, expectedScenarioId) {
   return {
     approvalId: requiredIdentifier(raw.approvalId ?? raw.id, "approval id"),
     intentId: requiredIdentifier(raw.intentId ?? raw.intent_id, "intent id"),
+    runId: requiredIdentifier(raw.runId ?? raw.run_id, "run id"),
     scenarioId,
     requestedAmount: decimalAmount(raw.requestedAmount ?? raw.requested_amount),
     expiresAt
@@ -260,6 +261,7 @@ function requiredText(value, field) {
 function sameApproval(left, right) {
   return left.approvalId === right.approvalId
     && left.intentId === right.intentId
+    && left.runId === right.runId
     && left.scenarioId === right.scenarioId
     && left.requestedAmount === right.requestedAmount
     && left.expiresAt === right.expiresAt;

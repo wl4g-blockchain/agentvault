@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from common.context import VerificationContext
@@ -238,7 +239,7 @@ SDK_MODEL_CONTRACTS = {
                            "type PayerHTTPRequest", "type PayerHTTPResponse", "type AuthorizedPayment"),
         "model/payee.go": ("type ResolveOfferRequest", "type PaymentOffer", "type PayeeOperation",
                            "type CreateChallengeRequest", "type VerifyPaymentRequest", "type PaymentVerification",
-                           "type SettlePaymentRequest", "type IncomingPayment", "type SettledIncomingPayment",
+                           "type SettlePaymentRequest", "type SettledIncomingPayment",
                            "type HTTPProtectionRequest", "type MCPProtectionRequest", "type ProtectionOutcome"),
     },
     "rust/src": {
@@ -257,7 +258,7 @@ SDK_MODEL_CONTRACTS = {
         "model/payee.rs": ("pub struct ResolveOfferRequest", "pub struct PaymentOffer", "pub struct PayeeOperation",
                            "pub struct CreateChallengeRequest", "pub struct VerifyPaymentRequest",
                            "pub struct PaymentVerification", "pub struct SettlePaymentRequest",
-                           "pub struct IncomingPayment", "pub struct SettledIncomingPayment",
+                            "pub struct SettledIncomingPayment",
                            "pub struct HttpProtectionRequest", "pub struct McpProtectionRequest",
                            "pub enum ProtectionOutcome"),
     },
@@ -274,7 +275,7 @@ SDK_MODEL_CONTRACTS = {
                            "class PayerHttpRequest", "class PayerHttpResponse", "class AuthorizedPayment"),
         "model/payee.py": ("class ResolveOfferRequest", "class PaymentOffer", "class PayeeOperation",
                            "class CreateChallengeRequest", "class VerifyPaymentRequest", "class PaymentVerification",
-                           "class SettlePaymentRequest", "class IncomingPayment", "class SettledIncomingPayment",
+                           "class SettlePaymentRequest", "class SettledIncomingPayment",
                            "class HttpProtectionRequest", "class McpProtectionRequest", "class ProtectionOutcome"),
     },
     "typescript/src/agentvault": {
@@ -293,7 +294,7 @@ SDK_MODEL_CONTRACTS = {
         "model/payee.ts": ("interface ResolveOfferRequest", "interface PaymentOffer", "interface PayeeOperation",
                            "interface CreateChallengeRequest", "interface VerifyPaymentRequest",
                            "interface PaymentVerification", "interface SettlePaymentRequest",
-                           "interface IncomingPayment", "interface SettledIncomingPayment",
+                           "interface SettledIncomingPayment",
                            "interface HttpProtectionRequest", "interface McpProtectionRequest",
                            "type ProtectionOutcome"),
     },
@@ -312,7 +313,7 @@ SDK_MODEL_CONTRACTS = {
                              "record PayerHttpResponse", "record AuthorizedPayment"),
         "model/Payee.java": ("record ResolveOfferRequest", "record PaymentOffer", "record PayeeOperation",
                              "record CreateChallengeRequest", "record VerifyPaymentRequest",
-                             "record PaymentVerification", "record SettlePaymentRequest", "record IncomingPayment",
+                             "record PaymentVerification", "record SettlePaymentRequest",
                              "record SettledIncomingPayment", "record HttpProtectionRequest",
                              "record McpProtectionRequest", "interface ProtectionOutcome"),
     },
@@ -324,12 +325,13 @@ SDK_LOGICAL_CONTRACTS = {
         "model/payer.go": ("type PayerRequestContext", "type PayerHTTPRequest", "type PayerHTTPResponse", "type AuthorizedPayment", "type BalanceQuery"),
         "model/payee.go": ("type PayeeOperation", "type ResolveOfferRequest", "type ProtectionOutcome"),
         "payer/payer.go": ("type PayerMiddleware", "Authorize(", "Report(", "CredentialHeader(", "GetPayment(", "GetReceipt(", "GetBalance(",
-                            "protocolHint != \"\" && protocolHint != m.config.Protocol", "intent.ScenarioID != m.config.ScenarioID",
-                            "intent.Asset != m.config.Asset", "intent.IdempotencyKey != string(operation.IdempotencyKey)"),
+                            "protocolHint != \"\" && intent.Protocol != protocolHint", "intent.ScenarioID != m.config.ScenarioID",
+                            "intent.WalletID == nil", "intent.PolicyID == \"\"",
+                            "intent.RunID != operation.RunID"),
         "payer/standard.go": ("type StandardPayerMiddleware", "RoundTrip(", "DeliveryRetries", "StatusPaymentRequired", "StatusServiceUnavailable", "CheckRedirect"),
-        "payer/payer_test.go": ("RejectsProtocolHintMismatchBeforeVaultCall", "payment-protocol", "mpp"),
+        "payer/payer_test.go": ("ForwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
         "payee/payee.go": ("type PayeeMiddleware", "ErrInvalidPayment", "Challenge(", "Protect(", "ResolveOffer(", "GetReceipt(",
-                            "ExecutionKey:     operation.ExecutionKey",
+                            "OperationContext: settlementContext",
                             "intent.Asset != challenge.Asset", "payment.Intent.Status != model.PaymentStatusSettled",
                             "payment.Receipt.Status != model.PaymentStatusSettled"),
         "payee/gin.go": ("type GinPayeeMiddleware", "Handler() gin.HandlerFunc", "NewMCPToolRoute", "isMCPToolCall", "errors.Is(err, ErrInvalidPayment)"),
@@ -344,12 +346,13 @@ SDK_LOGICAL_CONTRACTS = {
         "model/payer.rs": ("pub struct PayerRequestContext", "pub struct PayerHttpRequest", "pub struct PayerHttpResponse", "pub struct AuthorizedPayment", "pub struct BalanceQuery"),
         "model/payee.rs": ("pub struct PayeeOperation", "pub struct ResolveOfferRequest", "pub enum ProtectionOutcome"),
         "payer/payer.rs": ("pub struct PayerMiddleware", "pub async fn authorize", "pub async fn report", "pub fn credential_header", "pub async fn get_payment", "pub async fn get_receipt", "pub async fn get_balance",
-                            "validate_protocol_hint", "intent.scenario_id != config.scenario_id",
-                            "intent.asset != config.asset", "intent.idempotency_key != context.idempotency_key.as_str()"),
+                            "protocol_hint.is_some_and", "intent.scenario_id != config.scenario_id",
+                            "intent.wallet_id.as_deref().is_none_or", "intent.policy_id.as_deref().is_none_or",
+                            "intent.run_id != context.run_id"),
         "payer/standard.rs": ("pub struct ReqwestPayerMiddleware", "impl<T> Middleware", "delivery_retries", "Policy::none", "status != 503"),
-        "payer/payer_test.rs": ("payer_rejects_protocol_hint_mismatch_before_vault_call", "payment-protocol", "mpp"),
+        "payer/payer_test.rs": ("payer_forwards_captured_protocol_hint_without_local_projection", "payment-protocol", "mpp"),
         "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_offer", "pub async fn get_receipt",
-                            "execution_key: operation.execution_key.clone()",
+                            "OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())",
                             "intent.asset != challenge.asset", "payment.intent.status != crate::PaymentStatus::Settled",
                             "payment.receipt.status != crate::PaymentStatus::Settled"),
         "payee/axum.rs": ("pub struct AxumPayeeMiddleware", "pub fn mcp_tool", "is_mcp_tool_call"),
@@ -363,12 +366,13 @@ SDK_LOGICAL_CONTRACTS = {
         "model/payer.py": ("class PayerRequestContext", "class PayerHttpRequest", "class PayerHttpResponse", "class AuthorizedPayment", "class BalanceQuery"),
         "model/payee.py": ("class PayeeOperation", "class ResolveOfferRequest"),
         "payer/payer.py": ("class PayerMiddleware", "def authorize", "def report", "def credential_header", "def get_payment", "def get_receipt", "def get_balance",
-                            "required.protocol_hint != self.config.protocol", "intent.scenario_id != self.config.scenario_id",
-                            "intent.asset != self.config.asset", "intent.idempotency_key != operation.idempotency_key"),
+                            "required.protocol_hint is not None and intent.protocol != required.protocol_hint",
+                            "intent.scenario_id != self.config.scenario_id", "not intent.wallet_id",
+                            "not intent.policy_id", "intent.run_id != operation.run_id"),
         "payer/standard.py": ("class HttpxPayerMiddleware", "async def request", "delivery_retries", "follow_redirects=False", "stream=True", "_read_bounded", "response.status_code != 503"),
-        "payer/payer_test.py": ("test_rejects_protocol_hint_mismatch_before_vault_call", "payment-protocol", "mpp"),
+        "payer/payer_test.py": ("test_captured_protocol_hint_is_checked_against_vault_result", "payment-protocol", "mpp"),
         "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_offer", "def get_receipt",
-                            "operation.settlement_context(), operation.execution_key",
+                            "operation.settlement_context(), verification.intent.id",
                             "intent.asset != challenge.asset", "intent.status.value != \"settled\"",
                             "receipt.status.value != \"settled\""),
         "payee/fast.py": ("class FastPayeeMiddleware", "async def __call__", "def mcp_tool", "_is_mcp_tool_call"),
@@ -382,12 +386,13 @@ SDK_LOGICAL_CONTRACTS = {
         "model/payer.ts": ("class PayerRequestContext", "interface PayerHttpRequest", "interface PayerHttpResponse", "interface AuthorizedPayment", "interface BalanceQuery"),
         "model/payee.ts": ("interface PayeeOperation", "interface ResolveOfferRequest", "type ProtectionOutcome"),
         "payer/payer.ts": ("class PayerMiddleware", "async authorize", "async report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
-                            "protocolHint !== this.config.protocol", "intent.scenario_id !== this.config.scenarioId",
-                            "!sameAsset(intent.asset, this.config.asset)", "intent.idempotency_key !== operation.idempotencyKey"),
+                            "protocolHint !== null && intent.protocol !== protocolHint",
+                            "intent.scenario_id !== this.config.scenarioId", "!intent.wallet_id",
+                            "!intent.policy_id", "intent.run_id !== operation.runId"),
         "payer/standard.ts": ("class FetchPayerMiddleware", "async request", "deliveryRetries", "redirect: 'manual'", "response.status !== 503"),
-        "payer/payer_test.ts": ("rejects a protocol hint mismatch before calling AgentVault", "payment-protocol", "mpp"),
+        "payer/payer_test.ts": ("forwards captured protocol hints without local projections", "payment-protocol", "mpp"),
         "payee/payee.ts": ("class PayeeMiddleware", "class InvalidPaymentError", "async challenge", "async protect", "resolveOffer", "getReceipt",
-                            "execution_key: operation.executionKey",
+                            "const settlement = operationContext(operation)",
                             "!sameAsset(intent.asset, challenge.asset)", "intent.status !== 'settled'",
                             "receipt.status !== 'settled'"),
         "payee/express.ts": ("class ExpressPayeeMiddleware", "handler()", "mcpToolRoute", "isMcpToolCall", "error instanceof InvalidPaymentError"),
@@ -401,12 +406,14 @@ SDK_LOGICAL_CONTRACTS = {
         "model/Payer.java": ("record PayerRequestContext", "record PayerHttpRequest", "record PayerHttpResponse", "record AuthorizedPayment", "record BalanceQuery"),
         "model/Payee.java": ("record PayeeOperation", "record ResolveOfferRequest", "interface ProtectionOutcome"),
         "payer/PayerMiddleware.java": ("class PayerMiddleware", "AuthorizedPayment authorize", "void report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
-                            "!challenge.protocolHint().equals(config.protocol())", "!config.scenarioId().equals(intent.scenarioId())",
-                            "!config.asset().equals(intent.asset())", "!context.idempotencyKey().equals(intent.idempotencyKey())"),
+                            "challenge.protocolHint() != null", "!config.scenarioId().equals(intent.scenarioId())",
+                            "intent.walletId() == null || intent.walletId().isBlank()",
+                            "intent.policyId() == null || intent.policyId().isBlank()",
+                            "!context.runId().equals(intent.runId())"),
         "payer/StandardPayerMiddleware.java": ("class StandardPayerMiddleware", "intercept(", "deliveryRetries", "HttpClient.Redirect.NEVER", "value() != 402", "value() != 503"),
-        "payer/PayerMiddlewareTest.java": ("rejectsProtocolHintMismatchBeforeCallingAgentVault", "payment-protocol", "mpp"),
+        "payer/PayerMiddlewareTest.java": ("forwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
         "payee/PayeeMiddleware.java": ("class PayeeMiddleware", "challenge(", "protect(", "resolveOffer", "getReceipt",
-                            "new SettlePaymentRequest(settlement, operation.executionKey()",
+                            "new SettlePaymentRequest(settlement, verification.intent().id()",
                             "!challenge.asset().equals(intent.asset())", "payment.intent().status() != Base.PaymentStatus.SETTLED",
                             "payment.receipt().status() != Base.PaymentStatus.SETTLED"),
         "payee/SpringInterceptorPayeeMiddleware.java": ("class SpringInterceptorPayeeMiddleware", "doFilterInternal", "mcpTool", "isMcpToolCall"),
@@ -491,6 +498,31 @@ PAYER_ROUTE_FILES = (
     "deploy/mock-payer-quantstream-ingest-service-typescript/src/route/ingestion.ts",
 )
 
+PAYER_FORBIDDEN_SELECTION_TOKENS = (
+    "wallet_id",
+    "walletId",
+    "WalletID",
+    "QUANTSTREAM_WALLET_ID",
+    "policy_id",
+    "policyId",
+    "PolicyID",
+    "QUANTSTREAM_POLICY_ID",
+    "PAYMENT_NETWORK",
+    "PAYMENT_ASSET",
+    "PAYMENT_TOKEN_CONTRACT",
+    "PAYMENT_DECIMALS",
+    "PAYMENT_AMOUNT",
+    "PAYMENT_RECIPIENT",
+    "MARKETPULSE_ORIGIN",
+)
+
+FORBIDDEN_RUN_ID_ALIASES = (
+    re.compile(r"\bidempotency[_-]?key\b", re.IGNORECASE),
+    re.compile(r"\bidempotent[_-]?key\b", re.IGNORECASE),
+    re.compile(r"\bexecution[_-]?key\b", re.IGNORECASE),
+    re.compile(r"\boperation[_-]?key\b", re.IGNORECASE),
+)
+
 
 def verify(_context: VerificationContext) -> str:
     missing = [relative for relative in REQUIRED if not (E2E_ROOT / relative).is_file()]
@@ -522,6 +554,9 @@ def verify(_context: VerificationContext) -> str:
     _verify_sdk_sources()
     _verify_ingestor_sources()
     _verify_ingestion_contracts()
+    _verify_payer_selection_boundary()
+    _verify_wallet_pool_contract()
+    _verify_run_identity_contract()
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
@@ -638,6 +673,81 @@ def _verify_ingestion_contracts() -> None:
         forbidden = [path for path in ("/mcp", "/api/v1/ingestion") if path in content]
         if forbidden:
             raise RuntimeError(f"{relative_file} owns non-operational routes: {', '.join(forbidden)}")
+
+
+def _verify_payer_selection_boundary() -> None:
+    """Keep wallet/policy inputs behind AgentVault's trusted authorization boundary."""
+    violations: list[str] = []
+    for root in sorted((E2E_ROOT / "deploy").glob("mock-payer-quantstream-ingest-service-*")):
+        for path in root.rglob("*"):
+            if not path.is_file() or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            found = [token for token in PAYER_FORBIDDEN_SELECTION_TOKENS if token in content]
+            if found:
+                label = path.relative_to(E2E_ROOT).as_posix()
+                violations.append(f"{label}: {', '.join(found)}")
+    if violations:
+        raise RuntimeError(
+            "payer services must submit scenario + challenge and let AgentVault select wallets: "
+            + "; ".join(violations)
+        )
+
+
+def _verify_wallet_pool_contract() -> None:
+    """Require the real payment fixture to prove server-side pool selection."""
+    manifest = json.loads((E2E_ROOT / "common/contract/scenario.json").read_text(encoding="utf-8"))
+    policy = next(
+        (item for item in manifest.get("policies", []) if item.get("id") == "policy-quantstream-market-data"),
+        None,
+    )
+    if policy is None:
+        raise RuntimeError("QuantStream payment policy is missing from the E2E contract")
+    wallet_ids = policy.get("wallet_ids")
+    expected = {"wallet-quantstream-primary", "wallet-quantstream-secondary"}
+    if not isinstance(wallet_ids, list) or set(wallet_ids) != expected:
+        raise RuntimeError("the E2E payment policy must expose exactly two wallet-pool members")
+    wallets = {item.get("id"): item for item in manifest.get("wallets", [])}
+    for wallet_id in expected:
+        wallet = wallets.get(wallet_id)
+        if not isinstance(wallet, dict) or wallet.get("custody") != "local" or not wallet.get("private_key_env"):
+            raise RuntimeError(f"{wallet_id} must be an independently signable local E2E wallet")
+
+
+def _verify_run_identity_contract() -> None:
+    """Keep `run_id` as the only durable business retry and deduplication key."""
+    roots = (REPOSITORY_ROOT / "src" / "adapters", E2E_ROOT / "deploy")
+    violations: list[str] = []
+    allowed_suffixes = SOURCE_SUFFIXES | {".json", ".mjs", ".sh", ".yaml"}
+    for root in roots:
+        for path in root.rglob("*"):
+            if (
+                not path.is_file()
+                or path.suffix not in allowed_suffixes
+                or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts)
+            ):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            found = [pattern.pattern for pattern in FORBIDDEN_RUN_ID_ALIASES if pattern.search(content)]
+            if found:
+                violations.append(f"{path.relative_to(REPOSITORY_ROOT).as_posix()}: {', '.join(found)}")
+    if violations:
+        raise RuntimeError(
+            "run_id is the only business idempotency identity; remove alternate key fields: "
+            + "; ".join(violations)
+        )
+    mqtt_schema = json.loads(
+        (E2E_ROOT / "common/contract/payment-mqtt.schema.json").read_text(encoding="utf-8")
+    )
+    approval = mqtt_schema.get("$defs", {}).get("approvalRequired", {})
+    if "runId" not in approval.get("required", []) or "runId" not in approval.get("properties", {}):
+        raise RuntimeError("MQTT approval_required must carry the canonical business runId")
 
 
 def _verify_ingestor_sources() -> None:

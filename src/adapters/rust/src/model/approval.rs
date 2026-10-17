@@ -23,6 +23,7 @@ pub enum ApprovalDecisionKind {
 pub struct ApprovalRequest {
     pub id: String,
     pub intent_id: String,
+    pub run_id: String,
     pub requested_amount: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_amount: Option<String>,

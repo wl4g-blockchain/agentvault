@@ -2,17 +2,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AssetIdentity, Error, IdempotencyKey, OperationContext, PaymentChallenge, PaymentCredential, PaymentIntent,
-    PaymentReceipt, Result,
+    AssetIdentity, Error, OperationContext, PaymentChallenge, PaymentCredential, PaymentIntent, PaymentReceipt, Result,
 };
 
-/// One protected inbound business operation. The execution key and request
-/// hash stay stable across a legal retry.
+/// One protected inbound business operation. The run ID and request hash stay
+/// stable across every legal retry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PayeeOperation {
     pub scenario_id: String,
     pub run_id: String,
-    pub execution_key: String,
     pub offer_id: String,
     pub resource: String,
     pub origin: String,
@@ -26,7 +24,6 @@ impl PayeeOperation {
         for (name, value) in [
             ("scenario_id", self.scenario_id.as_str()),
             ("run_id", self.run_id.as_str()),
-            ("execution_key", self.execution_key.as_str()),
             ("offer_id", self.offer_id.as_str()),
             ("resource", self.resource.as_str()),
             ("origin", self.origin.as_str()),
@@ -37,25 +34,7 @@ impl PayeeOperation {
                 return Err(Error::InvalidArgument(format!("{name} cannot be blank")));
             }
         }
-        if self.execution_key.len() > 96
-            || !self
-                .execution_key
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        {
-            return Err(Error::InvalidArgument(
-                "execution_key must contain 1..=96 safe ASCII characters".to_owned(),
-            ));
-        }
         Ok(())
-    }
-
-    pub(crate) fn challenge_key(&self) -> Result<IdempotencyKey> {
-        IdempotencyKey::new(format!("{}.challenge", self.execution_key))
-    }
-
-    pub(crate) fn settlement_key(&self) -> Result<IdempotencyKey> {
-        IdempotencyKey::new(format!("{}.settle", self.execution_key))
     }
 }
 
@@ -113,27 +92,14 @@ pub struct PaymentVerification {
 pub struct SettlePaymentRequest {
     #[serde(flatten)]
     pub context: OperationContext,
-    pub execution_key: String,
     pub intent_id: String,
     pub verification_ref: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct IncomingPayment {
-    pub scenario_id: String,
-    pub run_id: String,
-    pub offer_id: String,
-    pub resource: String,
-    pub idempotency_key: String,
-    pub request_hash: String,
-    pub credential: PaymentCredential,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettledIncomingPayment {
     pub intent: PaymentIntent,
     pub receipt: PaymentReceipt,
-    pub execution_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

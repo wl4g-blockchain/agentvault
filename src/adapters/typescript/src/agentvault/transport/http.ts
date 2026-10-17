@@ -37,7 +37,7 @@ export class ApiError extends Error {
 }
 
 export interface VaultTransport {
-  request<T>(method: 'GET' | 'POST', path: string, body?: unknown, idempotencyKey?: string): Promise<T>;
+  request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T>;
 }
 
 export class HttpVaultTransport implements VaultTransport {
@@ -62,7 +62,7 @@ export class HttpVaultTransport implements VaultTransport {
     return `HttpVaultTransport { baseUrl: ${JSON.stringify(this.base.origin)}, authguardBearer: ${this.authguardBearer ? '<redacted>' : 'disabled'} }`;
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
       throw new Error('path must be origin-relative');
     }
@@ -78,7 +78,6 @@ export class HttpVaultTransport implements VaultTransport {
         headers['content-type'] = 'application/json';
         encoded = JSON.stringify(body);
       }
-      if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
       const init: RequestInit = { method, headers, redirect: 'manual', signal: controller.signal };
       if (encoded !== undefined) init.body = encoded;
       const response = await fetch(target, init);

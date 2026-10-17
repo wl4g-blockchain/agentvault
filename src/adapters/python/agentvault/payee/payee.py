@@ -52,8 +52,7 @@ class PayeeMiddleware:
             raise RuntimeError("valid AgentVault verification omitted settlement identity")
         _validate_verification_binding(operation, challenge, verification)
         payment = self._settle_payment(SettlePaymentRequest(
-            operation.settlement_context(), operation.execution_key,
-            verification.intent.id, verification.verification_ref))
+            operation.settlement_context(), verification.intent.id, verification.verification_ref))
         _validate_settlement_binding(operation, verification, payment)
         return ProtectionOutcome.authorized(payment)
 
@@ -62,18 +61,15 @@ class PayeeMiddleware:
         return PaymentOffer.from_wire(value)
 
     def _create_challenge(self, request: CreateChallengeRequest) -> PaymentChallenge:
-        value = self._transport.request(
-            "POST", "/api/v1/payee/challenges", request.wire(), request.context.idempotency_key)
+        value = self._transport.request("POST", "/api/v1/payee/challenges", request.wire())
         return PaymentChallenge.from_wire(value)
 
     def _verify_payment(self, request: VerifyPaymentRequest) -> PaymentVerification:
-        value = self._transport.request(
-            "POST", "/api/v1/payee/verify", request.wire(), request.context.idempotency_key)
+        value = self._transport.request("POST", "/api/v1/payee/verify", request.wire())
         return PaymentVerification.from_wire(value)
 
     def _settle_payment(self, request: SettlePaymentRequest) -> SettledIncomingPayment:
-        value = self._transport.request(
-            "POST", "/api/v1/payee/settle", request.wire(), request.context.idempotency_key)
+        value = self._transport.request("POST", "/api/v1/payee/settle", request.wire())
         return SettledIncomingPayment.from_wire(value)
 
     def get_receipt(self, scenario_id: str, intent_id: str) -> PaymentReceipt:
@@ -150,6 +146,5 @@ def _validate_settlement_binding(
         or receipt.requested_amount != intent.amount
         or receipt.settled_amount != intent.settled_amount
         or receipt.status.value != "settled"
-        or payment.execution_key != operation.execution_key
     ):
         raise RuntimeError("invalid AgentVault settlement response")

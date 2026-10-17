@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use prometheus_client::{
     encoding::{text::encode, EncodeLabelSet},
@@ -49,6 +52,37 @@ pub struct AgentVaultMetrics {
     payments_in_flight: Gauge,
 }
 
+/// Fail-safe timer for one transport-neutral payment operation. Unless the
+/// application service explicitly marks completion, dropping the guard records
+/// a failure; early returns therefore cannot silently disappear from metrics.
+#[must_use]
+#[derive(Debug)]
+pub struct PaymentOperationGuard {
+    metrics: AgentVaultMetrics,
+    operation: &'static str,
+    direction: &'static str,
+    started: Instant,
+    succeeded: bool,
+}
+
+impl PaymentOperationGuard {
+    /// Marks the guarded operation as successfully completed.
+    pub fn succeed(&mut self) {
+        self.succeeded = true;
+    }
+}
+
+impl Drop for PaymentOperationGuard {
+    fn drop(&mut self) {
+        self.metrics.payment_finished(
+            self.operation,
+            self.direction,
+            self.succeeded,
+            self.started.elapsed().as_secs_f64(),
+        );
+    }
+}
+
 impl Default for AgentVaultMetrics {
     fn default() -> Self {
         let payment_operations = Family::default();
@@ -89,6 +123,17 @@ impl Default for AgentVaultMetrics {
 }
 
 impl AgentVaultMetrics {
+    pub fn payment_operation(&self, operation: &'static str, direction: &'static str) -> PaymentOperationGuard {
+        self.payment_started();
+        PaymentOperationGuard {
+            metrics: self.clone(),
+            operation,
+            direction,
+            started: Instant::now(),
+            succeeded: false,
+        }
+    }
+
     pub fn payment_started(&self) {
         self.payments_in_flight.inc();
     }
@@ -184,6 +229,8 @@ fn bounded_route(value: &str) -> &'static str {
         "/api/v1/payments/{intent_id}/receipt"
     } else if value.ends_with("/payments/{intent_id}") {
         "/api/v1/payments/{intent_id}"
+    } else if value.ends_with("/payments/{intent_id}/outbound-response") {
+        "/api/v1/payments/{intent_id}/outbound-response"
     } else if value.ends_with("/approvals/{approval_id}/decision") {
         "/api/v1/approvals/{approval_id}/decision"
     } else if value.ends_with("/approvals/{approval_id}") {

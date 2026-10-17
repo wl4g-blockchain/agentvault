@@ -52,36 +52,16 @@ class PaymentRequired:
 @dataclass(frozen=True)
 class AuthorizePaymentRequest:
     context: OperationContext
-    wallet_id: str
-    protocol: str
-    asset: AssetIdentity
-    amount: str
-    recipient: str
-    resource: str
     challenge: PaymentRequired
 
     def __post_init__(self) -> None:
-        if self.context.run_id is None:
-            raise ValueError("run_id is required for payment operations")
-        for name, value in (
-            ("wallet_id", self.wallet_id), ("protocol", self.protocol), ("amount", self.amount),
-            ("recipient", self.recipient), ("resource", self.resource),
-        ):
-            required(name, value)
-        if self.resource != self.challenge.resource:
-            raise ValueError("resource must exactly match the challenge resource")
-        if self.challenge.protocol_hint is not None and self.challenge.protocol_hint != self.protocol:
-            raise ValueError("protocol must match the 402 protocol hint")
+        required("challenge.origin", self.challenge.origin)
+        required("challenge.resource", self.challenge.resource)
+        required("challenge.content_type", self.challenge.content_type)
 
     def wire(self) -> dict[str, Any]:
         return {
             **self.context.wire(),
-            "wallet_id": self.wallet_id,
-            "protocol": self.protocol,
-            "asset": self.asset.wire(),
-            "amount": self.amount,
-            "recipient": self.recipient,
-            "resource": self.resource,
             "challenge": self.challenge.wire(),
         }
 
@@ -134,8 +114,6 @@ class ReportOutboundResponseRequest:
     payment_response: str
 
     def __post_init__(self) -> None:
-        if self.context.run_id is None:
-            raise ValueError("run_id is required for payment operations")
         if (
             not self.payment_response
             or len(self.payment_response) > 16 * 1024
@@ -204,19 +182,13 @@ class PaymentBalance:
 @dataclass(frozen=True)
 class PayerRequestContext:
     run_id: str
-    idempotency_key: str
 
     def __post_init__(self) -> None:
         required("run_id", self.run_id)
-        OperationContext("validation", self.idempotency_key, self.run_id)
-
-    @classmethod
-    def for_operation(cls, run_id: str, operation: str) -> "PayerRequestContext":
-        context = OperationContext.for_operation("validation", run_id, operation)
-        return cls(run_id, context.idempotency_key)
+        OperationContext("validation", self.run_id)
 
     def operation_context(self, scenario_id: str) -> OperationContext:
-        return OperationContext(scenario_id, self.idempotency_key, self.run_id)
+        return OperationContext(scenario_id, self.run_id)
 
 
 @dataclass(frozen=True, repr=False)

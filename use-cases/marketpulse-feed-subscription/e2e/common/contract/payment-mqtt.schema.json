@@ -84,13 +84,14 @@
     "approvalRequired": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "approvalId", "intentId", "scenarioId", "expiresAt"],
+      "required": ["type", "version", "correlationId", "approvalId", "intentId", "runId", "scenarioId", "expiresAt"],
       "properties": {
         "type": { "const": "payment.approval_required" },
         "version": { "const": 1 },
         "correlationId": { "type": "string" },
         "approvalId": { "type": "string" },
         "intentId": { "type": "string" },
+        "runId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$" },
         "scenarioId": { "type": "string" },
         "requestedAmount": { "type": "string", "pattern": "^[0-9]+$" },
         "asset": { "type": "string" },

@@ -36,6 +36,7 @@ public final class Approval {
     public record ApprovalRequest(
             String id,
             @JsonProperty("intent_id") String intentId,
+            @JsonProperty("run_id") String runId,
             @JsonProperty("requested_amount") String requestedAmount,
             @JsonProperty("approved_amount") String approvedAmount,
             @JsonProperty("requested_by") String requestedBy,
@@ -59,13 +60,12 @@ public final class Approval {
     public record SubmitApprovalDecisionRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             @JsonProperty("approval_id") String approvalId,
             ApprovalDecisionKind decision,
             @JsonProperty("approved_amount") String approvedAmount,
             String reason) {
         public SubmitApprovalDecisionRequest {
-            new OperationContext(scenarioId, runId, idempotencyKey);
+            new OperationContext(scenarioId, runId);
             Base.required("approval_id", approvalId);
             if (decision == ApprovalDecisionKind.APPROVE) Base.required("approved_amount", approvedAmount);
             if (decision == ApprovalDecisionKind.REJECT && approvedAmount != null) {
@@ -75,8 +75,7 @@ public final class Approval {
 
         public SubmitApprovalDecisionRequest(OperationContext context, String approvalId, ApprovalDecisionKind decision,
                                              String approvedAmount, String reason) {
-            this(context.scenarioId(), context.runId(), context.idempotencyKey(), approvalId,
-                    decision, approvedAmount, reason);
+            this(context.scenarioId(), context.runId(), approvalId, decision, approvedAmount, reason);
         }
     }
 }

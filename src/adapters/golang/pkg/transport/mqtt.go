@@ -147,6 +147,10 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	if err := subscribe.Error(); err != nil {
 		return TransportResponse{}, fmt.Errorf("subscribe AgentVault MQTT result: %w", err)
 	}
+	grants, ok := subscribe.(*mqtt.SubscribeToken)
+	if !ok || !mqttSubscriptionGranted(grants.Result(), resultFilter) {
+		return TransportResponse{}, errors.New("AgentVault MQTT result subscription was rejected or downgraded")
+	}
 	envelope := mqttRequestEnvelope{
 		Type:          operation.messageType,
 		Version:       1,
@@ -189,6 +193,14 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 		}
 		return TransportResponse{Status: response.Status, Headers: response.Headers, Body: body}, nil
 	}
+}
+
+func mqttSubscriptionGranted(results map[string]byte, expectedTopic string) bool {
+	if len(results) != 1 {
+		return false
+	}
+	qos, ok := results[expectedTopic]
+	return ok && qos == 1
 }
 
 func mqttResponseTypeMatches(actual string, status int, expected string) bool {

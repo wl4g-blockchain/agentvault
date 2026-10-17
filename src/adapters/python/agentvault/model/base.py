@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
-_KEY = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 def required(name: str, value: str) -> str:
@@ -60,29 +60,16 @@ class ReservationStatus(str, Enum):
 @dataclass(frozen=True)
 class OperationContext:
     scenario_id: str
-    idempotency_key: str
-    run_id: str | None = None
+    run_id: str
 
     def __post_init__(self) -> None:
         required("scenario_id", self.scenario_id)
-        if not _KEY.fullmatch(self.idempotency_key):
-            raise ValueError("idempotency_key contains unsupported characters or length")
-        if self.run_id is not None:
-            required("run_id", self.run_id)
-
-    @classmethod
-    def for_operation(cls, scenario_id: str, run_id: str, operation: str) -> "OperationContext":
-        required("run_id", run_id)
-        required("operation", operation)
-        if ":" in run_id or ":" in operation:
-            raise ValueError("run_id and operation cannot contain ':'")
-        return cls(scenario_id, f"{run_id}:{operation}", run_id)
+        required("run_id", self.run_id)
+        if not _IDENTIFIER.fullmatch(self.run_id):
+            raise ValueError("run_id contains unsupported characters or length")
 
     def wire(self) -> dict[str, Any]:
-        value: dict[str, Any] = {"scenario_id": self.scenario_id, "idempotency_key": self.idempotency_key}
-        if self.run_id is not None:
-            value["run_id"] = self.run_id
-        return value
+        return {"scenario_id": self.scenario_id, "run_id": self.run_id}
 
 
 @dataclass(frozen=True)
@@ -194,7 +181,6 @@ class PaymentIntent:
     settled_amount: str
     resource: str
     challenge_hash: str | None
-    idempotency_key: str
     request_hash: str
     status: PaymentStatus
     reservation_status: ReservationStatus
@@ -224,7 +210,6 @@ class PaymentIntent:
             settled_amount=_text(value.get("settled_amount")),
             resource=_text(value.get("resource")),
             challenge_hash=_optional_text(value.get("challenge_hash")),
-            idempotency_key=_text(value.get("idempotency_key")),
             request_hash=_text(value.get("request_hash")),
             status=PaymentStatus(_text(value.get("status"))),
             reservation_status=ReservationStatus(_text(value.get("reservation_status"))),

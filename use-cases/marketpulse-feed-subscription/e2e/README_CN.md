@@ -15,7 +15,10 @@ Mock 包装成 E2E。它模拟两个完整系统：
 - **QuantStream** 是买方量化采集平台。Go、Rust、Python、Java、TypeScript
   五个逻辑等价的独立后端定时调用两个 Tool；SDK 检测 402，通过 MQTT 请求
   AgentVault 对 Intent 绑定报文签名，收到 Credential 后重试同一 MCP 操作，
-  上报官方付款响应并持久化采集结果。五个服务都不持有 EOA 私钥。
+  上报官方付款响应并持久化采集结果。五个服务只配置 Scenario，不配置 Wallet、
+  Policy 或支付投影，也不持有 EOA 私钥；AgentVault 从 Scenario 的双成员 Policy
+  Wallet 池自动选择可签名 EOA。两次真实收费采集必须分别落到两个不同 Wallet，
+  证明的是服务端自动选择，而不是把固定 Wallet ID 隐藏到别处。
 
 Node 管理 UI 属于 QuantStream，而非 AgentVault。它订阅持久审批通知，重连后
 从权威 API 恢复 Pending Approval，展示精确 Intent/金额并发布管理员决策。
@@ -53,12 +56,14 @@ QuantStream（Go/Rust/Python/Java/TS）
 
 Provisioning Manifest 明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
 `Policy 1:N Wallet membership`。一个 Wallet 可被多个 Policy 引用，以支持多个
-Scenario 共享钱包；Wallet 总硬限额与固定事务锁顺序防止累计超额。
+Scenario 共享钱包；AgentVault 在同等授权结果中优先选择当日使用量最低的钱包，
+稳定散列负责并列决胜。Wallet 总硬限额与固定事务锁顺序防止累计超额。
 
 - QuantStream OUTBOUND 正常日额度：1 USDC；
 - 第二笔付款进入 `PendingApproval`；
 - 单次审批可增加额度上限：50 USDC；
-- 共享付款 Wallet 当日硬限额：51 USDC；
+- 每个付款 Wallet 当日硬限额：51 USDC；
+- 两个 OUTBOUND Intent 必须各选择一个池成员，Anvil 上两个 EOA 必须各扣 1 USDC；
 - MarketPulse INBOUND 收款/销售日限额：10 USDC，用于防止超卖。
 
 审批 Grant 绑定 Intent ID、不可变 Request Hash、金额、审批人、有效期和 Nonce。

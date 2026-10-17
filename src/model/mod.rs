@@ -18,8 +18,8 @@ pub use event::{PaymentEvent, PaymentEventType};
 pub use ledger::{settlement_posting_key, LedgerEntryType, PaymentLedgerEntry};
 pub use offer::PaymentOffer;
 pub use payment::{
-    Amount, AssetIdentity, BudgetUnit, IdempotencyCheck, IncomingPayment, PaymentAuthorizationResult, PaymentChallenge,
-    PaymentCredential, PaymentDirection, PaymentIntent, PaymentStatus, ReservationStatus,
+    Amount, AssetIdentity, BudgetUnit, PaymentAuthorizationResult, PaymentChallenge, PaymentCredential,
+    PaymentDirection, PaymentIntent, PaymentStatus, ReplayCheck, ReservationStatus,
 };
 pub use policy::{PaymentPolicy, PaymentPolicyLimits};
 pub use receipt::PaymentReceipt;

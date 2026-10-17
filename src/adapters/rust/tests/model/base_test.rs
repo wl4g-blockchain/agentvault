@@ -1,10 +1,9 @@
 use super::*;
 
 #[test]
-fn base_models_enforce_stable_idempotency_and_redact_credentials() {
-    let key = IdempotencyKey::for_operation("run-1", "realtime").expect("stable key");
-    assert_eq!(key.as_str(), "run-1:realtime");
-    assert!(IdempotencyKey::new("unsafe/key").is_err());
+fn base_models_enforce_safe_run_identity_and_redact_credentials() {
+    assert_eq!(OperationContext::new("scenario-1", "run-1").unwrap().run_id, "run-1");
+    assert!(OperationContext::new("scenario-1", "unsafe/run").is_err());
 
     let credential = PaymentCredential {
         protocol: "x402".to_owned(),

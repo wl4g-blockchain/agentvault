@@ -28,6 +28,7 @@ pub(crate) use payment::{
     ReportOutboundResponseResponse, ResolveOfferRequest, SettlePaymentRequest, SubmitApprovalDecisionRequest,
     VerifyPaymentRequest,
 };
+pub(crate) use principal::PrincipalResolutionError;
 pub use principal::{CallerPrincipal, PrincipalContext};
 
 #[derive(Clone)]
@@ -100,10 +101,18 @@ async fn enforce_api_policy(State(state): State<ApiMiddlewareState>, request: Re
         .get::<MatchedPath>()
         .map_or_else(|| request.uri().path().to_owned(), |path| path.as_str().to_owned());
     let method = request.method().as_str().to_owned();
-    let Some(principal) = state.principal_context.resolve(request.headers()) else {
-        let response = ApiError::unauthorized().into_response();
-        state.metrics.record_http(&route, &method, response.status().as_u16());
-        return response;
+    let principal = match state.principal_context.resolve_request(request.headers()).await {
+        Ok(Some(principal)) => principal,
+        Ok(None) | Err(PrincipalResolutionError::Invalid) => {
+            let response = ApiError::unauthorized().into_response();
+            state.metrics.record_http(&route, &method, response.status().as_u16());
+            return response;
+        }
+        Err(PrincipalResolutionError::Unavailable) => {
+            let response = ApiError::dependency_unavailable().into_response();
+            state.metrics.record_http(&route, &method, response.status().as_u16());
+            return response;
+        }
     };
     let mut request = request;
     request.extensions_mut().insert(principal);

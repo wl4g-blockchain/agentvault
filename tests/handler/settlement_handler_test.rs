@@ -92,3 +92,42 @@ fn terminal_non_settlement_releases_only_an_outstanding_reservation() {
         ReservationStatus::Consumed
     );
 }
+
+#[test]
+fn durable_receipt_falls_back_to_reconciliation_event() {
+    let receipt = PaymentReceipt {
+        intent_id: "intent-1".to_owned(),
+        scenario_id: "scenario-1".to_owned(),
+        direction: PaymentDirection::Inbound,
+        protocol: "x402".to_owned(),
+        asset: AssetIdentity {
+            network: "eip155:31337".to_owned(),
+            asset: "USDC".to_owned(),
+            token_contract: Some("0x1111111111111111111111111111111111111111".to_owned()),
+            decimals: 6,
+        },
+        recipient: "0x2222222222222222222222222222222222222222".to_owned(),
+        payer: Some("0x3333333333333333333333333333333333333333".to_owned()),
+        requested_amount: Amount::new(10),
+        settled_amount: Amount::new(10),
+        status: PaymentStatus::Settled,
+        tx_hash: Some(format!("0x{}", "ab".repeat(32))),
+        settlement_ref: None,
+        evidence_hash: "evidence".to_owned(),
+        confirmed_at: 10,
+    };
+    let reconciled = PaymentEvent {
+        id: "event-1".to_owned(),
+        intent_id: receipt.intent_id.clone(),
+        event_type: PaymentEventType::Reconciled,
+        attempt_no: 0,
+        signature_ref: None,
+        tx_hash: receipt.tx_hash.clone(),
+        payload: json!({"receipt": receipt}),
+        created_at: 10,
+    };
+
+    let recovered = durable_receipt(None, Some(&reconciled)).unwrap();
+    assert_eq!(recovered.intent_id, "intent-1");
+    assert_eq!(recovered.status, PaymentStatus::Settled);
+}

@@ -9,6 +9,10 @@ server:
     direct_context_hmac_key:
       file: ""
       env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY
+    scope_resolver:
+      enabled: true
+      target: http://authguard-authz:8081
+      timeout: 2s
 
 mgmt:
   enabled: true
@@ -102,7 +106,6 @@ agentvault:
     keys:
       recovery-v1: { file: "", env: AGENTVAULT_RECOVERY_KEY_V1 }
   approval:
-    enabled: true
     request_ttl: 15m
     grant_ttl: 5m
     expiry_interval: 15s
@@ -125,7 +128,7 @@ agentvault:
   transport:
     grpc:
       enabled: false
-      host: 127.0.0.1
+      host: 0.0.0.0
       port: 50051
       max_message_bytes: 2097152
       request_timeout: 30s

@@ -27,6 +27,7 @@ spec:
       labels:
         {{- include "agentvault.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: server
+        authguard.io/scope-client: "true"
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -2,7 +2,6 @@ import unittest
 
 from agentvault.agentvault import AgentVault
 from agentvault.config import PayeeConfig, PayerConfig
-from agentvault.model import AssetIdentity
 
 
 class _Transport:
@@ -13,8 +12,6 @@ class _Transport:
 class AgentVaultTest(unittest.TestCase):
     def test_builds_both_role_middlewares(self):
         vault = AgentVault(_Transport())
-        payer = vault.payer(PayerConfig(
-            "scenario", "wallet", "x402", AssetIdentity("eip155:31337", "USDC", 6),
-            "1000", "0x0000000000000000000000000000000000000001"))
+        payer = vault.payer(PayerConfig("scenario"))
         self.assertIsNotNone(payer)
         self.assertIsNotNone(vault.payee(PayeeConfig()))

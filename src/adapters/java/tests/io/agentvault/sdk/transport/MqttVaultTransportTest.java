@@ -1,6 +1,7 @@
 package io.agentvault.sdk.transport;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import io.agentvault.sdk.config.Config.MqttConfig;
 import java.time.Duration;
@@ -15,5 +16,11 @@ final class MqttVaultTransportTest {
                 Duration.ofSeconds(1), 1024);
         assertFalse(config.toString().contains("secret-user"));
         assertFalse(config.toString().contains("secret-pass"));
+    }
+
+    @Test void requiresExactQosOneSubscriptionGrants() {
+        assertTrue(MqttVaultTransport.subscriptionGranted(new int[]{1}, 1));
+        assertFalse(MqttVaultTransport.subscriptionGranted(new int[]{128}, 1));
+        assertFalse(MqttVaultTransport.subscriptionGranted(new int[]{1, 1}, 1));
     }
 }

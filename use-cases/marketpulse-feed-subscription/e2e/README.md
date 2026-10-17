@@ -19,7 +19,11 @@ two real business systems rather than a unit-test fixture:
   Go, Rust, Python, Java, and TypeScript services poll both tools, detect 402,
   request intent-bound signing over MQTT through their language SDK, retry the
   identical MCP operation with the returned credential, submit the official
-  payment response, and durably store the result. They never hold an EOA key.
+  payment response, and durably store the result. They configure only a
+  Scenario—never a Wallet, Policy, or projected payment field. AgentVault
+  selects a signable EOA from the Scenario's two-member Policy wallet pool;
+  the services never hold an EOA key. The two paid runs must settle from two
+  distinct Wallets, proving selection rather than merely hiding a fixed ID.
 
 The Node admin UI is part of QuantStream, not AgentVault. It consumes durable
 approval notifications, reconciles pending approvals after reconnect, displays
@@ -61,13 +65,17 @@ override either identity.
 
 The provisioning manifest expresses `Client 1:N Scenario`, `Scenario 1:N
 Policy`, and `Policy 1:N Wallet membership`. A Wallet may appear in more than
-one Policy so multiple Scenarios can share it; this is guarded by a Wallet-wide
-hard limit and deterministic transactional locks.
+one Policy so multiple Scenarios can share it. Among equally authorized
+candidates AgentVault prefers the lowest daily usage and uses a stable hash to
+break ties; Wallet-wide hard limits and deterministic transactional locks remain
+authoritative.
 
 - QuantStream OUTBOUND normal daily allowance: 1 USDC.
 - One additional payment enters `PendingApproval`.
 - One-time approval overage ceiling: 50 USDC.
-- Shared payer Wallet hard daily ceiling: 51 USDC.
+- Each payer Wallet hard daily ceiling: 51 USDC.
+- The two settled OUTBOUND Intents must reference both pool members exactly
+  once; each EOA must lose exactly 1 USDC on Anvil.
 - MarketPulse INBOUND sales/receipt ceiling: 10 USDC per day, preventing
   overselling even though funds flow toward the payee.
 

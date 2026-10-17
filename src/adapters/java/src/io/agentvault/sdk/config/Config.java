@@ -1,6 +1,5 @@
 package io.agentvault.sdk.config;
 
-import io.agentvault.sdk.model.Base.AssetIdentity;
 import java.net.InetAddress;
 import java.time.Duration;
 
@@ -9,22 +8,13 @@ public final class Config {
 
     public record PayerConfig(
             String scenarioId,
-            String walletId,
-            String protocol,
-            AssetIdentity asset,
-            String amount,
-            String recipient,
             Duration approvalTimeout,
             Duration approvalPollInterval,
             int deliveryRetries,
             int maxChallengeBytes) {
         public PayerConfig {
             require("scenarioId", scenarioId);
-            require("walletId", walletId);
-            require("protocol", protocol);
-            require("amount", amount);
-            require("recipient", recipient);
-            if (asset == null || approvalTimeout == null || approvalTimeout.isZero() || approvalTimeout.isNegative()
+            if (approvalTimeout == null || approvalTimeout.isZero() || approvalTimeout.isNegative()
                     || approvalPollInterval == null || approvalPollInterval.isZero() || approvalPollInterval.isNegative()
                     || approvalPollInterval.compareTo(approvalTimeout) > 0 || deliveryRetries < 0
                     || deliveryRetries > 3 || maxChallengeBytes <= 0) {
@@ -32,14 +22,8 @@ public final class Config {
             }
         }
 
-        public static PayerConfig defaults(
-                String scenarioId,
-                String walletId,
-                String protocol,
-                AssetIdentity asset,
-                String amount,
-                String recipient) {
-            return new PayerConfig(scenarioId, walletId, protocol, asset, amount, recipient,
+        public static PayerConfig defaults(String scenarioId) {
+            return new PayerConfig(scenarioId,
                     Duration.ofMinutes(2), Duration.ofSeconds(1), 0, 256 * 1024);
         }
     }

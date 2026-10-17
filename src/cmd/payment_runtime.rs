@@ -11,10 +11,11 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::{
+    apm::AgentVaultMetrics,
     cache::{CacheFactory, ICache},
     config::{AppConfig, ChainFamily, ExternalProviderConfig, MppAssetConfig, SecretHeaderConfig, X402AssetConfig},
     controller::http::{payment_router, PaymentApi, PaymentApiDependencies, PrincipalContext},
-    controller::{GrpcController, LocalController, MqttController},
+    controller::{GrpcController, LocalController, MqttController, ReadinessProbe},
     handler::job::{
         ApprovalExpirationJob, PaymentEvidenceRouter, ReconciliationConfig as JobReconciliationConfig,
         ReconciliationEvidenceSource, ReconciliationJob,
@@ -33,8 +34,8 @@ use crate::{
         PaymentProtocol,
     },
     storage::{
-        ApprovalStorage, ApproverStorage, ClientStorage, EventStorage, LedgerStorage, OfferStorage, OutboxStorage,
-        PaymentStorage, PolicyStorage, ScenarioStorage, SigningStorage, StorageFactory, StoragePorts,
+        ApprovalStorage, ApproverStorage, ClientStorage, EventStorage, IStorage, LedgerStorage, OfferStorage,
+        OutboxStorage, PaymentStorage, PolicyStorage, ScenarioStorage, SigningStorage, StorageFactory, StoragePorts,
         WalletPaymentSigner, WalletStorage,
     },
     utils::secret::read_secret_ref,
@@ -54,15 +55,25 @@ pub(super) struct AssembledPaymentRuntime {
     pub local: Option<LocalController>,
     pub mqtt: Option<MqttController>,
     pub cache_health: CacheHealthComponent,
-    pub reconciliation: ReconciliationComponent,
+    pub reconciliation: Option<ReconciliationComponent>,
     pub approval_expiration: ApprovalExpirationComponent,
+    pub storage_readiness: Arc<dyn ReadinessProbe>,
     pub resources: PaymentRuntimeResources,
 }
 
-pub(super) async fn assemble(config: &AppConfig) -> anyhow::Result<AssembledPaymentRuntime> {
+pub(super) async fn assemble(
+    config: &AppConfig,
+    metrics: AgentVaultMetrics,
+) -> anyhow::Result<AssembledPaymentRuntime> {
     let cache_factory = Arc::new(CacheFactory::new());
     let storage_factory = Arc::new(StorageFactory::new());
-    let assembled = assemble_with_factories(config, Arc::clone(&cache_factory), Arc::clone(&storage_factory)).await;
+    let assembled = assemble_with_factories(
+        config,
+        Arc::clone(&cache_factory),
+        Arc::clone(&storage_factory),
+        metrics,
+    )
+    .await;
     if assembled.is_err() {
         let _ = cache_factory.shutdown_all().await;
         let _ = storage_factory.shutdown_all().await;
@@ -74,6 +85,7 @@ async fn assemble_with_factories(
     config: &AppConfig,
     cache_factory: Arc<CacheFactory>,
     storage_factory: Arc<StorageFactory>,
+    metrics: AgentVaultMetrics,
 ) -> anyhow::Result<AssembledPaymentRuntime> {
     let cache = cache_factory
         .create(&config.cache)
@@ -90,7 +102,7 @@ async fn assemble_with_factories(
     let clients = Arc::clone(&ports.clients);
     let scenarios = Arc::clone(&ports.scenarios);
     let outbox = Arc::clone(&ports.outbox);
-    let application = build_application(config, ports)?;
+    let application = build_application(config, ports, metrics.clone())?;
     let api = application.api;
     let local = config
         .agentvault
@@ -125,7 +137,12 @@ async fn assemble_with_factories(
         .enabled
         .then(|| {
             PrincipalContext::from_config(&config.server.authguard).map(|principals| {
-                GrpcController::new(config.agentvault.transport.grpc.clone(), principals, router.clone())
+                GrpcController::new(
+                    config.agentvault.transport.grpc.clone(),
+                    principals,
+                    router.clone(),
+                    metrics.clone(),
+                )
             })
         })
         .transpose()
@@ -141,11 +158,27 @@ async fn assemble_with_factories(
         },
         reconciliation: application.reconciliation,
         approval_expiration: application.approval_expiration,
+        storage_readiness: Arc::new(StorageReadinessProbe { storage }),
         resources: PaymentRuntimeResources {
             cache_factory,
             storage_factory,
         },
     })
+}
+
+struct StorageReadinessProbe {
+    storage: Arc<dyn IStorage>,
+}
+
+#[async_trait]
+impl ReadinessProbe for StorageReadinessProbe {
+    fn name(&self) -> &'static str {
+        "authoritative SQL storage"
+    }
+
+    async fn check(&self) -> anyhow::Result<()> {
+        self.storage.ping().await.context("ping authoritative SQL storage")
+    }
 }
 
 pub(super) struct PaymentRuntimeResources {
@@ -300,7 +333,7 @@ impl PaymentPorts {
 
 struct BuiltPaymentApplication {
     api: Arc<PaymentApi>,
-    reconciliation: ReconciliationComponent,
+    reconciliation: Option<ReconciliationComponent>,
     approval_expiration: ApprovalExpirationComponent,
 }
 
@@ -336,7 +369,11 @@ struct ExecutionHandlers {
     outbound_evidence: Arc<OutboundEvidenceHandler>,
 }
 
-fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<BuiltPaymentApplication> {
+fn build_application(
+    config: &AppConfig,
+    ports: PaymentPorts,
+    metrics: AgentVaultMetrics,
+) -> anyhow::Result<BuiltPaymentApplication> {
     let PaymentPorts {
         clients,
         scenarios: scenarios_store,
@@ -352,14 +389,7 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
         signing,
         wallet_signer,
     } = ports;
-    let PaymentAdapters {
-        material_protector,
-        payer_protocols,
-        payee_protocols,
-        providers,
-        balances,
-        receipts,
-    } = build_adapters(config)?;
+    let adapters = build_adapters(config)?;
 
     let scenarios = Arc::new(ScenarioHandler::new(Arc::clone(&clients), Arc::clone(&scenarios_store)));
     let payments_handler = build_payment_handler(
@@ -367,21 +397,21 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
         Arc::clone(&scenarios),
         Arc::clone(&policies),
         Arc::clone(&payments),
-        Arc::clone(&payer_protocols),
+        Arc::clone(&adapters.payer_protocols),
     )?;
     let (approval_authorizer, approval_handler) = build_approval_services(
         config,
         approvers,
         Arc::clone(&approvals),
         Arc::clone(&payments),
-        Arc::clone(&material_protector),
+        Arc::clone(&adapters.material_protector),
     )?;
     let offer_handler = Arc::new(OfferHandler::new(
         Arc::clone(&scenarios),
         Arc::clone(&offers),
         Arc::clone(&policies),
         Arc::clone(&wallets),
-        Arc::clone(&payee_protocols),
+        Arc::clone(&adapters.payee_protocols),
     ));
     let handlers = build_execution_handlers(
         config,
@@ -393,12 +423,12 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
             payments: Arc::clone(&payments),
             events: Arc::clone(&events),
             signing,
-            payer_protocols: Arc::clone(&payer_protocols),
-            payee_protocols,
-            providers,
-            balances: Arc::clone(&balances),
-            receipts,
-            material_protector,
+            payer_protocols: Arc::clone(&adapters.payer_protocols),
+            payee_protocols: adapters.payee_protocols,
+            providers: adapters.providers,
+            balances: Arc::clone(&adapters.balances),
+            receipts: adapters.receipts,
+            material_protector: adapters.material_protector,
             wallet_signer,
         },
     )?;
@@ -412,7 +442,7 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
         Arc::clone(&outbound_evidence_handler),
     )?;
     let approval_expiration = build_approval_expiration(config, Arc::clone(&approvals))?;
-    let api = Arc::new(PaymentApi::new(PaymentApiDependencies {
+    let api = build_payment_api(PaymentApiDependencies {
         clients,
         scenario_store: scenarios_store,
         scenarios,
@@ -423,7 +453,7 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
         offer_handler,
         approval_handler,
         approval_authorizer,
-        payer_protocols,
+        payer_protocols: adapters.payer_protocols,
         payments,
         approvals,
         offers,
@@ -431,13 +461,18 @@ fn build_application(config: &AppConfig, ports: PaymentPorts) -> anyhow::Result<
         wallets,
         events,
         ledger,
-        balances,
-    }));
+        balances: adapters.balances,
+        metrics,
+    });
     Ok(BuiltPaymentApplication {
         api,
         reconciliation,
         approval_expiration,
     })
+}
+
+fn build_payment_api(dependencies: PaymentApiDependencies) -> Arc<PaymentApi> {
+    Arc::new(PaymentApi::new(dependencies))
 }
 
 fn build_payment_handler(
@@ -550,17 +585,20 @@ fn build_reconciliation(
     payments: Arc<dyn PaymentStorage>,
     settlement: Arc<SettlementHandler>,
     outbound_evidence: Arc<OutboundEvidenceHandler>,
-) -> anyhow::Result<ReconciliationComponent> {
+) -> anyhow::Result<Option<ReconciliationComponent>> {
+    let settings = &config.agentvault.reconciliation;
+    if !settings.enabled {
+        return Ok(None);
+    }
     let provider: Arc<dyn ReconciliationEvidenceSource> = settlement;
     let evidence: Arc<dyn ReconciliationEvidenceSource> =
         Arc::new(PaymentEvidenceRouter::new(provider, outbound_evidence));
-    let settings = &config.agentvault.reconciliation;
-    Ok(ReconciliationComponent {
+    Ok(Some(ReconciliationComponent {
         job: ReconciliationJob::new(
             payments,
             evidence,
             JobReconciliationConfig {
-                worker_id: format!("{}-reconciliation", config.server.service_name),
+                worker_id: reconciliation_worker_id(&config.server.service_name),
                 batch_size: u32::try_from(settings.batch_size).context("reconciliation batch size exceeds u32")?,
                 lease_duration: settings.lease_ttl,
                 initial_backoff: settings.initial_backoff,
@@ -569,7 +607,11 @@ fn build_reconciliation(
         )
         .context("build reconciliation job")?,
         interval: settings.interval,
-    })
+    }))
+}
+
+fn reconciliation_worker_id(service_name: &str) -> String {
+    crate::utils::runtime_identity::unique_runtime_id(&format!("{service_name}-reconciliation"))
 }
 
 fn build_approval_expiration(
@@ -594,13 +636,6 @@ fn build_payer_protocol_registry(config: &AppConfig) -> crate::Result<ProtocolRe
         adapters.push(Arc::new(X402Adapter::new(
             x402_assets(&x402.assets),
             x402.max_challenge_ttl.as_secs(),
-        )?));
-    }
-    let mpp = &config.agentvault.payer.mpp;
-    if mpp.enabled {
-        adapters.push(Arc::new(MppAdapter::new_payer(
-            mpp_assets(&mpp.assets),
-            mpp.max_challenge_ttl.as_secs(),
         )?));
     }
     ProtocolRegistry::new(adapters)

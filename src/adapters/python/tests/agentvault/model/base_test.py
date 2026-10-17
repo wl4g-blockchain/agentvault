@@ -4,9 +4,9 @@ from agentvault.model import HttpCredential, OperationContext, PaymentCredential
 
 
 class BaseModelTest(unittest.TestCase):
-    def test_base_models_enforce_stable_idempotency_and_redact_credentials(self):
-        context = OperationContext.for_operation("scenario", "run-1", "realtime")
-        self.assertEqual(context.idempotency_key, "run-1:realtime")
+    def test_base_models_enforce_safe_run_identity_and_redact_credentials(self):
+        context = OperationContext("scenario", "run-1")
+        self.assertEqual(context.run_id, "run-1")
         with self.assertRaises(ValueError):
             OperationContext("scenario", "unsafe/key")
         credential = PaymentCredential(

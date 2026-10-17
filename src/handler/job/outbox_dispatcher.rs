@@ -69,8 +69,9 @@ pub enum PaymentEventDelivery {
 }
 
 /// Application/provider transport boundary for one durable payment event.
-/// Implementations must deduplicate by `message.idempotency_key` because a
-/// crash after remote delivery and before local acknowledgement causes replay.
+/// Implementations must deduplicate by
+/// `(message.run_id, message.event_type)` because a crash after remote
+/// delivery and before local acknowledgement causes replay.
 #[async_trait]
 pub trait PaymentEventSink: Send + Sync {
     async fn deliver(&self, message: &OutboxMessage) -> PaymentEventDelivery;

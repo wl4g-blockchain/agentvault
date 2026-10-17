@@ -55,8 +55,7 @@ impl<T> PayeeMiddleware<T> {
 impl<T: VaultTransport> PayeeMiddleware<T> {
     pub async fn challenge(&self, operation: &PayeeOperation) -> Result<PaymentChallenge> {
         operation.validate()?;
-        let context = OperationContext::new(operation.scenario_id.clone(), operation.challenge_key()?)?
-            .with_run_id(operation.run_id.clone());
+        let context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let challenge = self
             .create_challenge(&CreateChallengeRequest {
                 context,
@@ -78,8 +77,7 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
                 challenge: Box::new(challenge),
             });
         };
-        let verify_context = OperationContext::new(operation.scenario_id.clone(), operation.challenge_key()?)?
-            .with_run_id(operation.run_id.clone());
+        let verify_context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let challenge_hash = challenge.challenge_hash.clone();
         let verification = self
             .verify_payment(&VerifyPaymentRequest {
@@ -107,12 +105,10 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             .clone()
             .ok_or_else(|| Error::Decode("valid AgentVault verification omitted verification_ref".to_owned()))?;
         validate_verification_binding(operation, &challenge, &verification)?;
-        let settle_context = OperationContext::new(operation.scenario_id.clone(), operation.settlement_key()?)?
-            .with_run_id(operation.run_id.clone());
+        let settle_context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let payment = self
             .settle_payment(&SettlePaymentRequest {
                 context: settle_context,
-                execution_key: operation.execution_key.clone(),
                 intent_id: verification.intent.id.clone(),
                 verification_ref,
             })
@@ -126,29 +122,21 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
     pub async fn resolve_offer(&self, request: &ResolveOfferRequest) -> Result<PaymentOffer> {
         crate::model_base::validate_required("scenario_id", &request.scenario_id)?;
         crate::model_base::validate_required("resource", &request.resource)?;
-        self.api
-            .post(crate::paths::RESOLVE_OFFER.to_owned(), request, None)
-            .await
+        self.api.post(crate::paths::RESOLVE_OFFER.to_owned(), request).await
     }
 
     async fn create_challenge(&self, request: &CreateChallengeRequest) -> Result<PaymentChallenge> {
-        request.context.validate_with_run_id()?;
+        request.context.validate()?;
         crate::model_base::validate_required("offer_id", &request.offer_id)?;
         crate::model_base::validate_required("resource", &request.resource)?;
         crate::model_base::validate_required("origin", &request.origin)?;
         crate::model_base::validate_required("protocol", &request.protocol)?;
         crate::model_base::validate_required("request_hash", &request.request_hash)?;
-        self.api
-            .post(
-                crate::paths::CREATE_CHALLENGE.to_owned(),
-                request,
-                Some(&request.context.idempotency_key),
-            )
-            .await
+        self.api.post(crate::paths::CREATE_CHALLENGE.to_owned(), request).await
     }
 
     async fn verify_payment(&self, request: &VerifyPaymentRequest) -> Result<PaymentVerification> {
-        request.context.validate_with_run_id()?;
+        request.context.validate()?;
         crate::model_base::validate_required("challenge_hash", &request.challenge_hash)?;
         crate::model_base::validate_required("request_hash", &request.request_hash)?;
         crate::model_base::validate_required("credential.protocol", &request.credential.protocol)?;
@@ -159,26 +147,14 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
                 "credential challenge_hash does not match the request".to_owned(),
             ));
         }
-        self.api
-            .post(
-                crate::paths::VERIFY_PAYMENT.to_owned(),
-                request,
-                Some(&request.context.idempotency_key),
-            )
-            .await
+        self.api.post(crate::paths::VERIFY_PAYMENT.to_owned(), request).await
     }
 
     async fn settle_payment(&self, request: &SettlePaymentRequest) -> Result<SettledIncomingPayment> {
-        request.context.validate_with_run_id()?;
+        request.context.validate()?;
         crate::model_base::validate_required("intent_id", &request.intent_id)?;
         crate::model_base::validate_required("verification_ref", &request.verification_ref)?;
-        self.api
-            .post(
-                crate::paths::SETTLE_PAYMENT.to_owned(),
-                request,
-                Some(&request.context.idempotency_key),
-            )
-            .await
+        self.api.post(crate::paths::SETTLE_PAYMENT.to_owned(), request).await
     }
 
     pub async fn get_receipt(&self, scenario_id: &str, intent_id: &str) -> Result<PaymentReceipt> {
@@ -270,7 +246,6 @@ fn validate_settlement_binding(
         || payment.receipt.requested_amount != payment.intent.amount
         || payment.receipt.settled_amount != payment.intent.settled_amount
         || payment.receipt.status != crate::PaymentStatus::Settled
-        || payment.execution_key != operation.execution_key
     {
         return Err(Error::Decode("invalid AgentVault settlement response".to_owned()));
     }

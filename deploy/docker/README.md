@@ -2,8 +2,9 @@
 
 The default topology places every AgentVault HTTP API behind AuthGuard's Envoy
 edge. AgentVault does not parse login credentials, issue sessions, or evaluate
-IAM policies; it verifies only AuthGuard's short-lived signed workload context
-and maps its principal into the payment-domain Client/Scenario hierarchy.
+IAM policies; it verifies AuthGuard's short-lived signed workload context (or
+resolves its opaque scope token over AuthGuard's internal gRPC service) and
+maps the resulting principal into the payment-domain Client/Scenario hierarchy.
 MQTT remains outside HTTP and uses broker ACL plus registered `client_id`.
 
 ```bash
@@ -14,8 +15,12 @@ docker compose -p agentvault --env-file deploy/docker/.env \
 ```
 
 The only public listener is `http://localhost:8080`: `/auth/*` belongs to
-AuthGuard, `/api/v1/*` is protected and forwarded to AgentVault, and `/` serves
-the AgentVault Dashboard. Management port `9091` is loopback-only.
+AuthGuard, `/api/v1/*` and the optional
+`/agentvault.transport.v1.PaymentTransport/*` gRPC service are protected and
+forwarded to AgentVault, and `/` serves the AgentVault Dashboard. Management
+port `9091` is loopback-only. Set
+`AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED=true` to enable that gRPC
+listener; clients still connect through Envoy rather than port `50051`.
 
 For an intentionally identity-free trusted network, use the separate open
 topology. It sets `server.authguard.enabled=false`; therefore every HTTP API is

@@ -5,7 +5,7 @@ from agentvault.model import PayerRequestContext
 
 class PayerModelTest(unittest.TestCase):
     def test_payer_context_is_stable(self):
-        first = PayerRequestContext.for_operation("run-1", "realtime")
-        retry = PayerRequestContext.for_operation("run-1", "realtime")
+        first = PayerRequestContext("run-1")
+        retry = PayerRequestContext("run-1")
         self.assertEqual(first, retry)
-        self.assertEqual(first.idempotency_key, "run-1:realtime")
+        self.assertEqual(first.run_id, "run-1")

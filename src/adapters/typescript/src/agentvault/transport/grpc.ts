@@ -26,12 +26,11 @@ export class GrpcVaultTransport implements VaultTransport {
     return `GrpcVaultTransport { config: ${inspect(this.config)}, client: <redacted> }`;
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     if (!path.startsWith('/api/v1/') || path.includes('\\')) throw new Error('invalid AgentVault gRPC path');
     const headers: Record<string, string> = { accept: 'application/json' };
     const encodedBody = body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body));
     if (body !== undefined) headers['content-type'] = 'application/json';
-    if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const envelope = Buffer.from(JSON.stringify({
       method,
       path,

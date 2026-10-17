@@ -57,7 +57,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
     /**
      * Returns a WebClient filter for reactive frameworks and MCP transports.
      * The filter owns the complete 402 state machine; callers only supply the
-     * stable run/idempotency headers on protected operations.
+     * stable run header on protected operations.
      */
     public ExchangeFilterFunction webClientFilter() {
         return this::filter;
@@ -166,18 +166,12 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
 
     private static Optional<PayerRequestContext> contextFromHeaders(HttpRequest request, byte[] ignored) {
         String runId = request.getHeaders().getFirst("x-run-id");
-        String idempotencyKey = request.getHeaders().getFirst("x-agentvault-idempotency-key");
-        return runId == null || idempotencyKey == null
-                ? Optional.empty()
-                : Optional.of(new PayerRequestContext(runId, idempotencyKey));
+        return runId == null ? Optional.empty() : Optional.of(new PayerRequestContext(runId));
     }
 
     private static Optional<PayerRequestContext> contextFromHeaders(ClientRequest request) {
         String runId = request.headers().getFirst("x-run-id");
-        String idempotencyKey = request.headers().getFirst("x-agentvault-idempotency-key");
-        return runId == null || idempotencyKey == null
-                ? Optional.empty()
-                : Optional.of(new PayerRequestContext(runId, idempotencyKey));
+        return runId == null ? Optional.empty() : Optional.of(new PayerRequestContext(runId));
     }
 
     private record HeaderRequest(HttpRequest delegate, HttpHeaders headers) implements HttpRequest {

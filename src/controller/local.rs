@@ -374,18 +374,6 @@ fn parse_command(payload: &[u8]) -> Result<ParsedCommand, ParseFailure> {
             "invalid local payment authorization request body",
         )
     })?;
-    let Some(idempotency_key) = envelope.request.headers.get("idempotency-key") else {
-        return Err(ParseFailure::invalid(
-            Some(correlation_id),
-            "idempotency-key header is required",
-        ));
-    };
-    if idempotency_key != &request.context.idempotency_key {
-        return Err(ParseFailure::invalid(
-            Some(correlation_id),
-            "idempotency-key header and body differ",
-        ));
-    }
     Ok(ParsedCommand {
         correlation_id,
         principal: CallerPrincipal::unrestricted(),
@@ -403,7 +391,7 @@ fn validate_headers(headers: &BTreeMap<String, String>) -> Result<(), &'static s
             || value.len() > MAX_HEADER_VALUE_BYTES
             || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-')
             || value.bytes().any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
-            || !matches!(name.as_str(), "accept" | "content-type" | "idempotency-key")
+            || !matches!(name.as_str(), "accept" | "content-type")
         {
             return Err("invalid local payment authorization headers");
         }
@@ -515,7 +503,12 @@ where
         1 => {
             reader.read_exact(&mut prefix[1..]).await?;
         }
-        _ => unreachable!("one-byte read returned more than one byte"),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local payment frame prefix read exceeded its buffer",
+            ))
+        }
     }
     let length = usize::try_from(u32::from_be_bytes(prefix)).unwrap_or(usize::MAX);
     if length == 0 || length > MAX_FRAME_BYTES {

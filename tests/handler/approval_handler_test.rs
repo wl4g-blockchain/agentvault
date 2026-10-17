@@ -5,6 +5,7 @@ fn pending_approval() -> ApprovalRequest {
     ApprovalRequest {
         id: "approval-1".to_owned(),
         intent_id: "intent-1".to_owned(),
+        run_id: "run-1".to_owned(),
         requested_amount: Amount::new(10),
         approved_amount: None,
         requested_by: "requester".to_owned(),

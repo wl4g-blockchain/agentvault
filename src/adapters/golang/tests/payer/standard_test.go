@@ -28,23 +28,19 @@ func TestStandardPayerMiddlewareRetriesPaidRequest(t *testing.T) {
 
 	core, err := NewPayerMiddleware(payerTransport(func(_ context.Context, request transport.TransportRequest) (transport.TransportResponse, error) {
 		if request.Path == "/api/v1/payments/authorize" {
-			body := `{"authorization":{"outcome":"authorized","intent_id":"intent-1"},"intent":{"id":"intent-1","scenario_id":"scenario","run_id":"run-1","wallet_id":"wallet","direction":"outbound","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"recipient":"0x0000000000000000000000000000000000000001","amount":"1000","resource":"` + merchant.URL + `/mcp","challenge_hash":"challenge","idempotency_key":"run-1:realtime"},"credential":{"protocol":"x402","challenge_hash":"challenge","credential_hash":"hash","payload":{},"http":{"bound_origin":"` + merchant.URL + `","header_name":"payment-signature","header_value":"signed"}}}`
+			body := `{"authorization":{"outcome":"authorized","intent_id":"intent-1"},"intent":{"id":"intent-1","scenario_id":"scenario","run_id":"run-1","wallet_id":"wallet","policy_id":"policy","direction":"outbound","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"recipient":"0x0000000000000000000000000000000000000001","amount":"1000","resource":"` + merchant.URL + `/mcp","challenge_hash":"challenge"},"credential":{"protocol":"x402","challenge_hash":"challenge","credential_hash":"hash","payload":{},"http":{"bound_origin":"` + merchant.URL + `","header_name":"payment-signature","header_value":"signed"}}}`
 			return transport.TransportResponse{Status: 200, Body: []byte(body)}, nil
 		}
 		if strings.HasSuffix(request.Path, "/outbound-response") {
 			return transport.TransportResponse{Status: 200, Body: []byte(`{"intent":{"id":"intent-1"},"accepted":true,"replayed":false}`)}, nil
 		}
 		return transport.TransportResponse{Status: 500, Body: []byte(`{"error":{"code":"UNEXPECTED","message":"unexpected"}}`)}, nil
-	}), config.PayerConfig{
-		ScenarioID: "scenario", WalletID: "wallet", Protocol: "x402",
-		Asset:  model.AssetIdentity{Network: "eip155:31337", Asset: "USDC", Decimals: 6},
-		Amount: "1000", Recipient: "0x0000000000000000000000000000000000000001",
-	})
+	}), config.PayerConfig{ScenarioID: "scenario"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request, _ := http.NewRequest(http.MethodPost, merchant.URL+"/mcp", strings.NewReader(`{}`))
-	operation, _ := model.NewPayerRequestContext("run-1", "realtime")
+	operation, _ := model.NewPayerRequestContext("run-1")
 	response, err := core.Standard(nil).Client().Do(WithPayment(request, operation))
 	if err != nil {
 		t.Fatal(err)

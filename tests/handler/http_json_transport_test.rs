@@ -33,4 +33,10 @@ fn permits_explicit_loopback_and_rejects_reserved_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("idempotency-key", HeaderValue::from_static("operator-value"));
     assert!(FixedHttpJsonTransport::new(&config, headers).is_err());
+
+    for name in ["traceparent", "tracestate"] {
+        let mut headers = HeaderMap::new();
+        headers.insert(name, HeaderValue::from_static("operator-value"));
+        assert!(FixedHttpJsonTransport::new(&config, headers).is_err());
+    }
 }

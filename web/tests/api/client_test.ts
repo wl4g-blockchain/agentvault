@@ -30,7 +30,7 @@ describe('same-origin AgentVault API client', () => {
     expect(new Headers(init.headers).has('authorization')).toBe(false)
   })
 
-  it('serializes an approval decision with a stable idempotency key', async () => {
+  it('serializes an approval decision with a stable run ID', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'approval-7' }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -46,18 +46,15 @@ describe('same-origin AgentVault API client', () => {
     })
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    const headers = new Headers(init.headers)
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
-    expect(headers.get('idempotency-key')).toBe('dashboard:approval-7:approve')
     expect(body).toMatchObject({
       scenario_id: 'scenario-1',
       run_id: 'run-9',
-      idempotency_key: 'dashboard:approval-7:approve',
       approval_id: 'approval-7',
       decision: 'approve',
       approved_amount: '50000000',
     })
-    expect(headers.has('authorization')).toBe(false)
+    expect(new Headers(init.headers).has('authorization')).toBe(false)
   })
 
   it('never includes an arbitrary server message in a thrown error', async () => {

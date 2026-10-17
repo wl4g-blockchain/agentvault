@@ -1,11 +1,17 @@
 # AgentVault Helm Chart
 
 AuthGuard is a default-on umbrella dependency. The Gateway authenticates and
-authorizes HTTP requests, then delivers a signed `x-authguard-context` to the
-AgentVault workload adapter. The
+authorizes HTTP requests, then delivers a signed `x-authguard-context` or a
+short-lived `x-authguard-scope-token` to the AgentVault workload adapter. The
 `AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY` value in the
 AgentVault secret must be identical to the value in the separately managed
 AuthGuard secret.
+
+Direct contexts are verified locally. Token-backed contexts are resolved over
+AuthGuard's internal scope gRPC service; the workload pod carries the
+`authguard.io/scope-client=true` label required by the dependency NetworkPolicy.
+If the dependency fullname is overridden, set
+`runtime.authguard.scopeResolver.target` to its `scope-grpc` service address.
 
 AgentVault itself owns only payment-domain checks: Client/Scenario ownership,
 Policy, approval, balance, signing, settlement, and Ledger invariants.
@@ -73,10 +79,20 @@ helm upgrade --install agentvault deploy/helm/agentvault \
   --set service.type=LoadBalancer
 ```
 
-That mode is fully open by design. MQTT remains a separate broker/client-id
-boundary in both modes.
+That mode is fully open on the API Service by design; the chart's NetworkPolicy
+opens only API and optional gRPC ingress, while management remains limited to
+the configured Envoy/monitoring selectors. MQTT remains a separate
+broker/client-id boundary in both modes.
+
+`/healthz` is process liveness only. `/readyz` performs a bounded probe against
+the authoritative SQL adapter (`management.health.probeTimeout`, default `1s`)
+and returns 503 on failure or timeout. Redis is deliberately not a readiness
+gate because it is a non-authoritative acceleration layer.
 
 The SDK gRPC listener is disabled by default. Enabling `runtime.grpc.enabled`
-adds an h2c ClusterIP port accepted only from the configured Envoy selector;
-Envoy must authenticate the gRPC call and inject the same signed
-`x-authguard-context` metadata. Do not expose that internal h2c port directly.
+adds an h2c ClusterIP port and a protected Gateway route for
+`/agentvault.transport.v1.PaymentTransport/*`. AuthGuard authenticates that
+route and injects the same signed `x-authguard-context` metadata; the NetworkPolicy
+accepts the internal h2c port only from the configured Envoy selector. The
+Envelope accepts only domain-authorized SDK payment routes and never exposes
+`/admin/*`. Do not expose port `50051` directly in the normal protected mode.

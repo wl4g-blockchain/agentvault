@@ -19,6 +19,14 @@
       "budget_unit": {"asset": "USDC", "decimals": 6},
       "max_per_payment": "10000000",
       "max_per_day": "51000000"
+    },
+    {
+      "id": "wallet-quantstream-secondary",
+      "custody": "local",
+      "private_key_env": "AGENTVAULT_QUANTSTREAM_SECONDARY_WALLET_PRIVATE_KEY",
+      "budget_unit": {"asset": "USDC", "decimals": 6},
+      "max_per_payment": "10000000",
+      "max_per_day": "51000000"
     }
   ],
   "scenarios": [
@@ -57,7 +65,7 @@
     {
       "id": "policy-quantstream-market-data",
       "scenario_id": "scenario-quantstream-market-ingestion",
-      "wallet_ids": ["wallet-quantstream-primary"],
+      "wallet_ids": ["wallet-quantstream-primary", "wallet-quantstream-secondary"],
       "protocols": ["x402"],
       "networks": ["eip155:31337"],
       "assets": [{

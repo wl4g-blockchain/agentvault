@@ -71,8 +71,8 @@ for run_id, free_raw, paid_raw, outbound_intent in runs:
 
 with sqlite3.connect(f"file:{market_path}?mode=ro", uri=True) as market:
     deliveries = market.execute(
-        "SELECT execution_key,intent_id,status,response_json,failure_injections FROM mcp_delivery "
-        "WHERE status='delivered' ORDER BY updated_at,execution_key"
+        "SELECT run_id,intent_id,status,response_json,failure_injections FROM mcp_delivery "
+        "WHERE status='delivered' ORDER BY updated_at,run_id"
     ).fetchall()
 if len(deliveries) != 2:
     raise RuntimeError(f"expected two durable MarketPulse deliveries, found {len(deliveries)}")
@@ -81,9 +81,9 @@ for run_index, (run_id, inbound_intent) in enumerate(zip(run_ids, inbound_intent
     delivery = delivered_by_intent.get(inbound_intent)
     if delivery is None:
         raise RuntimeError("MarketPulse did not durably bind settlement to delivery")
-    execution_key, _, status, response_raw, failure_injections = delivery
-    if status != "delivered" or execution_key != f"{run_id}.realtime":
-        raise RuntimeError("MarketPulse execution id does not match the workflow run")
+    delivery_run_id, _, status, response_raw, failure_injections = delivery
+    if status != "delivered" or delivery_run_id != run_id:
+        raise RuntimeError("MarketPulse delivery run does not match the workflow run")
     replay = json.loads(str(response_raw))
     replay_result = replay.get("result", {}) if isinstance(replay, dict) else {}
     replay_content = replay_result.get("structuredContent", {}) if isinstance(replay_result, dict) else {}

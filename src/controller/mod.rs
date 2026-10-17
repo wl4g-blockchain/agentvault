@@ -11,6 +11,7 @@ pub use grpc::GrpcController;
 #[cfg(unix)]
 pub use local::LocalController;
 pub use management::ManagementServer;
+pub(crate) use management::ReadinessProbe;
 pub use mqtt::MqttController;
 
 #[cfg(test)]

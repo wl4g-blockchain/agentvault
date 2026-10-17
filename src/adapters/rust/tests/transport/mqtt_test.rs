@@ -112,3 +112,26 @@ fn accepts_only_standard_error_type_for_failed_operations() {
         "payment.authorization_result"
     ));
 }
+
+#[test]
+fn requires_an_exact_qos_one_subscription_grant() {
+    assert!(subscription_granted(&SubAck::new(
+        1,
+        vec![SubscribeReasonCode::Success(QoS::AtLeastOnce)]
+    )));
+    assert!(!subscription_granted(&SubAck::new(
+        1,
+        vec![SubscribeReasonCode::Failure]
+    )));
+    assert!(!subscription_granted(&SubAck::new(
+        1,
+        vec![SubscribeReasonCode::Success(QoS::AtMostOnce)]
+    )));
+    assert!(!subscription_granted(&SubAck::new(
+        1,
+        vec![
+            SubscribeReasonCode::Success(QoS::AtLeastOnce),
+            SubscribeReasonCode::Success(QoS::AtLeastOnce),
+        ]
+    )));
+}

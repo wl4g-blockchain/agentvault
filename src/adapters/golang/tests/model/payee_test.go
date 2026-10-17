@@ -6,9 +6,9 @@ import (
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 )
 
-func TestPayeePhaseKeysAreBoundToOneExecution(t *testing.T) {
+func TestPayeePhasesReuseOneRunIdentity(t *testing.T) {
 	operation := model.PayeeOperation{
-		ScenarioID: "scenario", RunID: "run", ExecutionKey: "run.realtime", OfferID: "offer",
+		ScenarioID: "scenario", RunID: "run", OfferID: "offer",
 		Resource: "mcp://marketpulse/realtime", Origin: "https://marketpulse.test", Protocol: "x402", RequestHash: "hash",
 	}
 	if err := operation.Validate(); err != nil {
@@ -16,7 +16,7 @@ func TestPayeePhaseKeysAreBoundToOneExecution(t *testing.T) {
 	}
 	challenge, _ := operation.ChallengeContext()
 	settlement, _ := operation.SettlementContext()
-	if challenge.IdempotencyKey != "run.realtime.challenge" || settlement.IdempotencyKey != "run.realtime.settle" {
-		t.Fatal("phase keys are not stable and distinct")
+	if challenge.RunID != "run" || settlement.RunID != "run" {
+		t.Fatal("payee phases changed the run identity")
 	}
 }

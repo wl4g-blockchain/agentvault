@@ -115,17 +115,14 @@ fn paid_realtime(
     body: &[u8],
     id: Value,
 ) -> Response<Body> {
-    let Some(execution_key) = header_text(headers, "mcp-execution-key") else {
-        return response(
-            StatusCode::BAD_REQUEST,
-            &error(id, -32602, "mcp-execution-key is required"),
-        );
+    let Some(run_id) = header_text(headers, "x-run-id") else {
+        return response(StatusCode::BAD_REQUEST, &error(id, -32602, "x-run-id is required"));
     };
     let request_hash = FeedSQLiteStorage::request_hash(body);
-    match handler.storage.delivery(execution_key, &request_hash) {
+    match handler.storage.delivery(run_id, &request_hash) {
         Ok(DeliveryState::Delivered { response: replay }) => return json(StatusCode::OK, replay),
         Ok(DeliveryState::Settled(settlement)) => {
-            return deliver(handler, execution_key, &request_hash, id, &settlement);
+            return deliver(handler, run_id, &request_hash, id, &settlement);
         }
         Ok(DeliveryState::New) => {}
         Err(message) => return response(StatusCode::CONFLICT, &error(id, -32009, &message)),
@@ -136,15 +133,18 @@ fn paid_realtime(
             &error(id, -32005, "settled payment is required"),
         );
     };
-    let settlement = StoredSettlement::from_payment(execution_key, &payment);
+    let settlement = match StoredSettlement::from_payment(run_id, &payment) {
+        Ok(settlement) => settlement,
+        Err(message) => return response(StatusCode::CONFLICT, &error(id, -32009, &message)),
+    };
     if let Err(message) = handler
         .storage
-        .record_settled(execution_key, &request_hash, &settlement)
+        .record_settled(run_id, &request_hash, &settlement)
     {
         return response(StatusCode::CONFLICT, &error(id, -32009, &message));
     }
     if handler.allow_failure_injection && header_text(headers, "x-e2e-fail-after-settlement") == Some("once") {
-        if let Err(message) = handler.storage.record_failure_injection(execution_key, &request_hash) {
+        if let Err(message) = handler.storage.record_failure_injection(run_id, &request_hash) {
             return text(StatusCode::INTERNAL_SERVER_ERROR, &message);
         }
         return response(
@@ -152,12 +152,12 @@ fn paid_realtime(
             &error(id, -32004, "injected delivery failure after settlement"),
         );
     }
-    deliver(handler, execution_key, &request_hash, id, &settlement)
+    deliver(handler, run_id, &request_hash, id, &settlement)
 }
 
 fn deliver(
     handler: &FeedHandler,
-    execution_key: &str,
+    run_id: &str,
     request_hash: &str,
     id: Value,
     settlement: &StoredSettlement,
@@ -170,7 +170,7 @@ fn deliver(
         Ok(encoded) => encoded,
         Err(error) => return text(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
-    if let Err(message) = handler.storage.record_delivered(execution_key, request_hash, &encoded) {
+    if let Err(message) = handler.storage.record_delivered(run_id, request_hash, &encoded) {
         return text(StatusCode::INTERNAL_SERVER_ERROR, &message);
     }
     json(StatusCode::OK, encoded)

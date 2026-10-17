@@ -1,9 +1,7 @@
 import unittest
 
 from agentvault.config import PayerConfig
-from agentvault.model import (
-    AssetIdentity, PayerHttpRequest, PayerHttpResponse, PayerRequestContext,
-)
+from agentvault.model import PayerHttpRequest, PayerHttpResponse, PayerRequestContext
 from agentvault.payer.payer import PayerMiddleware
 
 
@@ -11,8 +9,8 @@ class _Transport:
     def __init__(self):
         self.calls = []
 
-    def request(self, method, path, body=None, idempotency_key=None):
-        self.calls.append((method, path, body, idempotency_key))
+    def request(self, method, path, body=None):
+        self.calls.append((method, path, body))
         return {
             "authorization": {"outcome": "authorized", "intent_id": "intent-1"},
             "intent": {
@@ -21,7 +19,7 @@ class _Transport:
                 "protocol": "x402", "asset": {"network": "eip155:31337", "asset": "USDC", "decimals": 6},
                 "recipient": "0x0000000000000000000000000000000000000001", "amount": "1000",
                 "settled_amount": "0", "resource": "https://merchant.example/mcp",
-                "challenge_hash": "challenge", "idempotency_key": "run-1:paid", "request_hash": "request",
+                "challenge_hash": "challenge", "request_hash": "request",
                 "status": "authorized", "reservation_status": "reserved", "reserved_amount": "1000",
                 "created_at": 1, "updated_at": 1,
             },
@@ -34,29 +32,26 @@ class _Transport:
 
 
 class PayerMiddlewareTest(unittest.TestCase):
-    def test_authorization_reuses_stable_key(self):
+    def test_authorization_reuses_stable_run_id(self):
         transport = _Transport()
-        middleware = PayerMiddleware(transport, PayerConfig(
-            "scenario", "wallet", "x402", AssetIdentity("eip155:31337", "USDC", 6),
-            "1000", "0x0000000000000000000000000000000000000001"))
+        middleware = PayerMiddleware(transport, PayerConfig("scenario"))
         payment = middleware.authorize(
             PayerHttpRequest("POST", "https://merchant.example/mcp", "https://merchant.example", {}, b"", False),
             PayerHttpResponse(402, {"payment-protocol": "x402"}, b"{}"),
-            PayerRequestContext.for_operation("run-1", "paid"),
+            PayerRequestContext("run-1"),
         )
         self.assertEqual(payment.intent.id, "intent-1")
-        self.assertEqual(transport.calls[0][2]["idempotency_key"], transport.calls[0][3])
+        self.assertEqual(transport.calls[0][2]["run_id"], "run-1")
+        self.assertEqual(set(transport.calls[0][2]), {"scenario_id", "run_id", "challenge"})
 
-    def test_rejects_protocol_hint_mismatch_before_vault_call(self):
+    def test_captured_protocol_hint_is_checked_against_vault_result(self):
         transport = _Transport()
-        middleware = PayerMiddleware(transport, PayerConfig(
-            "scenario", "wallet", "x402", AssetIdentity("eip155:31337", "USDC", 6),
-            "1000", "0x0000000000000000000000000000000000000001"))
-        with self.assertRaisesRegex(RuntimeError, "protocol hint"):
+        middleware = PayerMiddleware(transport, PayerConfig("scenario"))
+        with self.assertRaisesRegex(RuntimeError, "not bound"):
             middleware.authorize(
                 PayerHttpRequest("POST", "https://merchant.example/mcp",
                                  "https://merchant.example", {}, b"", False),
                 PayerHttpResponse(402, {"payment-protocol": "mpp"}, b"{}"),
-                PayerRequestContext.for_operation("run-1", "paid"),
+                PayerRequestContext("run-1"),
             )
-        self.assertEqual(transport.calls, [])
+        self.assertEqual(transport.calls[0][2]["challenge"]["protocol_hint"], "mpp")

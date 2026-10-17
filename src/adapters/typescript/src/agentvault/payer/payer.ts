@@ -36,23 +36,11 @@ export class PayerMiddleware {
       deliveryRetries: config.deliveryRetries ?? 0,
       maxChallengeBytes: config.maxChallengeBytes ?? 256 * 1024,
     };
-    for (const [name, value] of Object.entries({
-      scenarioId: config.scenarioId,
-      walletId: config.walletId,
-      protocol: config.protocol,
-      amount: config.amount,
-      recipient: config.recipient,
-      network: config.asset.network,
-      asset: config.asset.asset,
-    })) {
-      if (!value.trim()) throw new Error(`${name} cannot be blank`);
-    }
+    if (!config.scenarioId.trim()) throw new Error('scenarioId cannot be blank');
     if (this.config.approvalTimeoutMs <= 0 || this.config.approvalPollIntervalMs <= 0 ||
         this.config.approvalPollIntervalMs > this.config.approvalTimeoutMs ||
         !Number.isInteger(this.config.deliveryRetries) || this.config.deliveryRetries < 0 ||
-        this.config.deliveryRetries > 3 || this.config.maxChallengeBytes <= 0 ||
-        !Number.isInteger(this.config.asset.decimals) || this.config.asset.decimals < 0 ||
-        this.config.asset.decimals > 255) {
+        this.config.deliveryRetries > 3 || this.config.maxChallengeBytes <= 0) {
       throw new Error('invalid payer middleware limits');
     }
   }
@@ -85,20 +73,10 @@ export class PayerMiddleware {
     const protocolHint = response.headers.get('payment-protocol');
     const expiresAt = response.headers.get('payment-expires-at');
     if (protocolHint) challenge.protocol_hint = protocolHint;
-    if (protocolHint && protocolHint !== this.config.protocol) {
-      throw new Error('protocol must match the 402 protocol hint');
-    }
     if (expiresAt) challenge.expires_at = expiresAt;
     const authorization = await this.authorizeUntilTerminal({
       scenario_id: this.config.scenarioId,
       run_id: operation.runId,
-      idempotency_key: operation.idempotencyKey,
-      wallet_id: this.config.walletId,
-      protocol: this.config.protocol,
-      asset: this.config.asset,
-      amount: this.config.amount,
-      recipient: this.config.recipient,
-      resource: request.url,
       challenge,
     });
     if (authorization.authorization.outcome === 'denied') {
@@ -110,12 +88,10 @@ export class PayerMiddleware {
     const credential = PaymentCredential.fromWire(authorization.credential);
     const intent = authorization.intent;
     if (!intent.id || intent.scenario_id !== this.config.scenarioId || intent.run_id !== operation.runId ||
-        intent.wallet_id !== this.config.walletId || intent.direction !== 'outbound' ||
-        intent.protocol !== this.config.protocol || intent.protocol !== credential.protocol ||
-        !sameAsset(intent.asset, this.config.asset) || intent.amount !== this.config.amount ||
-        intent.recipient !== this.config.recipient || intent.resource !== request.url ||
-        intent.challenge_hash !== credential.challenge_hash ||
-        intent.idempotency_key !== operation.idempotencyKey) {
+        !intent.wallet_id || !intent.policy_id || intent.direction !== 'outbound' ||
+        (protocolHint !== null && intent.protocol !== protocolHint) || intent.protocol !== credential.protocol ||
+        intent.resource !== request.url ||
+        intent.challenge_hash !== credential.challenge_hash) {
       throw new Error('credential, intent, and resource are not bound to the same payment');
     }
     return { intent, credential };
@@ -158,7 +134,6 @@ export class PayerMiddleware {
         'POST',
         '/api/v1/payments/authorize',
         request,
-        request.idempotency_key,
       );
       const { authorization, intent } = response;
       if (!authorization || !['authorized', 'requires_approval', 'denied'].includes(authorization.outcome) ||
@@ -167,7 +142,7 @@ export class PayerMiddleware {
       }
       if (expectedIntent === undefined) expectedIntent = authorization.intent_id;
       else if (authorization.intent_id !== expectedIntent) {
-        throw new Error('idempotent authorization changed payment intent');
+        throw new Error('replayed run changed payment intent');
       }
       if (authorization.outcome !== 'requires_approval') return response;
       const remaining = deadline - Date.now();
@@ -210,7 +185,7 @@ export class PayerMiddleware {
     intentId: string,
     paymentResponse: string,
   ): Promise<ReportOutboundResponseResponse> {
-    if (!context.run_id?.trim()) throw new Error('run_id is required');
+    if (!context.run_id.trim()) throw new Error('run_id is required');
     if (!intentId.trim()) throw new Error('intent_id cannot be blank');
     if (!paymentResponse || paymentResponse.length > 16 * 1024 || !/^[\x21-\x7e]+$/.test(paymentResponse)) {
       throw new Error('payment_response must be a bounded official x402 header value');
@@ -220,7 +195,6 @@ export class PayerMiddleware {
       'POST',
       `/api/v1/payments/${encodeURIComponent(intentId)}/outbound-response`,
       request,
-      context.idempotency_key,
     );
   }
 }
@@ -231,10 +205,4 @@ export function safeHttpUrl(value: string): URL {
     throw new Error('paid request URL must be absolute HTTP(S) without userinfo');
   }
   return target;
-}
-
-function sameAsset(left: import('../model/base.js').AssetIdentity,
-                   right: import('../model/base.js').AssetIdentity): boolean {
-  return left.network === right.network && left.asset === right.asset &&
-    left.token_contract === right.token_contract && left.decimals === right.decimals;
 }

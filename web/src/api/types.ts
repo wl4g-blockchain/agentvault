@@ -29,7 +29,6 @@ export type PaymentIntent = {
   settled_amount: Amount
   resource: string
   challenge_hash?: string
-  idempotency_key: string
   request_hash: string
   status: PaymentStatus
   reservation_status: ReservationStatus

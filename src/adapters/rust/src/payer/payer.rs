@@ -83,18 +83,11 @@ impl<T: VaultTransport> PayerMiddleware<T> {
         let Some(challenge) = payment_required(original, first_response, self.config.max_challenge_bytes)? else {
             return Ok(None);
         };
-        validate_protocol_hint(&challenge, &self.config.protocol)?;
-        let operation = OperationContext::new(self.config.scenario_id.clone(), context.idempotency_key.clone())?
-            .with_run_id(context.run_id.clone());
+        let protocol_hint = challenge.protocol_hint.clone();
+        let operation = OperationContext::new(self.config.scenario_id.clone(), context.run_id.clone())?;
         let response = self
             .authorize_until_terminal(&AuthorizePaymentRequest {
                 context: operation,
-                wallet_id: self.config.wallet_id.clone(),
-                protocol: self.config.protocol.clone(),
-                asset: self.config.asset.clone(),
-                amount: self.config.amount.clone(),
-                recipient: self.config.recipient.clone(),
-                resource: original.url.clone(),
                 challenge,
             })
             .await?;
@@ -103,7 +96,14 @@ impl<T: VaultTransport> PayerMiddleware<T> {
                 let credential = response.credential.ok_or_else(|| {
                     Error::Decode("authorized AgentVault response contained no credential".to_owned())
                 })?;
-                validate_payment_binding(original, context, &self.config, &response.intent, &credential)?;
+                validate_payment_binding(
+                    original,
+                    context,
+                    &self.config,
+                    protocol_hint.as_deref(),
+                    &response.intent,
+                    &credential,
+                )?;
                 Ok(Some(AuthorizedPayment {
                     intent: response.intent,
                     credential,
@@ -130,8 +130,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             return Ok(());
         }
         if let Some(payment_response) = header(&response.headers, "payment-response") {
-            let operation = OperationContext::new(self.config.scenario_id.clone(), context.idempotency_key.clone())?
-                .with_run_id(context.run_id.clone());
+            let operation = OperationContext::new(self.config.scenario_id.clone(), context.run_id.clone())?;
             self.report_outbound_response(
                 &authorized.intent.id,
                 &ReportOutboundResponseRequest {
@@ -150,13 +149,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
 
     async fn authorize_payment(&self, request: &AuthorizePaymentRequest) -> Result<AuthorizePaymentResponse> {
         request.validate()?;
-        self.api
-            .post(
-                crate::paths::AUTHORIZE_PAYMENT.to_owned(),
-                request,
-                Some(&request.context.idempotency_key),
-            )
-            .await
+        self.api.post(crate::paths::AUTHORIZE_PAYMENT.to_owned(), request).await
     }
 
     async fn authorize_until_terminal(&self, request: &AuthorizePaymentRequest) -> Result<AuthorizePaymentResponse> {
@@ -187,8 +180,8 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             if let Some(expected) = &expected_intent {
                 if expected != intent_id {
                     return Err(Error::Conflict {
-                        code: "IDEMPOTENCY_CONFLICT".to_owned(),
-                        message: "idempotent authorization changed payment intent".to_owned(),
+                        code: "RUN_CONFLICT".to_owned(),
+                        message: "replayed run changed payment intent".to_owned(),
                     });
                 }
             } else {
@@ -251,7 +244,6 @@ impl<T: VaultTransport> PayerMiddleware<T> {
                     percent_encode(intent_id)
                 ),
                 request,
-                Some(&request.context.idempotency_key),
             )
             .await
     }
@@ -319,38 +311,23 @@ pub(crate) fn validate_payment_binding(
     original: &PayerHttpRequest,
     context: &PayerRequestContext,
     config: &PayerConfig,
+    protocol_hint: Option<&str>,
     intent: &PaymentIntent,
     credential: &PaymentCredential,
 ) -> Result<()> {
     if intent.id.is_empty()
         || intent.scenario_id != config.scenario_id
         || intent.run_id != context.run_id
-        || intent.wallet_id.as_deref() != Some(config.wallet_id.as_str())
+        || intent.wallet_id.as_deref().is_none_or(str::is_empty)
+        || intent.policy_id.as_deref().is_none_or(str::is_empty)
         || intent.direction != crate::PaymentDirection::Outbound
-        || intent.protocol != config.protocol
+        || protocol_hint.is_some_and(|expected| intent.protocol != expected)
         || intent.protocol != credential.protocol
-        || intent.asset != config.asset
-        || intent.amount != config.amount
-        || intent.recipient != config.recipient
         || intent.resource != original.url
         || intent.challenge_hash.as_deref() != Some(credential.challenge_hash.as_str())
-        || intent.idempotency_key != context.idempotency_key.as_str()
     {
         return Err(Error::UnsafeRetry(
             "credential, outbound intent, and paid resource are not bound to the same payment".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_protocol_hint(challenge: &PaymentRequired, configured: &str) -> Result<()> {
-    if challenge
-        .protocol_hint
-        .as_deref()
-        .is_some_and(|hint| hint != configured)
-    {
-        return Err(Error::UnsafeRetry(
-            "protocol must match the 402 protocol hint".to_owned(),
         ));
     }
     Ok(())

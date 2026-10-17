@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::{
     model::{
-        canonicalize_payment_recipient, Amount, ApprovalRequest, ApprovalStatus, PaymentAuthorizationResult,
-        PaymentChallenge, PaymentDirection, PaymentEvent, PaymentEventType, PaymentIntent, PaymentStatus,
-        ReservationStatus,
+        canonicalize_payment_recipient, wallet::is_evm_payment_network, wallet::is_evm_wallet_algorithm, Amount,
+        ApprovalRequest, ApprovalStatus, PaymentAuthorizationResult, PaymentChallenge, PaymentDirection, PaymentEvent,
+        PaymentEventType, PaymentIntent, PaymentPolicy, PaymentStatus, ReservationStatus,
     },
     storage::{
         AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
@@ -28,12 +28,13 @@ use super::{
 pub struct AuthorizePayment {
     pub scenario_id: String,
     pub run_id: String,
-    pub wallet_id: String,
-    pub idempotency_key: String,
     pub challenge: PaymentChallenge,
 }
 
-/// Outbound policy, approval, idempotency, and budget orchestration. Storage
+const MAX_SCENARIO_POLICIES: u32 = 1_000;
+const MAX_WALLET_CANDIDATES: usize = 4_096;
+
+/// Outbound policy, approval, run replay, and budget orchestration. Storage
 /// repeats aggregate budget checks in its authorization transaction.
 pub struct PaymentHandler {
     scenarios: Arc<ScenarioHandler>,
@@ -73,7 +74,7 @@ impl PaymentHandler {
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid or conflicting idempotency data, denied
+    /// Returns an error for an invalid or conflicting run identity, denied
     /// scenario access, missing policy, invalid protocol bindings, exhausted
     /// transactional budgets, or persistence failures.
     pub async fn authorize(
@@ -89,8 +90,15 @@ impl PaymentHandler {
             return Ok(result);
         }
 
-        let (policy, budget, origin, decision) = self.policy_decision(command, now).await?;
-        let (intent, action) = build_payment_intent(command, &policy.id, &request_hash, &decision, now)?;
+        let selected = self.policy_decision(command, &request_hash, now).await?;
+        let (intent, action) = build_payment_intent(
+            command,
+            &selected.policy.id,
+            &selected.wallet_id,
+            &request_hash,
+            &selected.decision,
+            now,
+        )?;
         self.protocols
             .get(&intent.protocol)?
             .validate_payment(&command.challenge, &intent)
@@ -100,7 +108,7 @@ impl PaymentHandler {
             &access,
             command,
             &intent,
-            &decision,
+            &selected.decision,
             &request_hash,
             self.approval_ttl_seconds,
             now,
@@ -113,10 +121,10 @@ impl PaymentHandler {
             principal: access.principal.clone(),
             client: access.client.clone(),
             scenario: access.scenario.clone(),
-            policy,
-            expected_wallet_updated_at: budget.wallet_updated_at,
-            expected_wallet_key_version: budget.wallet_active_key_version,
-            origin,
+            policy: selected.policy,
+            expected_wallet_updated_at: selected.budget.wallet_updated_at,
+            expected_wallet_key_version: selected.budget.wallet_active_key_version,
+            origin: selected.origin,
             day_started_at: utc_day_start(now),
             evaluated_at: now,
         };
@@ -133,7 +141,7 @@ impl PaymentHandler {
         };
         if record.intent.request_hash != intent.request_hash {
             return Err(Error::PaymentConflict(
-                "idempotency key was reused for different payment content".to_owned(),
+                "run_id was reused for different payment content".to_owned(),
             ));
         }
         authorization_result(&record)
@@ -144,16 +152,12 @@ impl PaymentHandler {
         command: &AuthorizePayment,
         request_hash: &str,
     ) -> Result<Option<PaymentAuthorizationResult>> {
-        let Some(existing) = self
-            .payments
-            .find_idempotency(&command.scenario_id, &command.idempotency_key)
-            .await?
-        else {
+        let Some(existing) = self.payments.find_run(&command.scenario_id, &command.run_id).await? else {
             return Ok(None);
         };
         if existing.intent.request_hash != request_hash {
             return Err(Error::PaymentConflict(
-                "idempotency key was reused for different payment content".to_owned(),
+                "run_id was reused for different payment content".to_owned(),
             ));
         }
         authorization_result(&existing).map(Some)
@@ -162,74 +166,146 @@ impl PaymentHandler {
     async fn policy_decision(
         &self,
         command: &AuthorizePayment,
+        request_hash: &str,
         now: i64,
-    ) -> Result<(crate::model::PaymentPolicy, BudgetSnapshot, String, PolicyDecision)> {
-        let policy = self
+    ) -> Result<PolicyWalletCandidate> {
+        let page = self
             .policies
             .list_for_scenario(
                 &command.scenario_id,
                 PageRequest {
                     offset: 0,
-                    limit: 1_000,
+                    limit: MAX_SCENARIO_POLICIES,
                 },
-            )
-            .await?
-            .items
-            .into_iter()
-            .find(|policy| {
-                policy.enabled
-                    && policy.allows_direction(PaymentDirection::Outbound)
-                    && policy.allows_wallet(&command.wallet_id)
-            })
-            .ok_or_else(|| Error::PolicyDenied("scenario has no enabled policy for this wallet".to_owned()))?;
-        let budget_unit = command.challenge.asset.budget_unit();
-        let budget = self
-            .payments
-            .budget_snapshot(
-                &command.scenario_id,
-                &command.wallet_id,
-                PaymentDirection::Outbound,
-                &budget_unit,
-                utc_day_start(now),
-                now,
             )
             .await?;
-        if !budget.wallet_enabled {
-            return Ok((
-                policy,
-                budget,
-                canonical_http_origin(&command.challenge.resource)?,
-                PolicyDecision::Denied("payment wallet is disabled".to_owned()),
-            ));
+        if page.total != u64::try_from(page.items.len()).unwrap_or(u64::MAX) {
+            return Err(Error::PolicyDenied(format!(
+                "scenario has more than {MAX_SCENARIO_POLICIES} policies; wallet selection is bounded"
+            )));
         }
-        if budget.wallet_active_key_version.is_none() {
-            return Ok((
-                policy,
-                budget,
-                canonical_http_origin(&command.challenge.resource)?,
-                PolicyDecision::Denied("payment wallet has no active local signing key".to_owned()),
-            ));
-        }
+
         let origin = canonical_http_origin(&command.challenge.resource)?;
-        let decision = PolicyEngine::evaluate(
-            &policy,
-            super::PolicyEvaluation {
-                direction: PaymentDirection::Outbound,
-                challenge: &command.challenge,
-                wallet_id: &command.wallet_id,
-                origin: &origin,
-                scenario_usage: budget.scenario_spent_and_reserved,
-                wallet_budget: WalletBudget {
-                    usage: budget.wallet_spent_and_reserved,
-                    shared_across_scenarios: budget.wallet_shared_across_scenarios,
-                    max_per_payment: budget.wallet_max_per_payment,
-                    max_per_day: budget.wallet_max_per_day,
-                },
-                now,
-            },
-        )?;
-        Ok((policy, budget, origin, decision))
+        let budget_unit = command.challenge.asset.budget_unit();
+        let mut candidates = Vec::new();
+        for policy in page.items {
+            if policy.enabled && policy.allows_direction(PaymentDirection::Outbound) {
+                policy
+                    .validate()
+                    .map_err(|field| Error::PolicyDenied(format!("invalid policy field: {field}")))?;
+            }
+            if !policy.enabled
+                || !policy.allows_direction(PaymentDirection::Outbound)
+                || !policy.allows_protocol(&command.challenge.protocol)
+                || !policy.allows_asset(&command.challenge.asset)
+                || !policy.allows_payment_recipient(&command.challenge.asset.network, &command.challenge.recipient)
+                || !policy.allows_origin(&origin)
+            {
+                continue;
+            }
+            for wallet_id in &policy.wallet_ids {
+                if candidates.len() >= MAX_WALLET_CANDIDATES {
+                    return Err(Error::PolicyDenied(format!(
+                        "scenario has more than {MAX_WALLET_CANDIDATES} eligible policy-wallet candidates"
+                    )));
+                }
+                let budget = self
+                    .payments
+                    .budget_snapshot(
+                        &command.scenario_id,
+                        wallet_id,
+                        PaymentDirection::Outbound,
+                        &budget_unit,
+                        utc_day_start(now),
+                        now,
+                    )
+                    .await?;
+                let decision = if !budget.wallet_enabled {
+                    PolicyDecision::Denied("payment wallet is disabled".to_owned())
+                } else if budget.wallet_active_key_version.is_none() {
+                    PolicyDecision::Denied("payment wallet has no active local signing key".to_owned())
+                } else if !wallet_supports_payment_network(&budget, &command.challenge.asset.network) {
+                    PolicyDecision::Denied("payment wallet is incompatible with the payment network".to_owned())
+                } else {
+                    PolicyEngine::evaluate(
+                        &policy,
+                        super::PolicyEvaluation {
+                            direction: PaymentDirection::Outbound,
+                            challenge: &command.challenge,
+                            wallet_id,
+                            origin: &origin,
+                            scenario_usage: budget.scenario_spent_and_reserved,
+                            wallet_budget: WalletBudget {
+                                usage: budget.wallet_spent_and_reserved,
+                                shared_across_scenarios: budget.wallet_shared_across_scenarios,
+                                max_per_payment: budget.wallet_max_per_payment,
+                                max_per_day: budget.wallet_max_per_day,
+                            },
+                            now,
+                        },
+                    )?
+                };
+                candidates.push(PolicyWalletCandidate {
+                    policy: policy.clone(),
+                    wallet_id: wallet_id.clone(),
+                    selection_key: selection_key(request_hash, &policy.id, wallet_id),
+                    budget,
+                    origin: origin.clone(),
+                    decision,
+                });
+            }
+        }
+        candidates.sort_by(compare_candidates);
+        candidates
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::PolicyDenied("scenario has no eligible outbound policy-wallet candidate".to_owned()))
     }
+}
+
+fn wallet_supports_payment_network(budget: &BudgetSnapshot, network: &str) -> bool {
+    (!is_evm_payment_network(network) || is_evm_wallet_algorithm(&budget.wallet_algorithm))
+        && canonicalize_payment_recipient(network, &budget.wallet_address).is_ok()
+}
+
+struct PolicyWalletCandidate {
+    policy: PaymentPolicy,
+    wallet_id: String,
+    selection_key: [u8; 32],
+    budget: BudgetSnapshot,
+    origin: String,
+    decision: PolicyDecision,
+}
+
+fn compare_candidates(left: &PolicyWalletCandidate, right: &PolicyWalletCandidate) -> std::cmp::Ordering {
+    decision_rank(&left.decision)
+        .cmp(&decision_rank(&right.decision))
+        .then_with(|| {
+            left.budget
+                .wallet_spent_and_reserved
+                .cmp(&right.budget.wallet_spent_and_reserved)
+        })
+        .then_with(|| left.selection_key.cmp(&right.selection_key))
+        .then_with(|| left.policy.id.cmp(&right.policy.id))
+        .then_with(|| left.wallet_id.cmp(&right.wallet_id))
+}
+
+const fn decision_rank(decision: &PolicyDecision) -> u8 {
+    match decision {
+        PolicyDecision::Allowed => 0,
+        PolicyDecision::RequiresApproval => 1,
+        PolicyDecision::Denied(_) => 2,
+    }
+}
+
+fn selection_key(request_hash: &str, policy_id: &str, wallet_id: &str) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"agentvault.wallet-selection.v1");
+    for value in [request_hash, policy_id, wallet_id] {
+        hash.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    hash.finalize().into()
 }
 
 struct AuthorizationArtifacts {
@@ -241,6 +317,7 @@ struct AuthorizationArtifacts {
 fn build_payment_intent(
     command: &AuthorizePayment,
     policy_id: &str,
+    wallet_id: &str,
     request_hash: &str,
     decision: &PolicyDecision,
     now: i64,
@@ -250,7 +327,7 @@ fn build_payment_intent(
         id: Uuid::new_v4().to_string(),
         scenario_id: command.scenario_id.clone(),
         run_id: command.run_id.clone(),
-        wallet_id: Some(command.wallet_id.clone()),
+        wallet_id: Some(wallet_id.to_owned()),
         policy_id: Some(policy_id.to_owned()),
         offer_id: None,
         direction: PaymentDirection::Outbound,
@@ -261,7 +338,6 @@ fn build_payment_intent(
         settled_amount: Amount::ZERO,
         resource: command.challenge.resource.clone(),
         challenge_hash: Some(command.challenge.challenge_hash.clone()),
-        idempotency_key: command.idempotency_key.clone(),
         request_hash: request_hash.to_owned(),
         status,
         reservation_status,
@@ -364,6 +440,7 @@ fn build_approval_request(
     ApprovalRequest {
         id: Uuid::new_v4().to_string(),
         intent_id: intent.id.clone(),
+        run_id: intent.run_id.clone(),
         requested_amount: intent.amount,
         approved_amount: None,
         requested_by: access.principal.clone(),
@@ -397,11 +474,12 @@ fn approval_required_message(
         event_type: "approval_required".to_owned(),
         destination: format!("client:{}.approvals", access.client.id),
         correlation_id: intent.id.clone(),
-        idempotency_key: format!("approval-required:{}", approval.id),
+        run_id: intent.run_id.clone(),
         payload: json!({
             "approval_id": approval.id,
             "intent_id": intent.id,
             "scenario_id": command.scenario_id,
+            "run_id": intent.run_id,
             "amount": approval.requested_amount,
             "expires_at": approval.expires_at,
         }),
@@ -460,8 +538,6 @@ fn authorization_result(record: &AuthorizationRecord) -> Result<PaymentAuthoriza
 fn validate_command(command: &AuthorizePayment) -> Result<()> {
     validate_identifier("scenario_id", &command.scenario_id)?;
     validate_identifier("run_id", &command.run_id)?;
-    validate_identifier("wallet_id", &command.wallet_id)?;
-    validate_identifier("idempotency_key", &command.idempotency_key)?;
     if command.challenge.scenario_id != command.scenario_id || command.challenge.offer_id.is_some() {
         return Err(Error::InvalidRequest(
             "outbound challenge scenario binding is invalid".to_owned(),
@@ -482,14 +558,17 @@ fn request_hash(command: &AuthorizePayment) -> Result<String> {
     let encoded = serde_json::to_vec(&json!({
         "scenario_id": command.scenario_id,
         "run_id": command.run_id,
-        "wallet_id": command.wallet_id,
         "challenge": command.challenge,
     }))?;
+    Ok(hash_request(b"agentvault.authorize-payment.v2", &encoded))
+}
+
+fn hash_request(domain: &[u8], encoded: &[u8]) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"agentvault.authorize-payment.v1");
+    hash.update(domain);
     hash.update(u64::try_from(encoded.len()).unwrap_or(u64::MAX).to_be_bytes());
     hash.update(encoded);
-    Ok(hex::encode(hash.finalize()))
+    hex::encode(hash.finalize())
 }
 
 #[cfg(test)]

@@ -26,4 +26,14 @@ fn requires_https_except_explicit_loopback_and_rejects_transport_headers() {
         false,
     )
     .is_err());
+    for name in ["traceparent", "tracestate"] {
+        assert!(FixedEvmRpcClient::new(
+            "https://rpc.example/",
+            BTreeMap::from([(name.to_owned(), "operator-value".to_owned())]),
+            Duration::from_secs(1),
+            1024,
+            false,
+        )
+        .is_err());
+    }
 }

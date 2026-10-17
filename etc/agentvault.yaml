@@ -19,6 +19,10 @@ server:
     direct_context_hmac_key:
       file: ""
       env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY
+    scope_resolver:
+      enabled: true
+      target: http://127.0.0.1:8081
+      timeout: 2s
   shutdown_timeout: 15s
   request:
     max_body_bytes: 16384
@@ -32,6 +36,7 @@ mgmt:
   health:
     liveness_path: /healthz
     readiness_path: /readyz
+    probe_timeout: 1s
   metrics:
     enabled: true
     path: /metrics
@@ -100,6 +105,8 @@ agentvault:
           symbol: USDC
           decimals: 6
     mpp:
+      # Challenge parsing exists, but AgentVault intentionally rejects this
+      # switch until the Tempo payer signing plan is fully implemented.
       enabled: false
       max_challenge_ttl: 5m
       assets:
@@ -216,7 +223,6 @@ agentvault:
         env: AGENTVAULT_RECOVERY_KEY_V1
 
   approval:
-    enabled: true
     request_ttl: 15m
     grant_ttl: 5m
     expiry_interval: 15s

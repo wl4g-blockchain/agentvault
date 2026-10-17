@@ -106,14 +106,11 @@ export const approvalApi = {
   },
 
   decide(input: ApprovalDecisionInput) {
-    const idempotencyKey = `dashboard:${input.approvalId}:${input.decision}`
     return request<ApprovalRequest>(`/approvals/${encodeURIComponent(input.approvalId)}/decision`, {
       method: 'POST',
-      headers: { 'idempotency-key': idempotencyKey },
       body: JSON.stringify({
         scenario_id: input.scenarioId,
         run_id: input.runId,
-        idempotency_key: idempotencyKey,
         approval_id: input.approvalId,
         decision: input.decision,
         ...(input.approvedAmount ? { approved_amount: input.approvedAmount } : {}),

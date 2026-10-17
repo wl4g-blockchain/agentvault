@@ -75,9 +75,9 @@ export class FeedHandler {
       response.status(404).json(this.error(id, -32602, 'unknown tool'));
       return;
     }
-    const executionKey = request.get('mcp-execution-key')?.trim();
-    if (!executionKey) {
-      response.status(400).json(this.error(id, -32602, 'mcp-execution-key is required'));
+    const runId = request.get('x-run-id')?.trim();
+    if (!runId) {
+      response.status(400).json(this.error(id, -32602, 'x-run-id is required'));
       return;
     }
     const requestHash = createHash('sha256')
@@ -86,7 +86,7 @@ export class FeedHandler {
       .digest('hex');
     let delivery;
     try {
-      delivery = this.storage.delivery(executionKey, requestHash);
+      delivery = this.storage.delivery(runId, requestHash);
     } catch (failure) {
       response.status(409).json(this.error(id, -32009, String(failure)));
       return;
@@ -102,16 +102,16 @@ export class FeedHandler {
         response.status(402).json(this.error(id, -32005, 'settled payment is required'));
         return;
       }
-      this.storage.recordSettled(executionKey, requestHash, payment.intent.id, payment.execution_key);
+      this.storage.recordSettled(runId, requestHash, payment);
       intentId = payment.intent.id;
     }
     if (this.allowFailureInjection && request.get('x-e2e-fail-after-settlement') === 'once' &&
-        this.storage.recordFailure(executionKey, requestHash)) {
+        this.storage.recordFailure(runId, requestHash)) {
       response.status(503).json(this.error(id, -32004, 'injected delivery failure after settlement'));
       return;
     }
     const encoded = JSON.stringify(this.toolResult(id, this.storage.news('realtime', 20), true, intentId));
-    this.storage.recordDelivered(executionKey, requestHash, encoded);
+    this.storage.recordDelivered(runId, requestHash, encoded);
     response.type('application/json').send(encoded);
   }
 

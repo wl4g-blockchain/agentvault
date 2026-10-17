@@ -41,29 +41,13 @@ public final class Payer {
     public record AuthorizePaymentRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
-            @JsonProperty("wallet_id") String walletId,
-            String protocol,
-            AssetIdentity asset,
-            String amount,
-            String recipient,
-            String resource,
             PaymentRequired challenge) {
         public AuthorizePaymentRequest {
-            new Base.OperationContext(scenarioId, runId, idempotencyKey);
-            Base.required("run_id", runId);
-            Base.required("wallet_id", walletId);
-            Base.required("protocol", protocol);
-            Base.required("amount", amount);
-            Base.required("recipient", recipient);
-            Base.required("resource", resource);
-            if (asset == null || challenge == null) throw new IllegalArgumentException("asset and challenge are required");
-            if (!resource.equals(challenge.resource())) {
-                throw new IllegalArgumentException("resource must exactly match the challenge resource");
-            }
-            if (challenge.protocolHint() != null && !protocol.equals(challenge.protocolHint())) {
-                throw new IllegalArgumentException("protocol must match the 402 protocol hint");
-            }
+            new Base.OperationContext(scenarioId, runId);
+            if (challenge == null) throw new IllegalArgumentException("challenge is required");
+            Base.required("challenge.origin", challenge.origin());
+            Base.required("challenge.resource", challenge.resource());
+            Base.required("challenge.contentType", challenge.contentType());
         }
     }
 
@@ -85,11 +69,9 @@ public final class Payer {
     public record ReportOutboundResponseRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             @JsonProperty("payment_response") String paymentResponse) {
         public ReportOutboundResponseRequest {
-            new Base.OperationContext(scenarioId, runId, idempotencyKey);
-            Base.required("run_id", runId);
+            new Base.OperationContext(scenarioId, runId);
             if (paymentResponse == null || paymentResponse.length() > 16 * 1024
                     || !paymentResponse.matches("[\\x21-\\x7e]+")) {
                 throw new IllegalArgumentException("payment_response must be a bounded official x402 header value");
@@ -121,22 +103,13 @@ public final class Payer {
             String available,
             @JsonProperty("as_of") long asOf) {}
 
-    public record PayerRequestContext(String runId, String idempotencyKey) {
+    public record PayerRequestContext(String runId) {
         public PayerRequestContext {
-            Base.required("runId", runId);
-            Base.required("idempotencyKey", idempotencyKey);
-            if (!idempotencyKey.matches("[A-Za-z0-9_.:-]{1,128}")) {
-                throw new IllegalArgumentException("invalid idempotency key");
-            }
-        }
-
-        public static PayerRequestContext forOperation(String runId, String operation) {
-            Base.OperationContext context = Base.OperationContext.forOperation("validation", runId, operation);
-            return new PayerRequestContext(runId, context.idempotencyKey());
+            new Base.OperationContext("validation", runId);
         }
 
         public Base.OperationContext operationContext(String scenarioId) {
-            return new Base.OperationContext(scenarioId, runId, idempotencyKey);
+            return new Base.OperationContext(scenarioId, runId);
         }
     }
 

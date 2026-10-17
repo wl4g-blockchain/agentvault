@@ -10,8 +10,9 @@ use reqwest::{
     Client, StatusCode, Url,
 };
 use serde::Serialize;
+use tracing::Instrument as _;
 
-use crate::{Error, Result};
+use crate::{apm::inject_current_trace_context, Error, Result};
 
 use super::settlement_handler::SettlementProviderConfig;
 
@@ -53,6 +54,8 @@ impl FixedHttpJsonTransport {
             || headers.contains_key("host")
             || headers.contains_key("content-length")
             || headers.contains_key("content-type")
+            || headers.contains_key("traceparent")
+            || headers.contains_key("tracestate")
         {
             return Err(Error::Config(
                 "settlement provider secret headers contain a transport-owned header".to_owned(),
@@ -84,29 +87,50 @@ impl FixedHttpJsonTransport {
     pub async fn post_json<T: Serialize + ?Sized>(
         &self,
         endpoint: ProviderHttpEndpoint,
-        idempotency_key: &str,
+        run_id: &str,
         payload: &T,
     ) -> Result<ProviderHttpResponse> {
-        let idempotency_key = HeaderValue::from_str(idempotency_key)
-            .map_err(|_| Error::Settlement("provider idempotency key is invalid".to_owned()))?;
-        if idempotency_key.is_empty() || idempotency_key.as_bytes().len() > 256 {
-            return Err(Error::Settlement("provider idempotency key is invalid".to_owned()));
+        let run_id =
+            HeaderValue::from_str(run_id).map_err(|_| Error::Settlement("provider run_id is invalid".to_owned()))?;
+        if run_id.is_empty() || run_id.as_bytes().len() > 128 {
+            return Err(Error::Settlement("provider run_id is invalid".to_owned()));
         }
         let url = match endpoint {
             ProviderHttpEndpoint::Verify => &self.verify_url,
             ProviderHttpEndpoint::Settle => &self.settle_url,
         };
-        let mut response = self
-            .client
-            .post(url.clone())
-            .headers(self.headers.clone())
-            .header(ACCEPT, "application/json")
-            .header("idempotency-key", idempotency_key)
-            .json(payload)
-            .send()
-            .await
-            .map_err(|error| Error::Settlement(format!("provider request failed: {error}")))?;
+        let operation = match endpoint {
+            ProviderHttpEndpoint::Verify => "verify",
+            ProviderHttpEndpoint::Settle => "settle",
+        };
+        let span = tracing::info_span!(
+            "payment.provider.request",
+            otel.kind = "client",
+            server.address = url.host_str().unwrap_or(""),
+            http.request.method = "POST",
+            payment.provider.operation = operation,
+            http.response.status_code = tracing::field::Empty,
+        );
+        let mut response = async {
+            let mut headers = self.headers.clone();
+            inject_current_trace_context(&mut headers);
+            self.client
+                .post(url.clone())
+                .headers(headers)
+                .header(ACCEPT, "application/json")
+                // Idempotency-Key is part of the external HTTP protocol. Its
+                // value is the same stable business run_id; AgentVault never
+                // exposes a second idempotency identifier.
+                .header("idempotency-key", run_id)
+                .json(payload)
+                .send()
+                .await
+                .map_err(|error| Error::Settlement(format!("provider request failed: {error}")))
+        }
+        .instrument(span.clone())
+        .await?;
         let status = response.status();
+        span.record("http.response.status_code", status.as_u16());
         if response
             .content_length()
             .is_some_and(|length| length > self.max_response_bytes as u64)

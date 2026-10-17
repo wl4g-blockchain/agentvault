@@ -11,6 +11,7 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: agentvault_open_edge
+                codec_type: AUTO
                 normalize_path: true
                 route_config:
                   name: open_routes
@@ -18,6 +19,8 @@ static_resources:
                     - name: agentvault
                       domains: ["*"]
                       routes:
+                        - match: { prefix: /agentvault.transport.v1.PaymentTransport/ }
+                          route: { cluster: agentvault_grpc, timeout: 30s }
                         - match: { prefix: /api/v1/ }
                           route: { cluster: agentvault_api, timeout: 15s }
                         - match: { prefix: /agentvault-management/ }
@@ -47,3 +50,13 @@ static_resources:
       load_assignment:
         cluster_name: agentvault_management
         endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: agentvault, port_value: 9091 } } } }] }]
+    - name: agentvault_grpc
+      type: STRICT_DNS
+      connect_timeout: 2s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config: { http2_protocol_options: {} }
+      load_assignment:
+        cluster_name: agentvault_grpc
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: agentvault, port_value: 50051 } } } }] }]

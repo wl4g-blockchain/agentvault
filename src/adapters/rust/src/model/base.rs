@@ -1,6 +1,6 @@
 use std::{error, fmt};
 
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -36,7 +36,7 @@ impl fmt::Display for Error {
                 write!(formatter, "AgentVault API error {status} ({code}): {message}")
             }
             Self::Conflict { code, message } => {
-                write!(formatter, "AgentVault idempotency conflict ({code}): {message}")
+                write!(formatter, "AgentVault run conflict ({code}): {message}")
             }
             Self::UnsafeRetry(message) => write!(formatter, "unsafe paid HTTP retry rejected: {message}"),
         }
@@ -45,117 +45,39 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct IdempotencyKey(String);
-
-impl IdempotencyKey {
-    pub fn new(value: impl Into<String>) -> Result<Self> {
-        let value = value.into();
-        validate_idempotency_key(&value)?;
-        Ok(Self(value))
-    }
-
-    pub fn for_operation(run_id: &str, operation: &str) -> Result<Self> {
-        validate_required("run_id", run_id)?;
-        validate_required("operation", operation)?;
-        if run_id.contains(':') || operation.contains(':') {
-            return Err(Error::InvalidArgument(
-                "run_id and operation cannot contain ':' when deriving an idempotency key".to_owned(),
-            ));
-        }
-        Self::new(format!("{run_id}:{operation}"))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for IdempotencyKey {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("IdempotencyKey").field(&self.0).finish()
-    }
-}
-
-impl Serialize for IdempotencyKey {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for IdempotencyKey {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(de::Error::custom)
-    }
-}
-
-fn validate_idempotency_key(value: &str) -> Result<()> {
-    if value.is_empty() || value.len() > 128 {
-        return Err(Error::InvalidArgument(
-            "idempotency_key must contain 1..=128 characters".to_owned(),
-        ));
-    }
-    if !value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
-    {
-        return Err(Error::InvalidArgument(
-            "idempotency_key may contain only ASCII letters, digits, '-', '_', '.', and ':'".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationContext {
     pub scenario_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
-    pub idempotency_key: IdempotencyKey,
+    pub run_id: String,
 }
 
 impl OperationContext {
-    pub fn new(scenario_id: impl Into<String>, idempotency_key: IdempotencyKey) -> Result<Self> {
+    pub fn new(scenario_id: impl Into<String>, run_id: impl Into<String>) -> Result<Self> {
         let scenario_id = scenario_id.into();
+        let run_id = run_id.into();
         validate_required("scenario_id", &scenario_id)?;
-        Ok(Self {
-            scenario_id,
-            run_id: None,
-            idempotency_key,
-        })
-    }
-
-    #[must_use]
-    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
-        self.run_id = Some(run_id.into());
-        self
+        validate_identifier("run_id", &run_id)?;
+        Ok(Self { scenario_id, run_id })
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
         validate_required("scenario_id", &self.scenario_id)?;
-        if self.run_id.as_ref().is_some_and(|value| value.trim().is_empty()) {
-            return Err(Error::InvalidArgument("run_id cannot be blank".to_owned()));
-        }
-        validate_idempotency_key(self.idempotency_key.as_str())
+        validate_identifier("run_id", &self.run_id)
     }
+}
 
-    pub(crate) fn validate_with_run_id(&self) -> Result<()> {
-        self.validate()?;
-        if self.run_id.is_none() {
-            return Err(Error::InvalidArgument(
-                "run_id is required for payment operations".to_owned(),
-            ));
-        }
-        Ok(())
+fn validate_identifier(name: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(Error::InvalidArgument(format!(
+            "{name} must contain 1..=128 safe ASCII characters"
+        )));
     }
+    Ok(())
 }
 
 pub(crate) fn validate_required(name: &str, value: &str) -> Result<()> {
@@ -282,7 +204,6 @@ pub struct PaymentIntent {
     pub resource: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub challenge_hash: Option<String>,
-    pub idempotency_key: String,
     pub request_hash: String,
     pub status: PaymentStatus,
     pub reservation_status: ReservationStatus,

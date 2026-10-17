@@ -88,15 +88,13 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 return;
             }
             String runId = request.getHeader("x-run-id");
-            String executionKey = request.getHeader("mcp-execution-key");
-            if (runId == null || runId.isBlank() || executionKey == null || executionKey.isBlank()) {
-                error(response, 400, "PAYMENT_CONTEXT_REQUIRED",
-                        "x-run-id and mcp-execution-key are required");
+            if (runId == null || runId.isBlank()) {
+                error(response, 400, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required");
                 return;
             }
             JsonNode credential = decodeCredential(request.getHeader("payment-signature"));
             ProtectionOutcome outcome = core.protect(new PayeeOperation(
-                    route.scenarioId(), runId, executionKey, route.offerId(), route.resource(), route.origin(),
+                    route.scenarioId(), runId, route.offerId(), route.resource(), route.origin(),
                     route.protocol(), hash(request.getMethod(), request.getRequestURI(), body), credential));
             if (outcome instanceof PaymentRequired required) {
                 PaymentChallenge challenge = required.challenge();

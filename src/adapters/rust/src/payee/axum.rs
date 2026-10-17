@@ -18,7 +18,6 @@ use crate::{Error, PayeeMiddleware, PayeeOperation, ProtectionOutcome, SettledIn
 
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 const RUN_ID_HEADER: &str = "x-run-id";
-const EXECUTION_KEY_HEADER: &str = "mcp-execution-key";
 const PAYMENT_SIGNATURE_HEADER: &str = "payment-signature";
 
 /// Exact route binding for the Axum payee adapter. Pricing and recipient data
@@ -230,12 +229,7 @@ fn payment_operation(
     let run_id = text_header(&parts.headers, RUN_ID_HEADER).ok_or_else(|| OperationError {
         status: StatusCode::BAD_REQUEST,
         code: "PAYMENT_CONTEXT_REQUIRED",
-        message: "x-run-id and mcp-execution-key are required".to_owned(),
-    })?;
-    let execution_key = text_header(&parts.headers, EXECUTION_KEY_HEADER).ok_or_else(|| OperationError {
-        status: StatusCode::BAD_REQUEST,
-        code: "PAYMENT_CONTEXT_REQUIRED",
-        message: "x-run-id and mcp-execution-key are required".to_owned(),
+        message: "x-run-id is required".to_owned(),
     })?;
     let credential_payload = text_header(&parts.headers, PAYMENT_SIGNATURE_HEADER)
         .map(|value| {
@@ -249,7 +243,6 @@ fn payment_operation(
     Ok(PayeeOperation {
         scenario_id: route.scenario_id.clone(),
         run_id: run_id.to_owned(),
-        execution_key: execution_key.to_owned(),
         offer_id: route.offer_id.clone(),
         resource: route.resource.clone(),
         origin: route.origin.clone(),

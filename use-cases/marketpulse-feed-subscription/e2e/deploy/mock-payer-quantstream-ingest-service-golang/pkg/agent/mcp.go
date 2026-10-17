@@ -39,7 +39,6 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 	values := &environment{}
 	mqttPort := values.positiveUint("AGENTVAULT_MQTT_PORT", 16)
 	mqttTLS := values.boolean("AGENTVAULT_MQTT_TLS")
-	decimals := values.positiveOrZeroUint("PAYMENT_DECIMALS", 8)
 	mqttTimeout := values.positiveDuration("AGENTVAULT_MQTT_TIMEOUT_SECONDS")
 	approvalTimeout := values.positiveDuration("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")
 	mqttHost := values.required("AGENTVAULT_MQTT_HOST")
@@ -47,12 +46,6 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 	mqttPassword := values.required("AGENTVAULT_MQTT_PASSWORD")
 	clientID := values.required("QUANTSTREAM_CLIENT_ID")
 	scenarioID := values.required("QUANTSTREAM_SCENARIO_ID")
-	walletID := values.required("QUANTSTREAM_WALLET_ID")
-	network := values.required("PAYMENT_NETWORK")
-	asset := values.required("PAYMENT_ASSET")
-	tokenContract := values.required("PAYMENT_TOKEN_CONTRACT")
-	amount := values.required("PAYMENT_AMOUNT")
-	recipient := values.required("PAYMENT_RECIPIENT")
 	marketPulseURL := values.required("MARKETPULSE_URL")
 	if values.err != nil {
 		return nil, values.err
@@ -67,10 +60,7 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 		return nil, err
 	}
 	core, err := agentvault.New(wire).Payer(agentvault.PayerConfig{
-		ScenarioID: scenarioID, WalletID: walletID, Protocol: "x402",
-		Asset: agentvault.AssetIdentity{Network: network, Asset: asset,
-			TokenContract: tokenContract, Decimals: uint8(decimals)},
-		Amount: amount, Recipient: recipient, ApprovalTimeout: approvalTimeout,
+		ScenarioID: scenarioID, ApprovalTimeout: approvalTimeout,
 		ApprovalPollInterval: time.Second, DeliveryRetries: 1,
 	})
 	if err != nil {
@@ -123,18 +113,17 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 func (helper *MCPHelper) Close() error { return helper.client.Close() }
 
 func (helper *MCPHelper) YesterdayNews(ctx context.Context, runID string) (ToolResult, error) {
-	return helper.call(ctx, yesterdayTool, runID, runID+".yesterday", false)
+	return helper.call(ctx, yesterdayTool, runID, false)
 }
 
 func (helper *MCPHelper) RealtimeNews(ctx context.Context, runID string, failAfterSettlement bool) (ToolResult, error) {
-	return helper.call(ctx, realtimeTool, runID, runID+".realtime", failAfterSettlement)
+	return helper.call(ctx, realtimeTool, runID, failAfterSettlement)
 }
 
 func (helper *MCPHelper) call(
 	ctx context.Context,
 	tool string,
 	runID string,
-	executionKey string,
 	failAfterSettlement bool,
 ) (ToolResult, error) {
 	if _, ok := helper.tools[tool]; !ok {
@@ -142,16 +131,8 @@ func (helper *MCPHelper) call(
 	}
 	headers := make(http.Header)
 	headers.Set("x-run-id", runID)
-	headers.Set("mcp-execution-key", executionKey)
 	if failAfterSettlement {
 		headers.Set("x-e2e-fail-after-settlement", "once")
-	}
-	if tool == realtimeTool {
-		operation, err := agentvault.NewPayerRequestContext(runID, "marketpulse-realtime")
-		if err != nil {
-			return ToolResult{}, err
-		}
-		headers.Set("x-agentvault-idempotency-key", string(operation.IdempotencyKey))
 	}
 	result, err := helper.client.CallTool(ctx, mcp.CallToolRequest{
 		Header: headers,
@@ -167,7 +148,7 @@ func (helper *MCPHelper) call(
 	if err != nil {
 		return ToolResult{}, fmt.Errorf("encode MarketPulse MCP result: %w", err)
 	}
-	intentID := helper.payments.take(executionKey)
+	intentID := helper.payments.take(runID)
 	if tool == realtimeTool && intentID == "" {
 		return ToolResult{}, errors.New("paid MCP result omitted AgentVault payment metadata")
 	}
@@ -180,11 +161,10 @@ type paymentRoundTripper struct {
 }
 
 func (transport *paymentRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
-	executionKey := request.Header.Get("mcp-execution-key")
-	idempotencyKey := request.Header.Get("x-agentvault-idempotency-key")
-	if idempotencyKey != "" {
-		operation, err := agentvault.NewPayerRequestContext(request.Header.Get("x-run-id"), "marketpulse-realtime")
-		if err != nil || string(operation.IdempotencyKey) != idempotencyKey {
+	runID := request.Header.Get("x-run-id")
+	if runID != "" {
+		operation, err := agentvault.NewPayerRequestContext(runID)
+		if err != nil {
 			return nil, errors.New("invalid paid MCP operation context")
 		}
 		request = agentvault.WithPayment(request, operation)
@@ -193,14 +173,14 @@ func (transport *paymentRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	if err != nil {
 		return nil, err
 	}
-	if payment, ok := agentvault.PaymentFromResponse(response); ok && executionKey != "" {
-		transport.payments.Store(executionKey, payment.Intent.ID)
+	if payment, ok := agentvault.PaymentFromResponse(response); ok && runID != "" {
+		transport.payments.Store(runID, payment.Intent.ID)
 	}
 	return response, nil
 }
 
-func (transport *paymentRoundTripper) take(executionKey string) string {
-	value, ok := transport.payments.LoadAndDelete(executionKey)
+func (transport *paymentRoundTripper) take(runID string) string {
+	value, ok := transport.payments.LoadAndDelete(runID)
 	if !ok {
 		return ""
 	}
@@ -225,14 +205,6 @@ func (values *environment) positiveUint(name string, bits int) uint64 {
 	value, err := strconv.ParseUint(values.required(name), 10, bits)
 	if values.err == nil && (err != nil || value == 0) {
 		values.err = fmt.Errorf("%s must be a positive integer", name)
-	}
-	return value
-}
-
-func (values *environment) positiveOrZeroUint(name string, bits int) uint64 {
-	value, err := strconv.ParseUint(values.required(name), 10, bits)
-	if values.err == nil && err != nil {
-		values.err = fmt.Errorf("%s must be an unsigned integer", name)
 	}
 	return value
 }

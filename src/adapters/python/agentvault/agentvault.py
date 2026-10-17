@@ -29,8 +29,7 @@ class AgentVault:
 
     def submit_approval_decision(self, request: SubmitApprovalDecisionRequest) -> ApprovalRequest:
         approval = urllib.parse.quote(request.approval_id, safe="")
-        value = self._transport.request("POST", f"/api/v1/approvals/{approval}/decision",
-                                        request.wire(), request.context.idempotency_key)
+        value = self._transport.request("POST", f"/api/v1/approvals/{approval}/decision", request.wire())
         return ApprovalRequest.from_wire(value)
 
     def get_approval_status(self, scenario_id: str, approval_id: str) -> ApprovalRequest:

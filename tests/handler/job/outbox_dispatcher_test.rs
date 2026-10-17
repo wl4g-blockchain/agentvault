@@ -73,7 +73,7 @@ fn message(id: &str, event_type: &str, attempt_count: u32) -> OutboxMessage {
         event_type: event_type.to_owned(),
         destination: "scenario:scenario-1.payments".to_owned(),
         correlation_id: "intent-1".to_owned(),
-        idempotency_key: format!("{event_type}:intent-1"),
+        run_id: "run-1".to_owned(),
         payload: json!({"intent_id": "intent-1"}),
         status: OutboxStatus::Pending,
         attempt_count,

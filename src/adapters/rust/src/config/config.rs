@@ -1,6 +1,6 @@
 use std::{fmt, time::Duration};
 
-use crate::{AssetIdentity, Error, Result};
+use crate::{Error, Result};
 
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_APPROVAL_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -90,11 +90,6 @@ impl fmt::Debug for MqttConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayerConfig {
     pub scenario_id: String,
-    pub wallet_id: String,
-    pub protocol: String,
-    pub asset: AssetIdentity,
-    pub amount: String,
-    pub recipient: String,
     pub approval_timeout: Duration,
     pub approval_poll_interval: Duration,
     pub delivery_retries: u8,
@@ -102,21 +97,9 @@ pub struct PayerConfig {
 }
 
 impl PayerConfig {
-    pub fn new(
-        scenario_id: impl Into<String>,
-        wallet_id: impl Into<String>,
-        protocol: impl Into<String>,
-        asset: AssetIdentity,
-        amount: impl Into<String>,
-        recipient: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn new(scenario_id: impl Into<String>) -> Result<Self> {
         let config = Self {
             scenario_id: scenario_id.into(),
-            wallet_id: wallet_id.into(),
-            protocol: protocol.into(),
-            asset,
-            amount: amount.into(),
-            recipient: recipient.into(),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             approval_poll_interval: DEFAULT_APPROVAL_POLL_INTERVAL,
             delivery_retries: 0,
@@ -146,18 +129,8 @@ impl PayerConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        for (name, value) in [
-            ("scenario_id", self.scenario_id.as_str()),
-            ("wallet_id", self.wallet_id.as_str()),
-            ("protocol", self.protocol.as_str()),
-            ("asset.network", self.asset.network.as_str()),
-            ("asset.asset", self.asset.asset.as_str()),
-            ("amount", self.amount.as_str()),
-            ("recipient", self.recipient.as_str()),
-        ] {
-            if value.trim().is_empty() {
-                return Err(Error::InvalidArgument(format!("{name} cannot be blank")));
-            }
+        if self.scenario_id.trim().is_empty() {
+            return Err(Error::InvalidArgument("scenario_id cannot be blank".to_owned()));
         }
         if self.approval_timeout.is_zero()
             || self.approval_poll_interval.is_zero()

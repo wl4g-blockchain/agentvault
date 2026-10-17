@@ -435,7 +435,7 @@ mod approval {
             event_type: "approval_expired".to_owned(),
             destination: format!("scenario:{}.payments", intent.scenario_id),
             correlation_id: intent.id.clone(),
-            idempotency_key: format!("approval-expired:{}", approval.id),
+            run_id: intent.run_id.clone(),
             payload: json!({
                 "intent_id": intent.id,
                 "approval_id": approval.id,
@@ -786,6 +786,24 @@ mod catalog {
                 }
             }
 
+            async fn resolve_resource(&self, scenario_id: &str, resource: &str) -> Result<Option<PaymentOffer>> {
+                let rows = postgres_select!(
+                    all self.pool(),
+                    "SELECT * FROM pay_offer WHERE scenario_id = $1 AND resource = $2 AND enabled",
+                    scenario_id,
+                    resource,
+                )
+                .await
+                .map_err(|error| storage_error("resolve payment offer resource", error))?;
+                match rows.as_slice() {
+                    [] => Ok(None),
+                    [row] => records::offer(row).map(Some),
+                    _ => Err(Error::Storage(
+                        "multiple enabled offers own one scenario resource".to_owned(),
+                    )),
+                }
+            }
+
             async fn update(&self, offer: &PaymentOffer, expected_updated_at: i64) -> Result<PaymentOffer> {
                 validate_offer(offer)?;
                 if offer.updated_at <= expected_updated_at {
@@ -924,6 +942,7 @@ mod catalog {
         };
 
         use super::super::{
+            base::postgres_scalar,
             codec::{encode_amount, encode_json, encode_optional_amount, page_bounds, PgAmount},
             conflict, records, storage_error, PostgresStorage,
         };
@@ -1042,6 +1061,18 @@ mod catalog {
                     page,
                 )
                 .await
+            }
+
+            async fn has_enabled_wallet_binding(&self, scenario_id: &str, wallet_id: &str) -> Result<bool> {
+                postgres_scalar!(
+                    one self.pool(),
+                    "SELECT EXISTS (SELECT 1 FROM pay_policy p JOIN pay_policy_wallet m ON m.policy_id = p.id \
+                     WHERE p.scenario_id = $1 AND m.wallet_id = $2 AND p.enabled)",
+                    scenario_id,
+                    wallet_id,
+                )
+                .await
+                .map_err(|error| storage_error("check scenario wallet policy binding", error))
             }
         }
 
@@ -2174,6 +2205,9 @@ mod key_repository {
                 || request.active_key().wallet_id != request.wallet().wallet.id
                 || request.wallet().active_key_version != Some(request.active_key().version)
                 || request.active_key().status != WalletKeyStatus::Active
+                || !request
+                    .wallet()
+                    .signing_ready_for_payment_network(&request.intent().asset.network)
                 || request.intent().challenge_hash.as_deref() != Some(request.challenge().challenge_hash.as_str())
             {
                 return Err(Error::PaymentConflict(
@@ -2889,7 +2923,7 @@ mod outbox {
         let payload = encode_json(&message.payload, "pay_outbox.payload")?;
         let inserted = sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, correlation_id, \
-             idempotency_key, payload, status, attempt_count, available_at, lease_owner, lease_expires_at, \
+             run_id, payload, status, attempt_count, available_at, lease_owner, lease_expires_at, \
              last_error, created_at, delivered_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              ON CONFLICT DO NOTHING RETURNING id",
@@ -2900,7 +2934,7 @@ mod outbox {
         .bind(&message.event_type)
         .bind(&message.destination)
         .bind(&message.correlation_id)
-        .bind(&message.idempotency_key)
+        .bind(&message.run_id)
         .bind(payload)
         .bind(message.status.as_str())
         .bind(i64::from(message.attempt_count))
@@ -2917,18 +2951,19 @@ mod outbox {
             return Ok(());
         }
         let existing = sqlx::query(
-            "SELECT * FROM pay_outbox WHERE id = $1 OR (destination = $2 AND idempotency_key = $3) FOR SHARE",
+            "SELECT * FROM pay_outbox WHERE id = $1 OR (destination = $2 AND event_type = $3 AND run_id = $4) FOR SHARE",
         )
         .bind(&message.id)
         .bind(&message.destination)
-        .bind(&message.idempotency_key)
+        .bind(&message.event_type)
+        .bind(&message.run_id)
         .fetch_all(&mut *connection)
         .await
         .map_err(|error| storage_error("find outbox replay", error))?;
         if existing.len() == 1 && same_logical_message(&records::outbox(&existing[0])?, message) {
             Ok(())
         } else {
-            Err(conflict("outbox idempotency identity has different content"))
+            Err(conflict("outbox run identity has different content"))
         }
     }
 
@@ -2939,7 +2974,7 @@ mod outbox {
             || message.event_type.trim().is_empty()
             || message.destination.trim().is_empty()
             || message.correlation_id.trim().is_empty()
-            || message.idempotency_key.trim().is_empty()
+            || message.run_id.trim().is_empty()
         {
             return Err(Error::InvalidRequest(
                 "outbox message identity is incomplete".to_owned(),
@@ -2955,7 +2990,7 @@ mod outbox {
             && left.event_type == right.event_type
             && left.destination == right.destination
             && left.correlation_id == right.correlation_id
-            && left.idempotency_key == right.idempotency_key
+            && left.run_id == right.run_id
             && left.payload == right.payload
             && left.created_at == right.created_at
     }
@@ -3118,17 +3153,13 @@ mod payment {
 
     #[async_trait]
     impl PaymentStorage for PostgresStorage {
-        async fn find_idempotency(
-            &self,
-            scenario_id: &str,
-            idempotency_key: &str,
-        ) -> Result<Option<AuthorizationRecord>> {
-            let row = sqlx::query("SELECT * FROM pay_intent WHERE scenario_id = $1 AND idempotency_key = $2")
+        async fn find_run(&self, scenario_id: &str, run_id: &str) -> Result<Option<AuthorizationRecord>> {
+            let row = sqlx::query("SELECT * FROM pay_intent WHERE scenario_id = $1 AND run_id = $2")
                 .bind(scenario_id)
-                .bind(idempotency_key)
+                .bind(run_id)
                 .fetch_optional(self.pool())
                 .await
-                .map_err(|error| storage_error("find payment idempotency key", error))?;
+                .map_err(|error| storage_error("find payment run", error))?;
             let Some(row) = row else { return Ok(None) };
             let intent = records::intent(&row)?;
             let approval = load_approval_pool(self.pool(), &intent.id).await?;
@@ -3144,12 +3175,11 @@ mod payment {
             let outbox = write.outbox.to_vec();
             self.transaction(|connection| {
                 Box::pin(async move {
-                    lock_idempotency_key(connection, &intent.scenario_id, &intent.idempotency_key).await?;
-                    if let Some(existing) =
-                        load_idempotency_connection(connection, &intent.scenario_id, &intent.idempotency_key).await?
+                    lock_run_id(connection, &intent.scenario_id, &intent.run_id).await?;
+                    if let Some(existing) = load_run_connection(connection, &intent.scenario_id, &intent.run_id).await?
                     {
                         if existing.intent.request_hash != intent.request_hash {
-                            return Err(conflict("payment idempotency key is bound to a different request"));
+                            return Err(conflict("payment run_id is bound to a different request"));
                         }
                         return Ok(IdempotentWrite::Replay(existing));
                     }
@@ -3232,14 +3262,12 @@ mod payment {
             let outbox = write.outbox.to_vec();
             self.transaction(|connection| {
                 Box::pin(async move {
-                    lock_idempotency_key(connection, &intent.scenario_id, &intent.idempotency_key).await?;
-                    if let Some(existing) =
-                        load_intent_by_idempotency(connection, &intent.scenario_id, &intent.idempotency_key).await?
-                    {
+                    lock_run_id(connection, &intent.scenario_id, &intent.run_id).await?;
+                    if let Some(existing) = load_intent_by_run(connection, &intent.scenario_id, &intent.run_id).await? {
                         if existing.request_hash == intent.request_hash {
                             return Ok(IdempotentWrite::Replay(existing));
                         }
-                        return Err(conflict("payment idempotency key is bound to a different request"));
+                        return Err(conflict("payment run_id is bound to a different request"));
                     }
                     validate_challenge_guard(connection, &intent, &challenge, &guard).await?;
                     validate_challenge_created_event(&events, &intent, &challenge)?;
@@ -3518,17 +3546,13 @@ mod payment {
         ApprovalReserve,
     }
 
-    async fn lock_idempotency_key(
-        connection: &mut PgConnection,
-        scenario_id: &str,
-        idempotency_key: &str,
-    ) -> Result<()> {
-        let lock_key = format!("agentvault:payment:{scenario_id}:{idempotency_key}");
+    async fn lock_run_id(connection: &mut PgConnection, scenario_id: &str, run_id: &str) -> Result<()> {
+        let lock_key = format!("agentvault:payment:{scenario_id}:{run_id}");
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(lock_key)
             .execute(connection)
             .await
-            .map_err(|error| storage_error("lock payment idempotency key", error))?;
+            .map_err(|error| storage_error("lock payment run", error))?;
         Ok(())
     }
 
@@ -3544,26 +3568,26 @@ mod payment {
         row.as_ref().map(records::intent).transpose()
     }
 
-    async fn load_intent_by_idempotency(
+    async fn load_intent_by_run(
         connection: &mut PgConnection,
         scenario_id: &str,
-        idempotency_key: &str,
+        run_id: &str,
     ) -> Result<Option<PaymentIntent>> {
-        let row = sqlx::query("SELECT * FROM pay_intent WHERE scenario_id = $1 AND idempotency_key = $2 FOR UPDATE")
+        let row = sqlx::query("SELECT * FROM pay_intent WHERE scenario_id = $1 AND run_id = $2 FOR UPDATE")
             .bind(scenario_id)
-            .bind(idempotency_key)
+            .bind(run_id)
             .fetch_optional(connection)
             .await
-            .map_err(|error| storage_error("find payment intent idempotency key", error))?;
+            .map_err(|error| storage_error("find payment intent run", error))?;
         row.as_ref().map(records::intent).transpose()
     }
 
-    async fn load_idempotency_connection(
+    async fn load_run_connection(
         connection: &mut PgConnection,
         scenario_id: &str,
-        idempotency_key: &str,
+        run_id: &str,
     ) -> Result<Option<AuthorizationRecord>> {
-        let Some(intent) = load_intent_by_idempotency(connection, scenario_id, idempotency_key).await? else {
+        let Some(intent) = load_intent_by_run(connection, scenario_id, run_id).await? else {
             return Ok(None);
         };
         let row = sqlx::query("SELECT * FROM pay_approval WHERE intent_id = $1 ORDER BY created_at DESC, id LIMIT 1")
@@ -3595,11 +3619,11 @@ mod payment {
         sqlx::query(
             "INSERT INTO pay_intent (id, scenario_id, run_id, wallet_id, policy_id, offer_id, direction, protocol, \
              network, asset, token_contract, asset_decimals, recipient, amount, settled_amount, resource, \
-             challenge_hash, credential_hash, idempotency_key, request_hash, status, reservation_status, \
+             challenge_hash, credential_hash, request_hash, status, reservation_status, \
              reserved_amount, tx_hash, settlement_ref, next_reconcile_at, reconcile_attempts, lease_owner, \
              lease_expires_at, created_at, updated_at, expires_at, settled_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-                     $19, $20, $21, $22, $23, $24, $25, $26, 0, NULL, NULL, $27, $28, $29, $30)",
+                     $19, $20, $21, $22, $23, $24, $25, 0, NULL, NULL, $26, $27, $28, $29)",
         )
         .bind(&intent.id)
         .bind(&intent.scenario_id)
@@ -3619,7 +3643,6 @@ mod payment {
         .bind(&intent.resource)
         .bind(&intent.challenge_hash)
         .bind(credential_hash)
-        .bind(&intent.idempotency_key)
         .bind(&intent.request_hash)
         .bind(intent.status.as_str())
         .bind(intent.reservation_status.as_str())
@@ -3643,6 +3666,7 @@ mod payment {
     ) -> Result<()> {
         if approval.id.trim().is_empty()
             || approval.intent_id.trim().is_empty()
+            || approval.run_id.trim().is_empty()
             || approval.requested_amount.is_zero()
             || approval.requested_by.trim().is_empty()
             || approval.intent_hash.trim().is_empty()
@@ -3657,12 +3681,13 @@ mod payment {
             .map(|material| super::codec::encode_json(material, "pay_approval.sealed_grant_token"))
             .transpose()?;
         sqlx::query(
-            "INSERT INTO pay_approval (id, intent_id, requested_amount, approved_amount, requested_by, approved_by, \
+            "INSERT INTO pay_approval (id, intent_id, run_id, requested_amount, approved_amount, requested_by, approved_by, \
              status, intent_hash, grant_jti, grant_claims_hash, sealed_grant_token, expires_at, consumed_at, \
-             created_at, approved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+             created_at, approved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(&approval.id)
         .bind(&approval.intent_id)
+        .bind(&approval.run_id)
         .bind(super::codec::encode_amount(approval.requested_amount)?)
         .bind(super::codec::encode_optional_amount(approval.approved_amount)?)
         .bind(&approval.requested_by)
@@ -3938,14 +3963,14 @@ mod payment {
         intent
             .validate()
             .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
+        let (_, wallet_id) = intent
+            .authority_ids()
+            .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
         if intent.direction != PaymentDirection::Outbound
             || intent.scenario_id != guard.scenario.id
             || intent.policy_id.as_deref() != Some(guard.policy.id.as_str())
             || guard.scenario.client_id != guard.client.id
-            || !guard
-                .policy
-                .wallet_ids
-                .contains(intent.wallet_id.as_ref().expect("validated wallet id"))
+            || !guard.policy.wallet_ids.iter().any(|candidate| candidate == wallet_id)
         {
             return Err(conflict("authorization guard is not bound to the payment intent"));
         }
@@ -3955,7 +3980,7 @@ mod payment {
             &guard.scenario.id,
             &guard.policy.id,
             None,
-            intent.wallet_id.as_deref().expect("validated wallet id"),
+            wallet_id,
         )
         .await?;
         let client_row = sqlx::query("SELECT * FROM pay_client WHERE id = $1 AND auth_principal = $2")
@@ -3977,7 +4002,6 @@ mod payment {
         let policy = load_policy_connection(connection, &guard.policy.id)
             .await?
             .ok_or_else(|| conflict("authorization policy no longer exists"))?;
-        let wallet_id = intent.wallet_id.as_deref().expect("validated wallet id");
         let wallet = load_payment_wallet_connection(connection, wallet_id)
             .await?
             .ok_or_else(|| conflict("authorization wallet no longer exists"))?;
@@ -3988,7 +4012,7 @@ mod payment {
             if !client.authenticates(&guard.principal)
                 || !scenario.enabled
                 || !policy.enabled
-                || !wallet.signing_ready()
+                || !wallet.signing_ready_for_payment_network(&intent.asset.network)
                 || wallet.updated_at != guard.expected_wallet_updated_at
                 || wallet.active_key_version != guard.expected_wallet_key_version
                 || wallet.budget_unit.as_ref() != Some(&policy.budget_unit)
@@ -4026,6 +4050,9 @@ mod payment {
         intent
             .validate()
             .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
+        let (policy_id, wallet_id) = intent
+            .authority_ids()
+            .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
         lock_scenario_budget(connection, &intent.scenario_id).await?;
         let scenario_row = sqlx::query(
             "SELECT s.*, c.enabled AS client_enabled FROM pay_scenario s \
@@ -4040,8 +4067,6 @@ mod payment {
         let client_enabled: bool = scenario_row
             .try_get("client_enabled")
             .map_err(|error| storage_error("decode payment client lifecycle", error))?;
-        let policy_id = intent.policy_id.as_deref().expect("validated policy id");
-        let wallet_id = intent.wallet_id.as_deref().expect("validated wallet id");
         lock_policy_wallet(connection, policy_id, wallet_id).await?;
         let policy = load_policy_connection(connection, policy_id)
             .await?
@@ -4059,7 +4084,8 @@ mod payment {
             || !policy.allows_asset(&intent.asset)
             || wallet.budget_unit.as_ref() != Some(&policy.budget_unit)
             || !wallet.enabled
-            || (intent.direction == PaymentDirection::Outbound && !wallet.signing_ready())
+            || (intent.direction == PaymentDirection::Outbound
+                && !wallet.signing_ready_for_payment_network(&intent.asset.network))
             || (intent.direction == PaymentDirection::Outbound
                 && !policy.allows_payment_recipient(&intent.asset.network, &intent.recipient))
             || origin.is_some_and(|origin| !policy.allows_origin(origin))
@@ -4173,8 +4199,9 @@ mod payment {
         now: i64,
         approved_overage: bool,
     ) -> Result<()> {
-        let policy_id = intent.policy_id.as_deref().expect("validated policy id");
-        let wallet_id = intent.wallet_id.as_deref().expect("validated wallet id");
+        let (policy_id, wallet_id) = intent
+            .authority_ids()
+            .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
         lock_scenario_budget(connection, &intent.scenario_id).await?;
         lock_policy_wallet(connection, policy_id, wallet_id).await?;
         let policy = load_policy_connection(connection, policy_id)
@@ -4330,6 +4357,8 @@ mod payment {
         Ok(BudgetSnapshot {
             budget_unit: budget_unit.clone(),
             wallet_enabled: wallet.enabled,
+            wallet_algorithm: wallet.wallet.algorithm,
+            wallet_address: wallet.wallet.address,
             wallet_updated_at: wallet.updated_at,
             wallet_active_key_version: wallet.active_key_version,
             wallet_shared_across_scenarios: shared_count > 1,
@@ -4753,7 +4782,6 @@ pub(super) mod records {
             settled_amount: decode_amount(&field(row, "settled_amount")?, "pay_intent.settled_amount")?,
             resource: field(row, "resource")?,
             challenge_hash: field(row, "challenge_hash")?,
-            idempotency_key: field(row, "idempotency_key")?,
             request_hash: field(row, "request_hash")?,
             status: payment_status(&field::<String>(row, "status")?)?,
             reservation_status: reservation_status(&field::<String>(row, "reservation_status")?)?,
@@ -4785,6 +4813,7 @@ pub(super) mod records {
         Ok(ApprovalRequest {
             id: field(row, "id")?,
             intent_id: field(row, "intent_id")?,
+            run_id: field(row, "run_id")?,
             requested_amount: decode_amount(&field(row, "requested_amount")?, "pay_approval.requested_amount")?,
             approved_amount: decode_optional_amount(
                 field::<Option<PgAmount>>(row, "approved_amount")?.as_ref(),
@@ -4835,7 +4864,7 @@ pub(super) mod records {
             event_type: field(row, "event_type")?,
             destination: field(row, "destination")?,
             correlation_id: field(row, "correlation_id")?,
-            idempotency_key: field(row, "idempotency_key")?,
+            run_id: field(row, "run_id")?,
             payload: decode_json(field(row, "payload")?, "pay_outbox.payload")?,
             status: outbox_status(&field::<String>(row, "status")?)?,
             attempt_count: decode_u32(field(row, "attempt_count")?, "pay_outbox.attempt_count")?,
@@ -5494,7 +5523,7 @@ mod signing {
             || !policy.budget_unit.matches(&intent.asset)
             || intent.amount > limits.max_per_payment
             || limits.hard_daily_limit().is_none_or(|maximum| intent.amount > maximum)
-            || !wallet.signing_ready()
+            || !wallet.signing_ready_for_payment_network(&intent.asset.network)
             || wallet.custody != WalletCustody::Local
             || wallet.budget_unit.as_ref() != Some(&intent.asset.budget_unit())
             || wallet.max_per_payment.is_some_and(|maximum| intent.amount > maximum)
@@ -5743,6 +5772,17 @@ impl crate::storage::IStorage for PostgresStorage {
     fn init(&self) -> crate::storage::StorageLifecycleFuture {
         let storage = self.clone();
         Box::pin(async move { storage.migrate(storage.connect_timeout).await })
+    }
+
+    fn ping(&self) -> crate::storage::StorageHealthFuture {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            sqlx::query("SELECT 1")
+                .execute(&pool)
+                .await
+                .map_err(|error| storage_error("ping PostgreSQL payment storage", error))?;
+            Ok(())
+        })
     }
 
     fn close(&self) -> crate::storage::StorageCloseFuture {

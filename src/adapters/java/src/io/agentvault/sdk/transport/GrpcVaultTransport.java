@@ -53,14 +53,14 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
     }
 
     @Override public <T> T get(String path, Class<T> type) {
-        return execute("GET", path, null, null, type);
+        return execute("GET", path, null, type);
     }
 
-    @Override public <T> T post(String path, Object body, String idempotencyKey, Class<T> type) {
-        return execute("POST", path, body, idempotencyKey, type);
+    @Override public <T> T post(String path, Object body, Class<T> type) {
+        return execute("POST", path, body, type);
     }
 
-    private <T> T execute(String method, String path, Object body, String idempotencyKey, Class<T> type) {
+    private <T> T execute(String method, String path, Object body, Class<T> type) {
         if (path == null || !path.startsWith("/api/v1/") || path.indexOf('\\') >= 0) {
             throw new IllegalArgumentException("invalid AgentVault gRPC path");
         }
@@ -69,9 +69,6 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
             ObjectNode headers = JSON.createObjectNode();
             headers.put("accept", "application/json");
             if (body != null) headers.put("content-type", "application/json");
-            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-                headers.put("idempotency-key", idempotencyKey);
-            }
             ObjectNode request = JSON.createObjectNode();
             request.put("method", method);
             request.put("path", path);

@@ -66,13 +66,12 @@ const (
 	MethodPost = transport.MethodPost
 )
 
-var ErrIdempotencyConflict = transport.ErrIdempotencyConflict
+var ErrRunConflict = transport.ErrRunConflict
 var NewMqttVaultTransport = transport.NewMqttVaultTransport
 var NewHttpVaultTransport = transport.NewHttpVaultTransport
 var NewHttpVaultTransportWithOptions = transport.NewHttpVaultTransportWithOptions
 var NewGrpcVaultTransport = transport.NewGrpcVaultTransport
 
-type IdempotencyKey = model.IdempotencyKey
 type OperationContext = model.OperationContext
 type PaymentDirection = model.PaymentDirection
 type PaymentStatus = model.PaymentStatus
@@ -104,7 +103,6 @@ type CreateChallengeRequest = model.CreateChallengeRequest
 type VerifyPaymentRequest = model.VerifyPaymentRequest
 type PaymentVerification = model.PaymentVerification
 type SettlePaymentRequest = model.SettlePaymentRequest
-type IncomingPayment = model.IncomingPayment
 type SettledIncomingPayment = model.SettledIncomingPayment
 type PayerHTTPRequest = model.PayerHTTPRequest
 type PayerHTTPResponse = model.PayerHTTPResponse
@@ -146,16 +144,8 @@ const (
 	ReservationStatusReleased   = model.ReservationStatusReleased
 )
 
-func NewIdempotencyKey(value string) (model.IdempotencyKey, error) {
-	return model.NewIdempotencyKey(value)
-}
-
-func OperationKey(runID, operation string) (model.IdempotencyKey, error) {
-	return model.OperationKey(runID, operation)
-}
-
-func NewOperationContext(scenarioID string, key model.IdempotencyKey) (model.OperationContext, error) {
-	return model.NewOperationContext(scenarioID, key)
+func NewOperationContext(scenarioID, runID string) (model.OperationContext, error) {
+	return model.NewOperationContext(scenarioID, runID)
 }
 
 func (vault *AgentVault) GetPendingApprovals(ctx context.Context, query model.ApprovalQuery) (*model.ApprovalPage, error) {
@@ -186,7 +176,7 @@ func (vault *AgentVault) SubmitApprovalDecision(ctx context.Context, request mod
 	}
 	path := "/api/v1/approvals/" + url.PathEscape(request.ApprovalID) + "/decision"
 	var result model.ApprovalRequest
-	if err := transport.NewClient(vault.wire).Post(ctx, path, request, &result, string(request.IdempotencyKey)); err != nil {
+	if err := transport.NewClient(vault.wire).Post(ctx, path, request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

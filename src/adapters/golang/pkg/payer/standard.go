@@ -66,7 +66,7 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if m == nil || m.core == nil || m.base == nil {
 		return nil, errors.New("payer HTTP middleware is not configured")
 	}
-	if err := operation.IdempotencyKey.Validate(); err != nil || strings.TrimSpace(operation.RunID) == "" {
+	if err := model.ValidateIdentifier("run_id", operation.RunID); err != nil {
 		return nil, errors.New("paid request has an invalid workflow context")
 	}
 	template, err := cloneReplayable(request)

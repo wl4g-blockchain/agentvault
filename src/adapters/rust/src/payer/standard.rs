@@ -145,7 +145,9 @@ fn canonical_origin(url: &Url) -> Result<String> {
             "paid request URL must be absolute HTTP(S) without userinfo".to_owned(),
         ));
     }
-    let host = url.host_str().expect("host checked above");
+    let host = url
+        .host_str()
+        .ok_or_else(|| Error::InvalidArgument("paid request URL must include a canonical host".to_owned()))?;
     let authority = match url.port() {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),

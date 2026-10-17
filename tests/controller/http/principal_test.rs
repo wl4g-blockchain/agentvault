@@ -23,8 +23,32 @@ fn authguard_context() -> (TempDir, PrincipalContext) {
             file: key_path.to_string_lossy().into_owned(),
             env: String::new(),
         },
+        ..AuthGuardIntegrationConfig::default()
     };
     (directory, PrincipalContext::from_config(&config).unwrap())
+}
+
+#[test]
+fn decodes_token_backed_context_with_the_same_lifetime_rules() {
+    let now = epoch_seconds();
+    let encoded = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "version": 3,
+            "principal_id": "principal:token-backed",
+            "action": "agentvault.api.use",
+            "resource_urn": "urn:authguard:prod:agentvault:global:example:api",
+            "allow_resource_urns": ["urn:one"],
+            "deny_resource_urns": [],
+            "policy_revision": 1,
+            "issued_at_epoch_seconds": now,
+            "expires_at_epoch_seconds": now + 30
+        }))
+        .unwrap(),
+    );
+
+    let context = decode_access_context(&encoded, now).unwrap();
+    assert_eq!(context.principal_id, "principal:token-backed");
+    assert!(decode_access_context(&encoded, now + 31).is_none());
 }
 
 fn signed_context(principal: &str, issued_at: u64, expires_at: u64) -> String {
@@ -48,26 +72,32 @@ fn signed_context(principal: &str, issued_at: u64, expires_at: u64) -> String {
     format!("{input}.{}", URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
-#[test]
-fn requires_a_valid_signed_authguard_context_when_enabled() {
+#[tokio::test]
+async fn requires_a_valid_signed_authguard_context_when_enabled() {
     let (_directory, context) = authguard_context();
-    assert!(context.resolve(&HeaderMap::new()).is_none());
+    assert_eq!(context.resolve_request(&HeaderMap::new()).await.unwrap(), None);
 
     let now = epoch_seconds();
     let signed = signed_context("principal:marketpulse", now, now + 30);
     let mut headers = HeaderMap::new();
     headers.insert(ACCESS_CONTEXT_HEADER, HeaderValue::from_str(&signed).unwrap());
-    assert_eq!(context.resolve(&headers).unwrap().as_str(), "principal:marketpulse");
+    assert_eq!(
+        context.resolve_request(&headers).await.unwrap().unwrap().as_str(),
+        "principal:marketpulse"
+    );
 
     headers.insert(
         ACCESS_CONTEXT_HEADER,
         HeaderValue::from_static("agctx1.forged.signature"),
     );
-    assert!(context.resolve(&headers).is_none());
+    assert_eq!(
+        context.resolve_request(&headers).await,
+        Err(PrincipalResolutionError::Invalid)
+    );
 }
 
-#[test]
-fn rejects_expired_or_future_authguard_contexts() {
+#[tokio::test]
+async fn rejects_expired_or_future_authguard_contexts() {
     let (_directory, context) = authguard_context();
     let now = epoch_seconds();
     for signed in [
@@ -76,19 +106,53 @@ fn rejects_expired_or_future_authguard_contexts() {
     ] {
         let mut headers = HeaderMap::new();
         headers.insert(ACCESS_CONTEXT_HEADER, HeaderValue::from_str(&signed).unwrap());
-        assert!(context.resolve(&headers).is_none());
+        assert_eq!(
+            context.resolve_request(&headers).await,
+            Err(PrincipalResolutionError::Invalid)
+        );
     }
 }
 
-#[test]
-fn disabled_authguard_is_explicitly_unrestricted() {
+#[tokio::test]
+async fn rejects_conflicting_or_malformed_authguard_delivery() {
+    let (_directory, context) = authguard_context();
+    let now = epoch_seconds();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCESS_CONTEXT_HEADER,
+        HeaderValue::from_str(&signed_context("principal:marketpulse", now, now + 30)).unwrap(),
+    );
+    headers.insert(
+        SCOPE_TOKEN_HEADER,
+        HeaderValue::from_static("ags_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"),
+    );
+    assert_eq!(
+        context.resolve_request(&headers).await,
+        Err(PrincipalResolutionError::Invalid)
+    );
+
+    headers.remove(ACCESS_CONTEXT_HEADER);
+    headers.insert(SCOPE_TOKEN_HEADER, HeaderValue::from_static("malformed"));
+    assert_eq!(
+        context.resolve_request(&headers).await,
+        Err(PrincipalResolutionError::Invalid)
+    );
+}
+
+#[tokio::test]
+async fn disabled_authguard_is_explicitly_unrestricted() {
     let context = PrincipalContext::from_config(&AuthGuardIntegrationConfig {
         enabled: false,
         ..AuthGuardIntegrationConfig::default()
     })
     .unwrap();
     assert_eq!(
-        context.resolve(&HeaderMap::new()).unwrap().as_str(),
+        context
+            .resolve_request(&HeaderMap::new())
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
         UNRESTRICTED_PRINCIPAL
     );
 }

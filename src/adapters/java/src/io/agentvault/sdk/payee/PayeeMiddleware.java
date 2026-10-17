@@ -54,7 +54,6 @@ public final class PayeeMiddleware {
         PaymentVerification verification = transport.post(
                 "/api/v1/payee/verify",
                 new VerifyPaymentRequest(operation.challengeContext(), challengeHash, operation.requestHash(), credential),
-                operation.challengeContext().idempotencyKey(),
                 PaymentVerification.class);
         if (!verification.valid()) {
             throw new SecurityException("AgentVault rejected the presented payment");
@@ -66,9 +65,7 @@ public final class PayeeMiddleware {
         var settlement = operation.settlementContext();
         SettledIncomingPayment payment = transport.post(
                 "/api/v1/payee/settle",
-                new SettlePaymentRequest(settlement, operation.executionKey(),
-                        verification.intent().id(), verification.verificationRef()),
-                settlement.idempotencyKey(),
+                new SettlePaymentRequest(settlement, verification.intent().id(), verification.verificationRef()),
                 SettledIncomingPayment.class);
         validateSettlementBinding(operation, verification, payment);
         return new Authorized(payment);
@@ -79,7 +76,7 @@ public final class PayeeMiddleware {
         body.put("scenario_id", request.scenarioId());
         body.put("resource", request.resource());
         if (request.protocol() != null) body.put("protocol", request.protocol());
-        return transport.post("/api/v1/offers/resolve", body, null, PaymentOffer.class);
+        return transport.post("/api/v1/offers/resolve", body, PaymentOffer.class);
     }
 
     public PaymentReceipt getReceipt(String scenarioId, String intentId) {
@@ -93,7 +90,7 @@ public final class PayeeMiddleware {
 
     private PaymentChallenge createChallenge(CreateChallengeRequest request) {
         return transport.post(
-                "/api/v1/payee/challenges", request, request.idempotencyKey(), PaymentChallenge.class);
+                "/api/v1/payee/challenges", request, PaymentChallenge.class);
     }
 
     private static void validateChallengeBinding(PayeeOperation operation, PaymentChallenge challenge) {
@@ -151,8 +148,7 @@ public final class PayeeMiddleware {
                 || !payment.intent().recipient().equals(payment.receipt().recipient())
                 || !payment.intent().amount().equals(payment.receipt().requestedAmount())
                 || !payment.intent().settledAmount().equals(payment.receipt().settledAmount())
-                || payment.receipt().status() != Base.PaymentStatus.SETTLED
-                || !operation.executionKey().equals(payment.executionKey())) {
+                || payment.receipt().status() != Base.PaymentStatus.SETTLED) {
             throw new IllegalStateException("invalid AgentVault settlement response");
         }
     }

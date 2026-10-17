@@ -9,7 +9,7 @@ class _RejectingTransport:
     def __init__(self):
         self.paths = []
 
-    def request(self, _method, path, _body=None, _key=None):
+    def request(self, _method, path, _body=None):
         self.paths.append(path)
         if path == "/api/v1/payee/challenges":
             return {
@@ -28,7 +28,7 @@ class _RejectingTransport:
                     "asset": {"network": "eip155:31337", "asset": "USDC", "decimals": 6},
                     "recipient": "0x1", "amount": "1000", "settled_amount": "0",
                     "resource": "mcp://marketpulse/realtime", "challenge_hash": "challenge",
-                    "idempotency_key": "execution.challenge", "request_hash": "request-hash",
+                    "request_hash": "request-hash",
                     "status": "pending_settlement", "reservation_status": "reserved",
                     "reserved_amount": "1000", "created_at": 1, "updated_at": 1,
                 },
@@ -38,17 +38,17 @@ class _RejectingTransport:
 
 
 class PayeeMiddlewareTest(unittest.TestCase):
-    def test_phase_keys_are_distinct_and_stable(self):
+    def test_phases_reuse_the_same_run(self):
         operation = PayeeOperation(
-            "scenario", "run", "execution", "offer", "mcp://marketpulse/realtime",
+            "scenario", "run", "offer", "mcp://marketpulse/realtime",
             "https://marketpulse.example", "x402", "hash")
-        self.assertEqual(operation.challenge_context().idempotency_key, "execution.challenge")
-        self.assertEqual(operation.settlement_context().idempotency_key, "execution.settle")
+        self.assertEqual(operation.challenge_context().run_id, "run")
+        self.assertEqual(operation.settlement_context().run_id, "run")
 
     def test_rejects_invalid_payment_before_settlement(self):
         transport = _RejectingTransport()
         operation = PayeeOperation(
-            "scenario", "run", "execution", "offer", "mcp://marketpulse/realtime",
+            "scenario", "run", "offer", "mcp://marketpulse/realtime",
             "https://marketpulse.example", "x402", "request-hash", {"signature": "present"})
         with self.assertRaises(PermissionError):
             PayeeMiddleware(transport, PayeeConfig()).protect(operation)

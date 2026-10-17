@@ -2,12 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { operationContext, validatePayeeOperation } from '../../../src/agentvault/model/payee.js';
 
-test('payee phase keys are bound to one execution', () => {
+test('payee phases reuse one run identity', () => {
   const operation = {
-    scenarioId: 'scenario', runId: 'run', executionKey: 'run.realtime', offerId: 'offer',
+    scenarioId: 'scenario', runId: 'run', offerId: 'offer',
     resource: 'mcp://marketpulse/realtime', origin: 'https://marketpulse.test', protocol: 'x402', requestHash: 'hash',
   };
   assert.doesNotThrow(() => validatePayeeOperation(operation));
-  assert.equal(operationContext(operation, 'challenge').idempotency_key, 'run.realtime.challenge');
-  assert.equal(operationContext(operation, 'settle').idempotency_key, 'run.realtime.settle');
+  assert.equal(operationContext(operation).run_id, 'run');
 });

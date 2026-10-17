@@ -4,8 +4,6 @@ import ipaddress
 import re
 from dataclasses import dataclass
 
-from ..model import AssetIdentity
-
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
@@ -21,23 +19,14 @@ def _loopback(host: str) -> bool:
 @dataclass(frozen=True)
 class PayerConfig:
     scenario_id: str
-    wallet_id: str
-    protocol: str
-    asset: AssetIdentity
-    amount: str
-    recipient: str
     approval_timeout: float = 120.0
     approval_poll_interval: float = 1.0
     delivery_retries: int = 0
     max_challenge_bytes: int = 256 * 1024
 
     def __post_init__(self) -> None:
-        values = (
-            self.scenario_id, self.wallet_id, self.protocol, self.asset.network,
-            self.asset.asset, self.amount, self.recipient,
-        )
-        if any(not isinstance(value, str) or not value.strip() for value in values):
-            raise ValueError("payer middleware identifiers and payment fields cannot be blank")
+        if not isinstance(self.scenario_id, str) or not self.scenario_id.strip():
+            raise ValueError("scenario_id cannot be blank")
         if (
             self.approval_timeout <= 0 or self.approval_poll_interval <= 0
             or self.approval_poll_interval > self.approval_timeout

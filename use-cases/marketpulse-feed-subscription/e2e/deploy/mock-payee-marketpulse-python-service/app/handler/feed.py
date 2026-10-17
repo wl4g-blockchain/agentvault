@@ -57,12 +57,12 @@ class FeedHandler:
             return self._response(200, self._tool_result(identifier, self._storage.news("yesterday", 20), False, None))
         if name != "marketpulse.realtime_news":
             return self._response(404, self._error(identifier, -32602, "unknown tool"))
-        execution_key = request.headers.get("mcp-execution-key", "").strip()
-        if not execution_key:
-            return self._response(400, self._error(identifier, -32602, "mcp-execution-key is required"))
+        run_id = request.headers.get("x-run-id", "").strip()
+        if not run_id:
+            return self._response(400, self._error(identifier, -32602, "x-run-id is required"))
         request_hash = hashlib.sha256(b"marketpulse.mcp.request.v1\0" + body).hexdigest()
         try:
-            delivery = self._storage.delivery(execution_key, request_hash)
+            delivery = self._storage.delivery(run_id, request_hash)
         except ValueError as error:
             return self._response(409, self._error(identifier, -32009, str(error)))
         if delivery.response:
@@ -72,15 +72,15 @@ class FeedHandler:
             payment = settled_payment(request.scope)
             if payment is None:
                 return self._response(402, self._error(identifier, -32005, "settled payment is required"))
-            self._storage.record_settled(execution_key, request_hash, payment.intent.id, payment.execution_key)
+            self._storage.record_settled(run_id, request_hash, payment)
             intent_id = payment.intent.id
         if (self._allow_failure_injection
                 and request.headers.get("x-e2e-fail-after-settlement") == "once"
-                and self._storage.record_failure(execution_key, request_hash)):
+                and self._storage.record_failure(run_id, request_hash)):
             return self._response(503, self._error(identifier, -32004, "injected delivery failure after settlement"))
         payload = self._tool_result(identifier, self._storage.news("realtime", 20), True, intent_id)
         encoded = json.dumps(payload, separators=(",", ":"))
-        self._storage.record_delivered(execution_key, request_hash, encoded)
+        self._storage.record_delivered(run_id, request_hash, encoded)
         return Response(content=encoded, media_type="application/json")
 
     @staticmethod

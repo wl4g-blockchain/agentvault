@@ -6,7 +6,6 @@ fn standard_adapter_preserves_business_operation_identity() {
         operation: PayeeOperation {
             scenario_id: "scenario".to_owned(),
             run_id: "run".to_owned(),
-            execution_key: "execution".to_owned(),
             offer_id: "offer".to_owned(),
             resource: "mcp://marketpulse/realtime".to_owned(),
             origin: "https://marketpulse.example".to_owned(),
@@ -15,5 +14,5 @@ fn standard_adapter_preserves_business_operation_identity() {
             credential_payload: None,
         },
     };
-    assert_eq!(request.operation.execution_key, "execution");
+    assert_eq!(request.operation.run_id, "run");
 }

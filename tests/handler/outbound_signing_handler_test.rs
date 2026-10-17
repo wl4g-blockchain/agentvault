@@ -303,7 +303,6 @@ fn signing_identity(asset: &AssetIdentity) -> OutboundSigningIdentity {
             settled_amount: Amount::ZERO,
             resource: challenge.resource.clone(),
             challenge_hash: Some(challenge.challenge_hash.clone()),
-            idempotency_key: "operation-1".to_owned(),
             request_hash: "request-1".to_owned(),
             status: PaymentStatus::Authorized,
             reservation_status: ReservationStatus::Reserved,
@@ -459,7 +458,7 @@ async fn signs_once_then_replays_the_sealed_credential() {
         .payload
         .to_string()
         .contains("super-secret-signature"));
-    assert_eq!(captured.outbox[0].idempotency_key, "payment-signed:intent-1");
+    assert_eq!(captured.outbox[0].run_id, "run-1");
     assert!(!captured.outbox[0]
         .payload
         .to_string()

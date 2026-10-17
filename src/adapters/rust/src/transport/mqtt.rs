@@ -2,7 +2,7 @@ use std::{fmt, net::IpAddr, str::FromStr as _, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand_core::{OsRng, RngCore as _};
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
+use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, SubAck, SubscribeReasonCode, Transport};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use zeroize::Zeroizing;
@@ -151,7 +151,12 @@ impl MqttVaultTransport {
                         .await
                         .map_err(|error| TransportError::new(format!("subscribe MQTT result: {error}")))?;
                 }
-                Ok(Event::Incoming(Incoming::SubAck(_))) if !published => {
+                Ok(Event::Incoming(Incoming::SubAck(ack))) if !published => {
+                    if !subscription_granted(&ack) {
+                        return Err(TransportError::new(
+                            "AgentVault MQTT result subscription was rejected or downgraded",
+                        ));
+                    }
                     client
                         .publish(&command_topic, QoS::AtLeastOnce, false, payload.clone())
                         .await
@@ -192,6 +197,13 @@ impl MqttVaultTransport {
             }
         }
     }
+}
+
+fn subscription_granted(ack: &SubAck) -> bool {
+    matches!(
+        ack.return_codes.as_slice(),
+        [SubscribeReasonCode::Success(QoS::AtLeastOnce)]
+    )
 }
 
 fn response_type_matches(actual: &str, status: u16, expected: &str) -> bool {

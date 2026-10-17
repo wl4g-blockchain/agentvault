@@ -54,12 +54,11 @@ export class ExpressPayeeMiddleware {
           return;
         }
         const runId = textHeader(request.headers['x-run-id']);
-        const executionKey = textHeader(request.headers['mcp-execution-key']);
-        if (!runId || !executionKey) {
+        if (!runId) {
           response.status(400).json({
             error: {
               code: 'PAYMENT_CONTEXT_REQUIRED',
-              message: 'x-run-id and mcp-execution-key are required',
+              message: 'x-run-id is required',
             },
           });
           return;
@@ -79,7 +78,6 @@ export class ExpressPayeeMiddleware {
         const outcome = await this.core.protect({
           scenarioId: route.scenarioId,
           runId,
-          executionKey,
           offerId: route.offerId,
           resource: route.resource,
           origin: route.origin,

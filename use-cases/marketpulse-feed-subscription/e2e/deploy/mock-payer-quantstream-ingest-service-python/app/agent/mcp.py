@@ -12,7 +12,6 @@ from mcp.client.streamable_http import streamable_http_client
 
 from agentvault import (
     AgentVault,
-    AssetIdentity,
     MqttConfig,
     MqttVaultTransport,
     PayerConfig,
@@ -57,12 +56,6 @@ class MCPHelper:
         mqtt.connect()
         core = AgentVault(mqtt).payer(PayerConfig(
             scenario_id=_required("QUANTSTREAM_SCENARIO_ID"),
-            wallet_id=_required("QUANTSTREAM_WALLET_ID"), protocol="x402",
-            asset=AssetIdentity(
-                _required("PAYMENT_NETWORK"), _required("PAYMENT_ASSET"),
-                _decimals(), _required("PAYMENT_TOKEN_CONTRACT"),
-            ),
-            amount=_required("PAYMENT_AMOUNT"), recipient=_required("PAYMENT_RECIPIENT"),
             approval_timeout=float(_positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")),
             delivery_retries=1,
         ))
@@ -98,18 +91,16 @@ class MCPHelper:
         self._mqtt.close()
 
     async def yesterday_news(self, run_id: str) -> ToolResult:
-        return await self._call(YESTERDAY_TOOL, run_id, f"{run_id}.yesterday", False)
+        return await self._call(YESTERDAY_TOOL, run_id, False)
 
     async def realtime_news(self, run_id: str, fail_after_settlement: bool = False) -> ToolResult:
-        return await self._call(REALTIME_TOOL, run_id, f"{run_id}.realtime", fail_after_settlement)
+        return await self._call(REALTIME_TOOL, run_id, fail_after_settlement)
 
-    async def _call(self, tool: str, run_id: str, execution_key: str,
-                    fail_after_settlement: bool) -> ToolResult:
+    async def _call(self, tool: str, run_id: str, fail_after_settlement: bool) -> ToolResult:
         if tool not in self.tools:
             raise RuntimeError(f"MarketPulse MCP tool {tool!r} is not registered")
         metadata = {
             "run_id": run_id,
-            "execution_key": execution_key,
             "paid": tool == REALTIME_TOOL,
             "fail_after_settlement": fail_after_settlement,
         }
@@ -117,7 +108,7 @@ class MCPHelper:
         if result.isError:
             raise RuntimeError(f"MarketPulse MCP tool {tool} returned an application error")
         body = json.dumps(result.structuredContent or {}, separators=(",", ":")).encode()
-        intent_id = self._payer_transport.take_payment(execution_key)
+        intent_id = self._payer_transport.take_payment(run_id)
         if tool == REALTIME_TOOL and not intent_id:
             raise RuntimeError("paid MCP result omitted AgentVault payment metadata")
         return ToolResult(body, intent_id)
@@ -135,8 +126,8 @@ class _PayerMCPTransport(httpx.AsyncBaseTransport):
     async def close(self) -> None:
         await self._payer.close()
 
-    def take_payment(self, execution_key: str) -> str | None:
-        return self._payments.pop(execution_key, None)
+    def take_payment(self, run_id: str) -> str | None:
+        return self._payments.pop(run_id, None)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         body = await request.aread()
@@ -145,13 +136,9 @@ class _PayerMCPTransport(httpx.AsyncBaseTransport):
         operation = None
         if metadata is not None:
             headers["x-run-id"] = metadata["run_id"]
-            headers["mcp-execution-key"] = metadata["execution_key"]
             if metadata["fail_after_settlement"]:
                 headers["x-e2e-fail-after-settlement"] = "once"
-            if metadata["paid"]:
-                operation = PayerRequestContext.for_operation(
-                    metadata["run_id"], "marketpulse-realtime",
-                )
+            operation = PayerRequestContext(metadata["run_id"])
         response = await self._payer.request(
             request.method, str(request.url), operation=operation,
             headers=headers, content=body,
@@ -160,7 +147,7 @@ class _PayerMCPTransport(httpx.AsyncBaseTransport):
         if metadata is not None:
             payment = response.extensions.get("agentvault.payment")
             if payment is not None:
-                self._payments[metadata["execution_key"]] = payment.intent.id
+                self._payments[metadata["run_id"]] = payment.intent.id
         return httpx.Response(
             response.status_code, headers=response.headers, content=content, request=request,
         )
@@ -174,7 +161,7 @@ def _payment_metadata(body: bytes) -> dict[str, Any] | None:
         metadata = value["params"]["_meta"]["agentvault"]
         if not isinstance(metadata, dict):
             return None
-        if not isinstance(metadata.get("run_id"), str) or not isinstance(metadata.get("execution_key"), str):
+        if not isinstance(metadata.get("run_id"), str):
             return None
         if not isinstance(metadata.get("paid"), bool) or not isinstance(metadata.get("fail_after_settlement"), bool):
             return None
@@ -202,10 +189,3 @@ def _boolean(name: str) -> bool:
     if value not in {"true", "false"}:
         raise RuntimeError(f"{name} must be true or false")
     return value == "true"
-
-
-def _decimals() -> int:
-    value = int(_required("PAYMENT_DECIMALS"))
-    if not 0 <= value <= 255:
-        raise RuntimeError("PAYMENT_DECIMALS must be in 0..255")
-    return value

@@ -6,7 +6,12 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use opentelemetry::{global, propagation::Extractor, trace::TracerProvider as _, KeyValue};
+use opentelemetry::{
+    global,
+    propagation::{Extractor, Injector},
+    trace::TracerProvider as _,
+    KeyValue,
+};
 use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
@@ -139,6 +144,37 @@ impl Extractor for HeaderExtractor<'_> {
     }
 }
 
+struct HeaderInjector<'a>(&'a mut axum::http::HeaderMap);
+
+impl Injector for HeaderInjector<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        let Ok(name) = axum::http::HeaderName::from_bytes(key.as_bytes()) else {
+            return;
+        };
+        let Ok(value) = axum::http::HeaderValue::from_str(&value) else {
+            return;
+        };
+        self.0.insert(name, value);
+    }
+}
+
+/// Injects the current span's W3C Trace Context into an outbound request.
+///
+/// Transport-owned trace headers are written after operator secret headers so
+/// configuration cannot forge or sever the active service-to-service trace.
+pub(crate) fn inject_current_trace_context(headers: &mut axum::http::HeaderMap) {
+    let context = tracing::Span::current().context();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&context, &mut HeaderInjector(headers));
+    });
+}
+
+/// Attaches W3C Trace Context from trusted transport headers to a server span.
+pub(crate) fn set_span_parent_from_headers(span: &tracing::Span, headers: &axum::http::HeaderMap) {
+    let parent = global::get_text_map_propagator(|propagator| propagator.extract(&HeaderExtractor(headers)));
+    let _ = span.set_parent(parent);
+}
+
 /// Extracts W3C Trace Context and creates one server span around an HTTP request.
 pub async fn trace_http_request(request: Request<Body>, next: Next) -> Response {
     const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -160,7 +196,6 @@ pub async fn trace_http_request(request: Request<Body>, next: Next) -> Response 
         })
         .unwrap_or("")
         .to_owned();
-    let parent = global::get_text_map_propagator(|propagator| propagator.extract(&HeaderExtractor(request.headers())));
     let span = tracing::info_span!(
         "http.server.request",
         otel.kind = "server",
@@ -169,7 +204,7 @@ pub async fn trace_http_request(request: Request<Body>, next: Next) -> Response 
         http.route = %route,
         http.response.status_code = tracing::field::Empty,
     );
-    let _ = span.set_parent(parent);
+    set_span_parent_from_headers(&span, request.headers());
     let response = async move {
         let response = next.run(request).await;
         tracing::debug!(

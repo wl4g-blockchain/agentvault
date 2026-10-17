@@ -103,7 +103,7 @@ impl ProviderReconciliationRequest for MockRequestBuilder {
     fn build(&self, intent: &PaymentIntent) -> Result<Option<SettlementProviderRequest>> {
         Ok(Some(SettlementProviderRequest {
             protocol: intent.protocol.clone(),
-            idempotency_key: intent.idempotency_key.clone(),
+            run_id: intent.run_id.clone(),
             payment_payload: json!({"durable": true}),
             payment_requirements: json!({"intent_id": intent.id}),
         }))
@@ -130,11 +130,7 @@ struct MockStorage {
 
 #[async_trait]
 impl PaymentStorage for MockStorage {
-    async fn find_idempotency(
-        &self,
-        _scenario_id: &str,
-        _idempotency_key: &str,
-    ) -> Result<Option<AuthorizationRecord>> {
+    async fn find_run(&self, _scenario_id: &str, _run_id: &str) -> Result<Option<AuthorizationRecord>> {
         Ok(None)
     }
 
@@ -326,7 +322,6 @@ fn intent(status: PaymentStatus) -> PaymentIntent {
         settled_amount: Amount::ZERO,
         resource: "https://merchant.example/tool".to_owned(),
         challenge_hash: Some("challenge".to_owned()),
-        idempotency_key: "stable-operation".to_owned(),
         request_hash: "request".to_owned(),
         status,
         reservation_status: ReservationStatus::Reserved,

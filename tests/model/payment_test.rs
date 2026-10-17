@@ -21,7 +21,6 @@ fn outbound_intent() -> PaymentIntent {
         settled_amount: Amount::ZERO,
         resource: "https://merchant.example/tool".to_owned(),
         challenge_hash: Some("challenge-hash".to_owned()),
-        idempotency_key: "stable-key".to_owned(),
         request_hash: "request-hash".to_owned(),
         status: PaymentStatus::Created,
         reservation_status: ReservationStatus::Unreserved,
@@ -58,21 +57,11 @@ fn budget_unit_excludes_network_and_token_contract() {
 }
 
 #[test]
-fn idempotency_distinguishes_replay_and_conflict() {
+fn run_replay_distinguishes_same_and_conflicting_request() {
     let intent = outbound_intent();
 
-    assert_eq!(
-        intent.check_idempotency("stable-key", "request-hash"),
-        IdempotencyCheck::Replay
-    );
-    assert_eq!(
-        intent.check_idempotency("stable-key", "other-hash"),
-        IdempotencyCheck::Conflict
-    );
-    assert_eq!(
-        intent.check_idempotency("other-key", "request-hash"),
-        IdempotencyCheck::Miss
-    );
+    assert_eq!(intent.check_replay("request-hash"), ReplayCheck::Replay);
+    assert_eq!(intent.check_replay("other-hash"), ReplayCheck::Conflict);
 }
 
 #[test]
@@ -92,8 +81,10 @@ fn state_transitions_cannot_rewrite_payment_identity() {
 #[test]
 fn direction_requires_the_authoritative_binding() {
     let mut outbound = outbound_intent();
+    assert_eq!(outbound.authority_ids(), Ok(("policy-1", "wallet-1")));
     outbound.policy_id = None;
     assert_eq!(outbound.validate(), Err("policy_id"));
+    assert_eq!(outbound.authority_ids(), Err("policy_id"));
 
     let mut inbound = outbound_intent();
     inbound.direction = PaymentDirection::Inbound;

@@ -15,7 +15,7 @@ test('StandardPayeeMiddleware delegates to the shared payee state machine', asyn
     },
   };
   const outcome = await new PayeeMiddleware(transport).standard().handle({
-    scenarioId: 'scenario-1', runId: 'run-1', executionKey: 'run-1.realtime', offerId: 'offer-1',
+    scenarioId: 'scenario-1', runId: 'run-1', offerId: 'offer-1',
     resource: 'mcp://marketpulse/realtime', origin: 'https://marketpulse.test', protocol: 'x402',
     requestHash: 'request-hash',
   });

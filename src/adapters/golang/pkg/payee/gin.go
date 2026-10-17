@@ -84,9 +84,8 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			return
 		}
 		runID := strings.TrimSpace(ginContext.GetHeader("X-Run-Id"))
-		executionKey := strings.TrimSpace(ginContext.GetHeader("Mcp-Execution-Key"))
-		if runID == "" || executionKey == "" {
-			abort(ginContext, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id and mcp-execution-key are required")
+		if runID == "" {
+			abort(ginContext, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
 			return
 		}
 		payload, err := presentedCredential(ginContext.GetHeader("Payment-Signature"), middleware.maxBodyBytes)
@@ -95,7 +94,7 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			return
 		}
 		outcome, err := middleware.core.Protect(ginContext.Request.Context(), model.PayeeOperation{
-			ScenarioID: route.ScenarioID, RunID: runID, ExecutionKey: executionKey,
+			ScenarioID: route.ScenarioID, RunID: runID,
 			OfferID: route.OfferID, Resource: route.Resource, Origin: route.Origin,
 			Protocol: route.Protocol, RequestHash: hashRequest(ginContext.Request, body),
 			CredentialPayload: payload,

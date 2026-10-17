@@ -117,7 +117,6 @@ fn matching_intent(challenge: &PaymentChallenge) -> PaymentIntent {
         settled_amount: Amount::ZERO,
         resource: challenge.resource.clone(),
         challenge_hash: Some(challenge.challenge_hash.clone()),
-        idempotency_key: "idempotency-1".to_owned(),
         request_hash: "request-1".to_owned(),
         status: PaymentStatus::Created,
         reservation_status: crate::model::ReservationStatus::Unreserved,

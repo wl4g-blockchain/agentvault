@@ -17,26 +17,21 @@ func (function payerTransport) Do(ctx context.Context, request transport.Transpo
 	return function(ctx, request)
 }
 
-func TestPayerMiddlewareReusesBodyAndHeaderIdempotency(t *testing.T) {
-	key, _ := model.NewIdempotencyKey("run-1:paid")
-	operation := model.PayerRequestContext{RunID: "run-1", IdempotencyKey: key}
+func TestPayerMiddlewareUsesRunIDAsOnlyReplayIdentity(t *testing.T) {
+	operation := model.PayerRequestContext{RunID: "run-1"}
 	middleware, err := NewPayerMiddleware(payerTransport(func(_ context.Context, request transport.TransportRequest) (transport.TransportResponse, error) {
-		if request.Headers["idempotency-key"] != string(key) {
-			t.Fatalf("missing idempotency header: %#v", request.Headers)
-		}
 		var body map[string]any
 		if err := json.Unmarshal(request.Body, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body["idempotency_key"] != string(key) {
-			t.Fatalf("body and header keys differ: %s", request.Body)
+		if body["run_id"] != "run-1" {
+			t.Fatalf("unexpected replay identity: %s", request.Body)
+		}
+		if len(body) != 3 || body["scenario_id"] != "scenario" || body["challenge"] == nil {
+			t.Fatalf("authorization wire must contain only scenario_id, run_id, and challenge: %s", request.Body)
 		}
 		return transport.TransportResponse{Status: 200, Body: []byte(`{"authorization":{"outcome":"denied","intent_id":"intent-1","reason":"policy"},"intent":{"id":"intent-1"}}`)}, nil
-	}), config.PayerConfig{
-		ScenarioID: "scenario", WalletID: "wallet", Protocol: "x402",
-		Asset:  model.AssetIdentity{Network: "eip155:31337", Asset: "USDC", Decimals: 6},
-		Amount: "1000", Recipient: "0x0000000000000000000000000000000000000001",
-	})
+	}), config.PayerConfig{ScenarioID: "scenario"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,20 +45,24 @@ func TestPayerMiddlewareReusesBodyAndHeaderIdempotency(t *testing.T) {
 	}
 }
 
-func TestPayerMiddlewareRejectsProtocolHintMismatchBeforeVaultCall(t *testing.T) {
+func TestPayerMiddlewareForwardsCapturedProtocolHintWithoutLocalProjection(t *testing.T) {
 	called := false
-	middleware, err := NewPayerMiddleware(payerTransport(func(_ context.Context, _ transport.TransportRequest) (transport.TransportResponse, error) {
+	middleware, err := NewPayerMiddleware(payerTransport(func(_ context.Context, request transport.TransportRequest) (transport.TransportResponse, error) {
 		called = true
-		return transport.TransportResponse{}, nil
-	}), config.PayerConfig{
-		ScenarioID: "scenario", WalletID: "wallet", Protocol: "x402",
-		Asset:  model.AssetIdentity{Network: "eip155:31337", Asset: "USDC", Decimals: 6},
-		Amount: "1000", Recipient: "0x0000000000000000000000000000000000000001",
-	})
+		var body map[string]any
+		if err := json.Unmarshal(request.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		challenge := body["challenge"].(map[string]any)
+		if challenge["protocol_hint"] != "mpp" {
+			t.Fatalf("captured hint missing: %s", request.Body)
+		}
+		return transport.TransportResponse{Status: 409, Body: []byte(`{"error":{"code":"PAYMENT_CONFLICT","message":"conflict"}}`)}, nil
+	}), config.PayerConfig{ScenarioID: "scenario"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation, err := model.NewPayerRequestContext("run-1", "paid")
+	operation, err := model.NewPayerRequestContext("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func TestPayerMiddlewareRejectsProtocolHintMismatchBeforeVaultCall(t *testing.T)
 	}, model.PayerHTTPResponse{
 		Status: 402, Headers: map[string]string{"payment-protocol": "mpp"}, Body: []byte(`{}`),
 	}, operation)
-	if err == nil || called {
-		t.Fatalf("protocol mismatch was not rejected locally: err=%v called=%v", err, called)
+	if err == nil || !called {
+		t.Fatalf("captured protocol hint was not forwarded: err=%v called=%v", err, called)
 	}
 }

@@ -106,14 +106,9 @@ func loopback(host string) bool {
 const defaultMaxChallengeBytes int64 = 256 * 1024
 
 // PayerConfig is stable for one application integration. A workflow supplies
-// only its run/idempotency context for each request.
+// only its stable run context for each logical request.
 type PayerConfig struct {
 	ScenarioID           string
-	WalletID             string
-	Protocol             string
-	Asset                model.AssetIdentity
-	Amount               string
-	Recipient            string
 	ApprovalTimeout      time.Duration
 	ApprovalPollInterval time.Duration
 	DeliveryRetries      int
@@ -133,15 +128,8 @@ func (config *PayerConfig) ApplyDefaults() {
 }
 
 func (config PayerConfig) Validate() error {
-	for name, value := range map[string]string{
-		"scenario_id": config.ScenarioID, "wallet_id": config.WalletID,
-		"protocol": config.Protocol, "asset.network": config.Asset.Network,
-		"asset.asset": config.Asset.Asset, "amount": config.Amount,
-		"recipient": config.Recipient,
-	} {
-		if err := model.Required(name, value); err != nil {
-			return err
-		}
+	if err := model.Required("scenario_id", config.ScenarioID); err != nil {
+		return err
 	}
 	if config.ApprovalTimeout <= 0 || config.ApprovalPollInterval <= 0 ||
 		config.ApprovalPollInterval > config.ApprovalTimeout || config.DeliveryRetries < 0 ||

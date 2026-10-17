@@ -20,6 +20,7 @@ const (
 type ApprovalRequest struct {
 	ID              string         `json:"id"`
 	IntentID        string         `json:"intent_id"`
+	RunID           string         `json:"run_id"`
 	RequestedAmount string         `json:"requested_amount"`
 	ApprovedAmount  string         `json:"approved_amount,omitempty"`
 	RequestedBy     string         `json:"requested_by"`

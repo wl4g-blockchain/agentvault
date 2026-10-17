@@ -4,7 +4,7 @@ import unittest
 import httpx
 
 from agentvault.config import PayerConfig
-from agentvault.model import AssetIdentity, PayerRequestContext
+from agentvault.model import PayerRequestContext
 from agentvault.payer.payer import PayerMiddleware
 from agentvault.payer.standard import HttpxPayerMiddleware
 
@@ -15,10 +15,10 @@ class _Transport:
 
 
 class StandardPayerMiddlewareTest(unittest.TestCase):
-    def test_operation_key_is_stable(self):
+    def test_run_id_is_stable(self):
         self.assertEqual(
-            PayerRequestContext.for_operation("run-1", "realtime"),
-            PayerRequestContext.for_operation("run-1", "realtime"),
+            PayerRequestContext("run-1"),
+            PayerRequestContext("run-1"),
         )
 
     def test_oversized_challenge_is_rejected_while_streaming(self):
@@ -28,15 +28,13 @@ class StandardPayerMiddlewareTest(unittest.TestCase):
 
             client = httpx.AsyncClient(
                 transport=httpx.MockTransport(respond), follow_redirects=False)
-            core = PayerMiddleware(_Transport(), PayerConfig(
-                "scenario", "wallet", "x402", AssetIdentity("eip155:1", "USDC", 6),
-                "100", "recipient", max_challenge_bytes=8))
+            core = PayerMiddleware(_Transport(), PayerConfig("scenario", max_challenge_bytes=8))
             middleware = HttpxPayerMiddleware(core, client=client)
             try:
                 with self.assertRaisesRegex(RuntimeError, "challenge exceeds"):
                     await middleware.post(
                         "https://merchant.test/mcp",
-                        operation=PayerRequestContext.for_operation("run-1", "paid"),
+                        operation=PayerRequestContext("run-1"),
                         content=b"{}",
                     )
             finally:

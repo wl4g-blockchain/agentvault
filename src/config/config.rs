@@ -22,6 +22,7 @@ const MAX_STORAGE_CONNECTIONS: u32 = 256;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECONCILIATION_BATCH_SIZE: usize = 10_000;
 const MAX_CHALLENGE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROTOCOL_ASSETS: usize = 64;
 const MAX_RPC_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_APPROVAL_JWT_ISSUER: &str = "agentvault";
@@ -72,6 +73,17 @@ pub struct ServerConfig {
 pub struct AuthGuardIntegrationConfig {
     pub enabled: bool,
     pub direct_context_hmac_key: SecretRefConfig,
+    pub scope_resolver: AuthGuardScopeResolverConfig,
+}
+
+/// `AuthGuard`'s internal gRPC resolver for opaque scope-token delivery.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuthGuardScopeResolverConfig {
+    pub enabled: bool,
+    pub target: String,
+    #[serde(with = "humantime_serde")]
+    pub timeout: Duration,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -99,6 +111,8 @@ pub struct ManagementConfig {
 pub struct HealthConfig {
     pub liveness_path: String,
     pub readiness_path: String,
+    #[serde(with = "humantime_serde")]
+    pub probe_timeout: Duration,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -422,7 +436,6 @@ pub struct SecretHeaderConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApprovalRuntimeConfig {
-    pub enabled: bool,
     #[serde(with = "humantime_serde")]
     pub request_ttl: Duration,
     #[serde(with = "humantime_serde")]
@@ -533,6 +546,17 @@ impl Default for AuthGuardIntegrationConfig {
                 file: String::new(),
                 env: "AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY".to_owned(),
             },
+            scope_resolver: AuthGuardScopeResolverConfig::default(),
+        }
+    }
+}
+
+impl Default for AuthGuardScopeResolverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            target: "http://127.0.0.1:8081".to_owned(),
+            timeout: Duration::from_secs(2),
         }
     }
 }
@@ -565,6 +589,7 @@ impl Default for HealthConfig {
         Self {
             liveness_path: "/healthz".to_owned(),
             readiness_path: "/readyz".to_owned(),
+            probe_timeout: Duration::from_secs(1),
         }
     }
 }
@@ -798,7 +823,6 @@ impl Default for ExternalProviderConfig {
 impl Default for ApprovalRuntimeConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             request_ttl: Duration::from_secs(15 * 60),
             grant_ttl: Duration::from_secs(5 * 60),
             expiry_interval: Duration::from_secs(15),
@@ -939,16 +963,26 @@ impl AppConfig {
             if self.server.port == 0 {
                 return Err(Error::Config("enabled API server has an invalid port".to_owned()));
             }
-            if self.server.authguard.enabled {
-                validate_secret_ref(
-                    "server.authguard.direct_context_hmac_key",
-                    &self.server.authguard.direct_context_hmac_key,
-                )?;
-            }
             if !(256..=MAX_REQUEST_BYTES).contains(&self.server.request.max_body_bytes)
                 || self.server.request.timeout.is_zero()
             {
                 return Err(Error::Config("server.request limits are invalid".to_owned()));
+            }
+        }
+        if (self.server.enabled || self.agentvault.transport.grpc.enabled) && self.server.authguard.enabled {
+            validate_secret_ref(
+                "server.authguard.direct_context_hmac_key",
+                &self.server.authguard.direct_context_hmac_key,
+            )?;
+            let resolver = &self.server.authguard.scope_resolver;
+            if resolver.enabled
+                && (resolver.target.trim().is_empty()
+                    || !(resolver.target.starts_with("http://") || resolver.target.starts_with("https://"))
+                    || resolver.timeout.is_zero())
+            {
+                return Err(Error::Config(
+                    "server.authguard.scope_resolver configuration is invalid".to_owned(),
+                ));
             }
         }
         self.validate_management()?;
@@ -959,6 +993,18 @@ impl AppConfig {
         {
             return Err(Error::Config(
                 "API and management listeners must use different addresses".to_owned(),
+            ));
+        }
+        if self.agentvault.transport.grpc.enabled
+            && ((self.server.enabled
+                && self.agentvault.transport.grpc.host == self.server.host
+                && self.agentvault.transport.grpc.port == self.server.port)
+                || (self.mgmt.enabled
+                    && self.agentvault.transport.grpc.host == self.mgmt.host
+                    && self.agentvault.transport.grpc.port == self.mgmt.port))
+        {
+            return Err(Error::Config(
+                "gRPC, HTTP API, and management listeners must use different addresses".to_owned(),
             ));
         }
         self.validate_transport()
@@ -1077,8 +1123,9 @@ impl AppConfig {
         }
         validate_challenge_ttl("agentvault.payer.mpp", payer.mpp.max_challenge_ttl)?;
         if payer.mpp.enabled {
-            enabled_adapters = enabled_adapters.saturating_add(1);
-            validate_mpp_assets("agentvault.payer.mpp.assets", &payer.mpp.assets)?;
+            return Err(Error::Config(
+                "agentvault.payer.mpp is unavailable until the Tempo payer signing plan is implemented".to_owned(),
+            ));
         }
         validate_direction_enabled("payer", payer.enabled, enabled_adapters)
     }
@@ -1185,7 +1232,26 @@ impl AppConfig {
             validate_path("mgmt.context_path", &self.mgmt.context_path)?;
             validate_path("mgmt.health.liveness_path", &self.mgmt.health.liveness_path)?;
             validate_path("mgmt.health.readiness_path", &self.mgmt.health.readiness_path)?;
+            if self.mgmt.health.probe_timeout.is_zero() || self.mgmt.health.probe_timeout > MAX_HEALTH_PROBE_TIMEOUT {
+                return Err(Error::Config(
+                    "mgmt.health.probe_timeout must be between 1ns and 30s".to_owned(),
+                ));
+            }
             validate_path("mgmt.metrics.path", &self.mgmt.metrics.path)?;
+            let mut routes = vec![
+                self.mgmt.health.liveness_path.as_str(),
+                self.mgmt.health.readiness_path.as_str(),
+                "/debug/runtime",
+            ];
+            if self.mgmt.metrics.enabled {
+                routes.push(self.mgmt.metrics.path.as_str());
+            }
+            routes.sort_unstable();
+            if routes.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(Error::Config(
+                    "management health, metrics, and runtime routes must be distinct".to_owned(),
+                ));
+            }
         }
         if self.mgmt.otel.enabled
             && (self.mgmt.otel.endpoint.trim().is_empty()
@@ -1429,6 +1495,8 @@ fn validate_secret_headers(field: &str, headers: &BTreeMap<String, SecretHeaderC
                     | "host"
                     | "idempotency-key"
                     | "payment-signature"
+                    | "traceparent"
+                    | "tracestate"
                     | "transfer-encoding"
             )
         {

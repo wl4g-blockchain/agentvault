@@ -1,4 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $middleware := index .Values "authguard-middleware" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -12,6 +13,7 @@ spec:
       app.kubernetes.io/component: server
   policyTypes: [Ingress]
   ingress:
+    {{- if $middleware.enabled }}
     - from:
         - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
           podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
@@ -21,6 +23,16 @@ spec:
         - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
           podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
       ports: [{ protocol: TCP, port: {{ .Values.service.grpcPort }} }]
+    {{- end }}
+    {{- else }}
+    # Disabling the AuthGuard dependency is an explicit open-edge decision.
+    # Permit the externally exposed data-plane Service while keeping the
+    # management listener constrained by the rules below.
+    - ports:
+        - { protocol: TCP, port: {{ .Values.service.apiPort }} }
+        {{- if .Values.runtime.grpc.enabled }}
+        - { protocol: TCP, port: {{ .Values.service.grpcPort }} }
+        {{- end }}
     {{- end }}
     - from:
         - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}

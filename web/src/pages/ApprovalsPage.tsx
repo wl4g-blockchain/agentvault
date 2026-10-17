@@ -58,6 +58,6 @@ export function ApprovalsPage() {
         </article>)}
       </div>}
     </section>
-    <Notice tone="warning">The UI uses a deterministic idempotency key per approval and decision. A changed decision or amount is a different business operation and must not be disguised as a retry.</Notice>
+    <Notice tone="warning">The UI reuses one stable run ID per approval decision. A changed decision or amount is a different business operation and must not be disguised as a retry.</Notice>
   </>
 }

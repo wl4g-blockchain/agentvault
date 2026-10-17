@@ -5,7 +5,7 @@ use crate::{
     apm::{init_telemetry, AgentVaultMetrics, TelemetryConfig},
     config::AppConfig,
     controller::http::{HttpApiServer, PrincipalContext},
-    controller::ManagementServer,
+    controller::{ManagementServer, ReadinessProbe},
 };
 
 use super::{RuntimeComponent, RuntimeResource, ServerSupervisor};
@@ -21,6 +21,8 @@ pub struct AgentVaultServer {
     api_router: Option<Router>,
     components: Vec<Box<dyn RuntimeComponent>>,
     resources: Vec<Box<dyn RuntimeResource>>,
+    readiness_probes: Vec<std::sync::Arc<dyn ReadinessProbe>>,
+    metrics: AgentVaultMetrics,
 }
 
 impl AgentVaultServer {
@@ -31,6 +33,8 @@ impl AgentVaultServer {
             api_router: None,
             components: Vec::new(),
             resources: Vec::new(),
+            readiness_probes: Vec::new(),
+            metrics: AgentVaultMetrics::default(),
         }
     }
 
@@ -46,7 +50,8 @@ impl AgentVaultServer {
         config.validate_for_serve().context("validate service configuration")?;
         let mut server = Self::new(config.clone());
         if config.agentvault.enabled() {
-            let payment = super::payment_runtime::assemble(&config).await?;
+            let payment = super::payment_runtime::assemble(&config, server.metrics.clone()).await?;
+            server = server.with_readiness_probe(payment.storage_readiness);
             server = server.with_api_router(payment.router);
             if let Some(grpc) = payment.grpc {
                 server = server.with_component(grpc);
@@ -58,7 +63,9 @@ impl AgentVaultServer {
                 server = server.with_component(mqtt);
             }
             server = server.with_component(payment.cache_health);
-            server = server.with_component(payment.reconciliation);
+            if let Some(reconciliation) = payment.reconciliation {
+                server = server.with_component(reconciliation);
+            }
             server = server.with_component(payment.approval_expiration);
             server = server.with_resource(payment.resources);
         } else if config.server.enabled
@@ -100,6 +107,11 @@ impl AgentVaultServer {
         self
     }
 
+    fn with_readiness_probe(mut self, probe: std::sync::Arc<dyn ReadinessProbe>) -> Self {
+        self.readiness_probes.push(probe);
+        self
+    }
+
     /// Opens configured runtime components and serves until process shutdown.
     ///
     /// # Errors
@@ -116,7 +128,7 @@ impl AgentVaultServer {
             &self.config.mgmt.otel,
         ))
         .context("configure AgentVault telemetry")?;
-        let metrics = AgentVaultMetrics::default();
+        let metrics = self.metrics.clone();
         let mut supervisor = ServerSupervisor::new(self.config.server.shutdown_timeout);
 
         if self.config.server.enabled {
@@ -132,7 +144,11 @@ impl AgentVaultServer {
             ));
         }
         if self.config.mgmt.enabled {
-            supervisor.add(ManagementServer::new(self.config.mgmt.clone(), metrics));
+            supervisor.add(ManagementServer::with_readiness_probes(
+                self.config.mgmt.clone(),
+                metrics,
+                self.readiness_probes.clone(),
+            ));
         }
         for component in self.components {
             supervisor.add_boxed(component);

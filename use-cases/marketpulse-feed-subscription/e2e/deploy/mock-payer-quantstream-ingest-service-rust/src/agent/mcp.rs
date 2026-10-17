@@ -1,8 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, env, sync::Arc, time::Duration};
 
 use agentvault_sdk::{
-    AgentVault, AssetIdentity, AuthorizedPayment, MqttConfig, MqttVaultTransport, PayerConfig, PayerRequestContext,
-    PayerRequestExt,
+    AgentVault, AuthorizedPayment, MqttConfig, MqttVaultTransport, PayerConfig, PayerRequestContext, PayerRequestExt,
 };
 use futures::stream::BoxStream;
 use http::{HeaderName, HeaderValue};
@@ -47,12 +46,6 @@ impl MCPHelper {
     /// Returns an error for invalid configuration, MCP initialization, or a
     /// `MarketPulse` server that does not expose the required tools.
     pub async fn from_env() -> Result<Self, DynError> {
-        let asset = AssetIdentity {
-            network: required_env("PAYMENT_NETWORK")?,
-            asset: required_env("PAYMENT_ASSET")?,
-            token_contract: Some(required_env("PAYMENT_TOKEN_CONTRACT")?),
-            decimals: required_env("PAYMENT_DECIMALS")?.parse()?,
-        };
         let mqtt = MqttVaultTransport::new(MqttConfig {
             host: required_env("AGENTVAULT_MQTT_HOST")?,
             port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
@@ -64,14 +57,7 @@ impl MCPHelper {
             request_timeout: Duration::from_secs(positive_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?),
             max_response_bytes: 2 * 1024 * 1024,
         })?;
-        let payer = PayerConfig::new(
-            required_env("QUANTSTREAM_SCENARIO_ID")?,
-            required_env("QUANTSTREAM_WALLET_ID")?,
-            "x402",
-            asset,
-            required_env("PAYMENT_AMOUNT")?,
-            required_env("PAYMENT_RECIPIENT")?,
-        )?
+        let payer = PayerConfig::new(required_env("QUANTSTREAM_SCENARIO_ID")?)?
         .with_approval_wait(
             Duration::from_secs(positive_env("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")?),
             Duration::from_secs(1),
@@ -105,8 +91,7 @@ impl MCPHelper {
     ///
     /// Returns an error when the MCP request, response validation, or transport fails.
     pub async fn yesterday_news(&self, run_id: &str) -> Result<ToolResult, DynError> {
-        self.call(YESTERDAY_TOOL, run_id, &format!("{run_id}.yesterday"), false)
-            .await
+        self.call(YESTERDAY_TOOL, run_id, false).await
     }
 
     /// Calls the paid real-time news tool for one ingestion run.
@@ -115,20 +100,13 @@ impl MCPHelper {
     ///
     /// Returns an error when payment, MCP transport, or response validation fails.
     pub async fn realtime_news(&self, run_id: &str, fail_after_settlement_once: bool) -> Result<ToolResult, DynError> {
-        self.call(
-            REALTIME_TOOL,
-            run_id,
-            &format!("{run_id}.realtime"),
-            fail_after_settlement_once,
-        )
-        .await
+        self.call(REALTIME_TOOL, run_id, fail_after_settlement_once).await
     }
 
     async fn call(
         &self,
         tool: &'static str,
         run_id: &str,
-        execution_key: &str,
         fail_after_settlement_once: bool,
     ) -> Result<ToolResult, DynError> {
         let paid = tool == REALTIME_TOOL;
@@ -137,7 +115,6 @@ impl MCPHelper {
             "agentvault".to_owned(),
             json!({
                 "runId": run_id,
-                "executionKey": execution_key,
                 "paid": paid,
                 "failAfterSettlement": fail_after_settlement_once,
             }),
@@ -154,7 +131,7 @@ impl MCPHelper {
         // Persist the MCP business payload, not a language-specific JSON-RPC
         // envelope. All five ingestors use this same structuredContent shape.
         let body = serde_json::to_vec(&structured)?;
-        let payment_intent_id = self.payment_intents.lock().await.remove(execution_key);
+        let payment_intent_id = self.payment_intents.lock().await.remove(run_id);
         if paid && payment_intent_id.is_none() {
             return Err("paid response omitted AgentVault payment metadata".into());
         }
@@ -212,14 +189,12 @@ impl StreamableHttpClient for AgentVaultMCPClient {
             request = request.header(name, value);
         }
         if let Some(operation) = operation.as_ref() {
-            request = request
-                .header("x-run-id", &operation.run_id)
-                .header("mcp-execution-key", &operation.execution_key);
+            request = request.header("x-run-id", &operation.run_id);
             if operation.fail_after_settlement {
                 request = request.header("x-e2e-fail-after-settlement", "once");
             }
             if operation.paid {
-                let context = PayerRequestContext::for_operation(&operation.run_id, "marketpulse-realtime")
+                let context = PayerRequestContext::new(&operation.run_id)
                     .map_err(|error| StreamableHttpError::Client(error.into()))?;
                 request = request.with_payment(context);
             }
@@ -237,7 +212,7 @@ impl StreamableHttpClient for AgentVaultMCPClient {
             self.payment_intents
                 .lock()
                 .await
-                .insert(operation.execution_key.clone(), payment.intent.id.clone());
+                .insert(operation.run_id.clone(), payment.intent.id.clone());
         }
         let status = response.status();
         if matches!(status.as_u16(), 202 | 204) {
@@ -284,7 +259,6 @@ impl StreamableHttpClient for AgentVaultMCPClient {
 
 struct MCPOperation {
     run_id: String,
-    execution_key: String,
     paid: bool,
     fail_after_settlement: bool,
 }
@@ -297,7 +271,6 @@ impl MCPOperation {
         let agentvault = message.get("params")?.get("_meta")?.get("agentvault")?;
         Some(Self {
             run_id: agentvault.get("runId")?.as_str()?.to_owned(),
-            execution_key: agentvault.get("executionKey")?.as_str()?.to_owned(),
             paid: agentvault.get("paid")?.as_bool()?,
             fail_after_settlement: agentvault
                 .get("failAfterSettlement")

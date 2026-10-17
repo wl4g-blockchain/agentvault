@@ -593,7 +593,6 @@ CREATE TABLE pay_intent (
     resource            TEXT NOT NULL CHECK (length(trim(resource)) > 0),
     challenge_hash      TEXT CHECK (challenge_hash IS NULL OR length(trim(challenge_hash)) > 0),
     credential_hash     TEXT CHECK (credential_hash IS NULL OR length(trim(credential_hash)) > 0),
-    idempotency_key     TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
     request_hash        TEXT NOT NULL CHECK (length(trim(request_hash)) > 0),
     status              TEXT NOT NULL CHECK (status IN (
                             'created', 'pending_approval', 'authorized', 'signed',
@@ -622,9 +621,9 @@ CREATE TABLE pay_intent (
     updated_at          INTEGER NOT NULL CHECK (updated_at >= created_at),
     expires_at          INTEGER CHECK (expires_at IS NULL OR expires_at >= created_at),
     settled_at          INTEGER,
-    UNIQUE (scenario_id, idempotency_key),
+    UNIQUE (scenario_id, run_id),
     UNIQUE (id, scenario_id, wallet_id),
-    UNIQUE (id, request_hash),
+    UNIQUE (id, run_id, request_hash),
     FOREIGN KEY (policy_id, scenario_id)
         REFERENCES pay_policy(id, scenario_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     FOREIGN KEY (policy_id, wallet_id)
@@ -723,7 +722,6 @@ WHEN OLD.scenario_id IS NOT NEW.scenario_id
   OR OLD.amount IS NOT NEW.amount
   OR OLD.resource IS NOT NEW.resource
   OR OLD.challenge_hash IS NOT NEW.challenge_hash
-  OR OLD.idempotency_key IS NOT NEW.idempotency_key
   OR OLD.request_hash IS NOT NEW.request_hash
   OR OLD.created_at IS NOT NEW.created_at
   OR OLD.expires_at IS NOT NEW.expires_at
@@ -749,8 +747,6 @@ CREATE INDEX ix_pay_intent_scenario_direction_time
     ON pay_intent(scenario_id, direction, created_at DESC);
 CREATE INDEX ix_pay_intent_wallet_direction_time
     ON pay_intent(wallet_id, direction, created_at DESC);
-CREATE INDEX ix_pay_intent_run
-    ON pay_intent(scenario_id, run_id, created_at DESC);
 -- Pending reservations remain authoritative across UTC-day boundaries until
 -- released or atomically consumed with ledger posting. No created_at cutoff,
 -- network, or token_contract participates in these indexes.
@@ -789,7 +785,8 @@ CREATE INDEX ix_pay_event_intent_time
 
 CREATE TABLE pay_approval (
     id                  TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
-    intent_id           TEXT NOT NULL REFERENCES pay_intent(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    intent_id           TEXT NOT NULL,
+    run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     requested_amount    TEXT NOT NULL CHECK (
                             length(requested_amount) BETWEEN 1 AND 39
                             AND requested_amount NOT GLOB '*[^0-9]*'
@@ -821,8 +818,8 @@ CREATE TABLE pay_approval (
     consumed_at         INTEGER,
     created_at          INTEGER NOT NULL CHECK (created_at >= 0),
     approved_at         INTEGER,
-    FOREIGN KEY (intent_id, intent_hash)
-        REFERENCES pay_intent(id, request_hash) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    FOREIGN KEY (intent_id, run_id, intent_hash)
+        REFERENCES pay_intent(id, run_id, request_hash) ON DELETE RESTRICT ON UPDATE RESTRICT,
     CHECK (
         approved_amount IS NULL
         OR length(approved_amount) < length(requested_amount)
@@ -991,7 +988,7 @@ CREATE TABLE pay_outbox (
     event_type          TEXT NOT NULL CHECK (length(trim(event_type)) > 0),
     destination         TEXT NOT NULL CHECK (length(trim(destination)) > 0),
     correlation_id      TEXT NOT NULL CHECK (length(trim(correlation_id)) > 0),
-    idempotency_key     TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
+    run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     payload             TEXT NOT NULL CHECK (json_valid(payload)),
     status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'dead_letter')),
     attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 4294967295),
@@ -1001,7 +998,7 @@ CREATE TABLE pay_outbox (
     last_error          TEXT,
     created_at          INTEGER NOT NULL CHECK (created_at >= 0),
     delivered_at        INTEGER,
-    UNIQUE (destination, idempotency_key),
+    UNIQUE (destination, event_type, run_id),
     CHECK (
         (lease_owner IS NULL AND lease_expires_at IS NULL)
         OR (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)

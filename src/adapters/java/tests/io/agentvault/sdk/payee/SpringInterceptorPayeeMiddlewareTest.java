@@ -35,7 +35,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
 
     private static final class NoopTransport implements VaultTransport {
         @Override public <T> T get(String path, Class<T> type) { throw new UnsupportedOperationException(); }
-        @Override public <T> T post(String path, Object body, String key, Class<T> type) {
+        @Override public <T> T post(String path, Object body, Class<T> type) {
             throw new UnsupportedOperationException();
         }
     }

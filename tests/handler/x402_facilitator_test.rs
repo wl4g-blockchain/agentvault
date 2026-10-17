@@ -56,7 +56,7 @@ async fn sends_the_official_v2_wire_and_maps_trusted_verify_evidence() {
     assert_eq!(result.recipient.as_deref(), Some(PAY_TO));
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].1, "intent-1:verify");
+    assert_eq!(seen[0].1, "run-1");
     let object = seen[0].0.as_object().unwrap();
     assert_eq!(object.len(), 3);
     assert_eq!(object.get("x402Version"), Some(&json!(2)));
@@ -273,7 +273,7 @@ fn request() -> SettlementProviderRequest {
     });
     SettlementProviderRequest {
         protocol: "x402".to_owned(),
-        idempotency_key: "intent-1:verify".to_owned(),
+        run_id: "run-1".to_owned(),
         payment_payload: json!({
             "x402Version": 2,
             "accepted": requirements,

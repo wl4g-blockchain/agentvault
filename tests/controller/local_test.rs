@@ -5,18 +5,6 @@ fn request_body() -> Value {
     json!({
         "scenario_id": "scenario-quantstream",
         "run_id": "run-42",
-        "idempotency_key": "run-42:realtime-news",
-        "wallet_id": "wallet-buyer",
-        "protocol": "x402",
-        "asset": {
-            "network": "eip155:31337",
-            "asset": "USDC",
-            "token_contract": "0x0000000000000000000000000000000000001001",
-            "decimals": 6
-        },
-        "amount": "1000000",
-        "recipient": "0x0000000000000000000000000000000000002002",
-        "resource": "mcp://marketpulse/realtime_news",
         "challenge": {
             "protocol_hint": "x402",
             "origin": "http://127.0.0.1:8181",
@@ -38,8 +26,7 @@ fn request_envelope(body: &Value) -> Vec<u8> {
             "path": AUTHORIZE_PATH,
             "headers": {
                 "accept": "application/json",
-                "content-type": "application/json",
-                "idempotency-key": "run-42:realtime-news"
+                "content-type": "application/json"
             },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
@@ -51,7 +38,7 @@ fn request_envelope(body: &Value) -> Vec<u8> {
 fn accepts_only_typed_authorization_envelopes() {
     let decoded = parse_command(&request_envelope(&request_body())).unwrap();
     assert_eq!(decoded.principal.as_str(), crate::handler::UNRESTRICTED_PRINCIPAL);
-    assert_eq!(decoded.request.context.idempotency_key, "run-42:realtime-news");
+    assert_eq!(decoded.request.context.run_id, "run-42");
 
     let mut digest_request: Value = serde_json::from_slice(&request_envelope(&request_body())).unwrap();
     digest_request["type"] = Value::String("sign.digest".to_owned());
@@ -63,11 +50,7 @@ fn accepts_only_typed_authorization_envelopes() {
 }
 
 #[test]
-fn rejects_idempotency_mismatch_and_noncanonical_body() {
-    let mut mismatch = request_body();
-    mismatch["idempotency_key"] = Value::String("different-key".to_owned());
-    assert!(parse_command(&request_envelope(&mismatch)).is_err());
-
+fn rejects_noncanonical_body() {
     let mut padded: Value = serde_json::from_slice(&request_envelope(&request_body())).unwrap();
     padded["request"]["body"] = Value::String(format!("{}=", padded["request"]["body"].as_str().unwrap()));
     assert!(parse_command(&serde_json::to_vec(&padded).unwrap()).is_err());

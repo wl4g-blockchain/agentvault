@@ -6,7 +6,6 @@ import {
   MqttVaultTransport,
   PayerRequestContext,
   readBounded,
-  type AssetIdentity,
   type FetchPayerMiddleware,
 } from '@agentvault/sdk';
 
@@ -17,7 +16,6 @@ export interface ToolResult { body: Uint8Array; paymentIntentId?: string }
 
 interface PaymentMetadata {
   runId: string;
-  executionKey: string;
   paid: boolean;
   failAfterSettlement: boolean;
 }
@@ -48,14 +46,8 @@ export class MCPHelper {
       timeout,
     ));
     await vaultTransport.connect();
-    const asset: AssetIdentity = {
-      network: required('PAYMENT_NETWORK'), asset: required('PAYMENT_ASSET'),
-      token_contract: required('PAYMENT_TOKEN_CONTRACT'), decimals: decimals(),
-    };
     const payer = new AgentVault(vaultTransport).payer({
       scenarioId: required('QUANTSTREAM_SCENARIO_ID'),
-      walletId: required('QUANTSTREAM_WALLET_ID'), protocol: 'x402', asset,
-      amount: required('PAYMENT_AMOUNT'), recipient: required('PAYMENT_RECIPIENT'),
       approvalTimeoutMs: positive('AGENTVAULT_APPROVAL_TIMEOUT_SECONDS') * 1000,
       deliveryRetries: 1,
     }).standard();
@@ -87,21 +79,20 @@ export class MCPHelper {
   }
 
   yesterdayNews(runId: string): Promise<ToolResult> {
-    return this.call(YESTERDAY_TOOL, runId, `${runId}.yesterday`, false);
+    return this.call(YESTERDAY_TOOL, runId, false);
   }
 
   realtimeNews(runId: string, failAfterSettlement = false): Promise<ToolResult> {
-    return this.call(REALTIME_TOOL, runId, `${runId}.realtime`, failAfterSettlement);
+    return this.call(REALTIME_TOOL, runId, failAfterSettlement);
   }
 
   private async call(
     tool: string,
     runId: string,
-    executionKey: string,
     failAfterSettlement: boolean,
   ): Promise<ToolResult> {
     if (!this.tools.has(tool)) throw new Error(`MarketPulse MCP tool ${JSON.stringify(tool)} is not registered`);
-    const metadata: PaymentMetadata = { runId, executionKey, paid: tool === REALTIME_TOOL, failAfterSettlement };
+    const metadata: PaymentMetadata = { runId, paid: tool === REALTIME_TOOL, failAfterSettlement };
     const result = await this.client.callTool({
       name: tool,
       arguments: {},
@@ -109,8 +100,8 @@ export class MCPHelper {
     });
     if (result.isError) throw new Error(`MarketPulse MCP tool ${tool} returned an application error`);
     const body = new TextEncoder().encode(JSON.stringify(result.structuredContent ?? {}));
-    const paymentIntentId = this.payments.get(executionKey);
-    this.payments.delete(executionKey);
+    const paymentIntentId = this.payments.get(runId);
+    this.payments.delete(runId);
     if (tool === REALTIME_TOOL && !paymentIntentId) {
       throw new Error('paid MCP result omitted AgentVault payment metadata');
     }
@@ -125,14 +116,11 @@ function mcpFetch(payer: FetchPayerMiddleware, payments: Map<string, string>): t
     if (!metadata) return payer.request(source);
     const headers = new Headers(source.headers);
     headers.set('x-run-id', metadata.runId);
-    headers.set('mcp-execution-key', metadata.executionKey);
     if (metadata.failAfterSettlement) headers.set('x-e2e-fail-after-settlement', 'once');
-    const operation = metadata.paid
-      ? PayerRequestContext.forOperation(metadata.runId, 'marketpulse-realtime')
-      : undefined;
+    const operation = metadata.paid ? new PayerRequestContext(metadata.runId) : undefined;
     const response = await payer.request(new Request(source, { headers }), undefined, operation);
     const payment = payer.payment(response);
-    if (payment) payments.set(metadata.executionKey, payment.intent.id);
+    if (payment) payments.set(metadata.runId, payment.intent.id);
     return response;
   };
 }
@@ -146,8 +134,8 @@ async function paymentMetadata(request: Request): Promise<PaymentMetadata | unde
   const meta = value.params._meta;
   if (!isRecord(meta) || !isRecord(meta.agentvault)) return undefined;
   const candidate = meta.agentvault;
-  if (typeof candidate.runId !== 'string' || typeof candidate.executionKey !== 'string'
-      || typeof candidate.paid !== 'boolean' || typeof candidate.failAfterSettlement !== 'boolean') return undefined;
+  if (typeof candidate.runId !== 'string' || typeof candidate.paid !== 'boolean'
+      || typeof candidate.failAfterSettlement !== 'boolean') return undefined;
   return candidate as unknown as PaymentMetadata;
 }
 
@@ -175,10 +163,4 @@ function boolean(name: string): boolean {
   const value = required(name).toLowerCase();
   if (!['true', 'false'].includes(value)) throw new Error(`${name} must be boolean`);
   return value === 'true';
-}
-
-function decimals(): number {
-  const value = Number(required('PAYMENT_DECIMALS'));
-  if (!Number.isInteger(value) || value < 0 || value > 255) throw new Error('invalid decimals');
-  return value;
 }

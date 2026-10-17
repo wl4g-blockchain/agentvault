@@ -41,7 +41,6 @@ public final class AgentVault {
         return transport.post(
                 "/api/v1/approvals/" + PayerMiddleware.escape(request.approvalId()) + "/decision",
                 request,
-                request.idempotencyKey(),
                 ApprovalRequest.class);
     }
 

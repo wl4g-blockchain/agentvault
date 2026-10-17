@@ -69,14 +69,14 @@ public final class FeedHandler {
         if (!"marketpulse.realtime_news".equals(name)) {
             return response(404, rpcError(id, -32602, "unknown tool"));
         }
-        String executionKey = request.getHeader("mcp-execution-key");
-        if (executionKey == null || executionKey.isBlank()) {
-            return response(400, rpcError(id, -32602, "mcp-execution-key is required"));
+        String runId = request.getHeader("x-run-id");
+        if (runId == null || runId.isBlank()) {
+            return response(400, rpcError(id, -32602, "x-run-id is required"));
         }
         String requestHash = requestHash(body);
         FeedSQLiteStorage.DeliveryState delivery;
         try {
-            delivery = storage.delivery(executionKey, requestHash);
+            delivery = storage.delivery(runId, requestHash);
         } catch (IllegalStateException error) {
             return response(409, rpcError(id, -32009, error.getMessage()));
         }
@@ -89,16 +89,19 @@ public final class FeedHandler {
             if (!(value instanceof SettledIncomingPayment payment)) {
                 return response(402, rpcError(id, -32005, "settled payment is required"));
             }
-            storage.recordSettled(executionKey, requestHash, payment.intent().id(), payment.executionKey());
+            if (!runId.equals(payment.intent().runId())) {
+                throw new IllegalStateException("settlement is not bound to the workflow run");
+            }
+            storage.recordSettled(runId, requestHash, payment.intent().id());
             intentId = payment.intent().id();
         }
         if (allowFailureInjection && "once".equals(request.getHeader("x-e2e-fail-after-settlement"))
-                && storage.recordFailure(executionKey, requestHash)) {
+                && storage.recordFailure(runId, requestHash)) {
             return response(503, rpcError(id, -32004, "injected delivery failure after settlement"));
         }
         Object payload = toolResult(id, storage.news("realtime", 20), true, intentId);
         String encoded = encode(payload);
-        storage.recordDelivered(executionKey, requestHash, encoded);
+        storage.recordDelivered(runId, requestHash, encoded);
         return raw(200, encoded);
     }
 

@@ -7,11 +7,11 @@ import (
 )
 
 func TestPayerContextAndOriginBindingAreStable(t *testing.T) {
-	first, err := model.NewPayerRequestContext("run-1", "realtime")
+	first, err := model.NewPayerRequestContext("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	retry, _ := model.NewPayerRequestContext("run-1", "realtime")
+	retry, _ := model.NewPayerRequestContext("run-1")
 	if first != retry {
 		t.Fatal("stable operation context changed")
 	}

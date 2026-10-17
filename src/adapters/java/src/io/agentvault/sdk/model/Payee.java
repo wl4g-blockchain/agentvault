@@ -37,7 +37,6 @@ public final class Payee {
     public record PayeeOperation(
             String scenarioId,
             String runId,
-            String executionKey,
             String offerId,
             String resource,
             String origin,
@@ -45,37 +44,34 @@ public final class Payee {
             String requestHash,
             JsonNode credentialPayload) {
         public PayeeOperation {
-            for (String value : new String[]{scenarioId, runId, executionKey, offerId, resource,
+            for (String value : new String[]{scenarioId, runId, offerId, resource,
                     origin, protocol, requestHash}) {
                 if (value == null || value.isBlank()) {
                     throw new IllegalArgumentException("payee operation fields cannot be blank");
                 }
             }
-            if (!executionKey.matches("[A-Za-z0-9_.-]{1,96}")) {
-                throw new IllegalArgumentException("invalid execution key");
-            }
+            new OperationContext(scenarioId, runId);
         }
 
         public OperationContext challengeContext() {
-            return new OperationContext(scenarioId, runId, executionKey + ".challenge");
+            return new OperationContext(scenarioId, runId);
         }
 
         public OperationContext settlementContext() {
-            return new OperationContext(scenarioId, runId, executionKey + ".settle");
+            return new OperationContext(scenarioId, runId);
         }
     }
 
     public record CreateChallengeRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             @JsonProperty("offer_id") String offerId,
             String resource,
             String origin,
             String protocol,
             @JsonProperty("request_hash") String requestHash) {
         public CreateChallengeRequest(OperationContext context, PayeeOperation operation) {
-            this(context.scenarioId(), context.runId(), context.idempotencyKey(), operation.offerId(),
+            this(context.scenarioId(), context.runId(), operation.offerId(),
                     operation.resource(), operation.origin(), operation.protocol(), operation.requestHash());
         }
     }
@@ -83,14 +79,12 @@ public final class Payee {
     public record VerifyPaymentRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             @JsonProperty("challenge_hash") String challengeHash,
             @JsonProperty("request_hash") String requestHash,
             PaymentCredential credential) {
         public VerifyPaymentRequest(OperationContext context, String challengeHash, String requestHash,
                                     PaymentCredential credential) {
-            this(context.scenarioId(), context.runId(), context.idempotencyKey(), challengeHash,
-                    requestHash, credential);
+            this(context.scenarioId(), context.runId(), challengeHash, requestHash, credential);
         }
     }
 
@@ -103,36 +97,22 @@ public final class Payee {
     public record SettlePaymentRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
-            @JsonProperty("execution_key") String executionKey,
             @JsonProperty("intent_id") String intentId,
             @JsonProperty("verification_ref") String verificationRef) {
         public SettlePaymentRequest(
-                OperationContext context, String executionKey, String intentId, String verificationRef) {
-            this(context.scenarioId(), context.runId(), context.idempotencyKey(),
-                    executionKey, intentId, verificationRef);
+                OperationContext context, String intentId, String verificationRef) {
+            this(context.scenarioId(), context.runId(), intentId, verificationRef);
         }
     }
 
-    public record IncomingPayment(
-            @JsonProperty("scenario_id") String scenarioId,
-            @JsonProperty("run_id") String runId,
-            @JsonProperty("offer_id") String offerId,
-            String resource,
-            @JsonProperty("idempotency_key") String idempotencyKey,
-            @JsonProperty("request_hash") String requestHash,
-            PaymentCredential credential) {}
-
     public record SettledIncomingPayment(
             PaymentIntent intent,
-            PaymentReceipt receipt,
-            @JsonProperty("execution_key") String executionKey) {}
+            PaymentReceipt receipt) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record HttpProtectionRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             String resource,
             String origin,
             PaymentCredential credential,
@@ -142,7 +122,6 @@ public final class Payee {
     public record McpProtectionRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             String tool,
             @JsonProperty("arguments_hash") String argumentsHash,
             PaymentCredential credential) {}

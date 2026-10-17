@@ -83,13 +83,13 @@ func (handler *FeedHandler) callTool(context *gin.Context, body []byte, id any, 
 		context.JSON(http.StatusNotFound, rpcError(id, -32602, "unknown tool"))
 		return
 	}
-	executionKey := context.GetHeader("Mcp-Execution-Key")
-	if executionKey == "" {
-		context.JSON(http.StatusBadRequest, rpcError(id, -32602, "mcp-execution-key is required"))
+	runID := context.GetHeader("X-Run-Id")
+	if runID == "" {
+		context.JSON(http.StatusBadRequest, rpcError(id, -32602, "x-run-id is required"))
 		return
 	}
 	hash := requestHash(body)
-	delivery, err := handler.storage.Delivery(executionKey, hash)
+	delivery, err := handler.storage.Delivery(runID, hash)
 	if err != nil {
 		context.JSON(http.StatusConflict, rpcError(id, -32009, err.Error()))
 		return
@@ -104,14 +104,14 @@ func (handler *FeedHandler) callTool(context *gin.Context, body []byte, id any, 
 			context.JSON(http.StatusPaymentRequired, rpcError(id, -32005, "settled payment is required"))
 			return
 		}
-		if err := handler.storage.RecordSettled(executionKey, hash, payment); err != nil {
+		if err := handler.storage.RecordSettled(runID, hash, payment); err != nil {
 			context.JSON(http.StatusConflict, rpcError(id, -32009, err.Error()))
 			return
 		}
 		delivery.IntentID = payment.Intent.ID
 	}
 	if handler.allowFailureInjection && context.GetHeader("X-E2e-Fail-After-Settlement") == "once" {
-		if handler.storage.RecordFailure(executionKey, hash) == nil {
+		if handler.storage.RecordFailure(runID, hash) == nil {
 			context.JSON(http.StatusServiceUnavailable, rpcError(id, -32004, "injected delivery failure after settlement"))
 			return
 		}
@@ -122,7 +122,7 @@ func (handler *FeedHandler) callTool(context *gin.Context, body []byte, id any, 
 		return
 	}
 	encoded, _ := json.Marshal(toolResult(id, news, true, delivery.IntentID))
-	if err := handler.storage.RecordDelivered(executionKey, hash, string(encoded)); err != nil {
+	if err := handler.storage.RecordDelivered(runID, hash, string(encoded)); err != nil {
 		context.JSON(http.StatusInternalServerError, rpcError(id, -32603, err.Error()))
 		return
 	}

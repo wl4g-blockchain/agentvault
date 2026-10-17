@@ -39,7 +39,7 @@ export class PayeeMiddleware {
 
   async challenge(operation: PayeeOperation): Promise<PaymentChallenge> {
     validatePayeeOperation(operation);
-    const context = operationContext(operation, 'challenge');
+    const context = operationContext(operation);
     const request: CreateChallengeRequest = {
       ...context,
       offer_id: operation.offerId,
@@ -52,7 +52,6 @@ export class PayeeMiddleware {
       'POST',
       '/api/v1/payee/challenges',
       request,
-      context.idempotency_key,
     );
     validateChallengeBinding(operation, challenge);
     return challenge;
@@ -63,7 +62,7 @@ export class PayeeMiddleware {
     if (operation.credentialPayload === undefined) {
       return { outcome: 'payment_required', challenge };
     }
-    const context = operationContext(operation, 'challenge');
+    const context = operationContext(operation);
     const credential = new PaymentCredential(
       operation.protocol,
       challenge.challenge_hash,
@@ -80,7 +79,6 @@ export class PayeeMiddleware {
       'POST',
       '/api/v1/payee/verify',
       verifyRequest,
-      context.idempotency_key,
     );
     if (!verification.valid) {
       throw new InvalidPaymentError('AgentVault rejected the presented payment');
@@ -89,10 +87,9 @@ export class PayeeMiddleware {
       throw new Error('valid AgentVault verification omitted verification_ref');
     }
     validateVerificationBinding(operation, challenge, verification);
-    const settlement = operationContext(operation, 'settle');
+    const settlement = operationContext(operation);
     const settleRequest: SettlePaymentRequest = {
       ...settlement,
-      execution_key: operation.executionKey,
       intent_id: verification.intent.id,
       verification_ref: verification.verification_ref,
     };
@@ -100,7 +97,6 @@ export class PayeeMiddleware {
       'POST',
       '/api/v1/payee/settle',
       settleRequest,
-      settlement.idempotency_key,
     );
     validateSettlementBinding(operation, verification, payment);
     return { outcome: 'authorized', payment };
@@ -165,7 +161,7 @@ function validateSettlementBinding(
       receipt.direction !== 'inbound' || receipt.protocol !== operation.protocol ||
       !sameAsset(receipt.asset, intent.asset) || receipt.recipient !== intent.recipient ||
       receipt.requested_amount !== intent.amount || receipt.settled_amount !== intent.settled_amount ||
-      receipt.status !== 'settled' || payment.execution_key !== operation.executionKey) {
+      receipt.status !== 'settled') {
     throw new Error('invalid AgentVault settlement response');
   }
 }

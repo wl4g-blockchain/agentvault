@@ -47,7 +47,7 @@ class FeedSQLiteStorage:
               symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,sentiment_bps INTEGER NOT NULL,
               access_tier TEXT NOT NULL CHECK(access_tier IN ('yesterday','realtime')));
             CREATE TABLE IF NOT EXISTS mcp_delivery(
-              execution_key TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
+              run_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
               response_json TEXT,status TEXT NOT NULL CHECK(status IN ('settled','delivered')),
               failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL);
         """)
@@ -85,36 +85,39 @@ class FeedSQLiteStorage:
                  "symbols": json.loads(row[5]), "headline": row[6], "source": row[7], "sentimentBps": row[8]}
                 for row in rows]
 
-    def delivery(self, execution_key: str, request_hash: str) -> DeliveryState:
-        row = self._connection.execute("SELECT request_hash,intent_id,COALESCE(response_json,''),status FROM mcp_delivery WHERE execution_key=?",
-                                       (execution_key,)).fetchone()
+    def delivery(self, run_id: str, request_hash: str) -> DeliveryState:
+        row = self._connection.execute("SELECT request_hash,intent_id,COALESCE(response_json,''),status FROM mcp_delivery WHERE run_id=?",
+                                       (run_id,)).fetchone()
         if row is None:
             return DeliveryState()
         if row[0] != request_hash or row[3] not in ("settled", "delivered"):
-            raise ValueError("MCP execution key conflicts with durable delivery")
+            raise ValueError("MCP run_id conflicts with durable delivery")
         return DeliveryState(row[1], row[2])
 
-    def record_settled(self, execution_key: str, request_hash: str, intent_id: str, vault_execution_key: str) -> None:
+    def record_settled(self, run_id: str, request_hash: str, payment) -> None:
+        if payment.intent.run_id != run_id:
+            raise ValueError("settlement is not bound to the workflow run")
+        intent_id = payment.intent.id
         with self._connection:
             self._connection.execute("""INSERT INTO mcp_delivery
-                (execution_key,request_hash,intent_id,settlement_json,response_json,status,updated_at)
-                VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(execution_key) DO NOTHING""",
-                (execution_key, request_hash, intent_id,
-                 json.dumps({"intentId": intent_id, "executionKey": vault_execution_key}), int(time.time())))
-        if self.delivery(execution_key, request_hash).intent_id != intent_id:
-            raise ValueError("MCP execution key is already bound to another settlement")
+                (run_id,request_hash,intent_id,settlement_json,response_json,status,updated_at)
+                VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(run_id) DO NOTHING""",
+                (run_id, request_hash, intent_id,
+                 json.dumps({"intentId": intent_id, "runId": run_id}), int(time.time())))
+        if self.delivery(run_id, request_hash).intent_id != intent_id:
+            raise ValueError("MCP run_id is already bound to another settlement")
 
-    def record_delivered(self, execution_key: str, request_hash: str, response: str) -> None:
+    def record_delivered(self, run_id: str, request_hash: str, response: str) -> None:
         with self._connection:
             cursor = self._connection.execute("""UPDATE mcp_delivery SET response_json=?,status='delivered',updated_at=?
-                WHERE execution_key=? AND request_hash=? AND status='settled'""",
-                (response, int(time.time()), execution_key, request_hash))
+                WHERE run_id=? AND request_hash=? AND status='settled'""",
+                (response, int(time.time()), run_id, request_hash))
         if cursor.rowcount != 1:
             raise ValueError("MCP delivery was not in settled state")
 
-    def record_failure(self, execution_key: str, request_hash: str) -> bool:
+    def record_failure(self, run_id: str, request_hash: str) -> bool:
         with self._connection:
             cursor = self._connection.execute("""UPDATE mcp_delivery SET failure_injections=1,updated_at=?
-                WHERE execution_key=? AND request_hash=? AND status='settled' AND failure_injections=0""",
-                (int(time.time()), execution_key, request_hash))
+                WHERE run_id=? AND request_hash=? AND status='settled' AND failure_injections=0""",
+                (int(time.time()), run_id, request_hash))
         return cursor.rowcount == 1

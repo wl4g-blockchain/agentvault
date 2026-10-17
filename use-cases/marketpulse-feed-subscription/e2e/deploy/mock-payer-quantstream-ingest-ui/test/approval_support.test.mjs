@@ -31,6 +31,7 @@ before(async () => {
     const items = authority.slice(offset, offset + limit).map((item) => ({
       id: item.approvalId,
       intent_id: item.intentId,
+      run_id: item.runId,
       requested_amount: item.requestedAmount,
       expires_at: item.expiresAt,
       status: "pending"
@@ -48,21 +49,21 @@ after(async () => {
 });
 
 test("approve binds the exact requested amount while reject omits it", () => {
-  assert.deepEqual(approvalDecisionBody(first, "approve", "decision-key-1"), {
+  assert.deepEqual(approvalDecisionBody(first, "approve"), {
     scenario_id: scenarioId,
-    idempotency_key: "decision-key-1",
+    run_id: "run-approval-1",
     approval_id: "approval-1",
     decision: "approve",
     reason: "QuantStream administrator decision",
     approved_amount: "1000000"
   });
-  assert.equal("approved_amount" in approvalDecisionBody(first, "reject", "decision-key-2"), false);
+  assert.equal("approved_amount" in approvalDecisionBody(first, "reject"), false);
   assert.throws(
-    () => approvalDecisionBody({ ...first, requestedAmount: "1e6" }, "approve", "decision-key-3"),
+    () => approvalDecisionBody({ ...first, requestedAmount: "1e6" }, "approve"),
     /amount is invalid/
   );
   assert.throws(
-    () => approvalDecisionBody({ ...first, requestedAmount: (1n << 128n).toString() }, "approve", "decision-key-4"),
+    () => approvalDecisionBody({ ...first, requestedAmount: (1n << 128n).toString() }, "approve"),
     /amount is invalid/
   );
 });
@@ -142,5 +143,5 @@ test("approval API refuses credential-bearing redirects and non-loopback plainte
 });
 
 function approval(approvalId, intentId, requestedAmount, expiresAt) {
-  return { approvalId, intentId, scenarioId, requestedAmount, expiresAt };
+  return { approvalId, intentId, runId: `run-${approvalId}`, scenarioId, requestedAmount, expiresAt };
 }

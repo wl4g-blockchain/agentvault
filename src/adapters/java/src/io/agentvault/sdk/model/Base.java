@@ -13,7 +13,7 @@ public final class Base {
 
     public interface VaultTransport {
         <T> T get(String path, Class<T> type);
-        <T> T post(String path, Object body, String idempotencyKey, Class<T> type);
+        <T> T post(String path, Object body, Class<T> type);
     }
 
     public static final class ApiException extends RuntimeException {
@@ -67,24 +67,13 @@ public final class Base {
 
     public record OperationContext(
             @JsonProperty("scenario_id") String scenarioId,
-            @JsonProperty("run_id") String runId,
-            @JsonProperty("idempotency_key") String idempotencyKey) {
+            @JsonProperty("run_id") String runId) {
         public OperationContext {
             required("scenario_id", scenarioId);
-            required("idempotency_key", idempotencyKey);
-            if (!idempotencyKey.matches("[A-Za-z0-9_.:-]{1,128}")) {
-                throw new IllegalArgumentException("invalid idempotency key");
-            }
-            if (runId != null) required("run_id", runId);
-        }
-
-        public static OperationContext forOperation(String scenarioId, String runId, String operation) {
             required("run_id", runId);
-            required("operation", operation);
-            if (runId.contains(":") || operation.contains(":")) {
-                throw new IllegalArgumentException("run_id and operation cannot contain ':'");
+            if (!runId.matches("[A-Za-z0-9_.:-]{1,128}")) {
+                throw new IllegalArgumentException("invalid run_id");
             }
-            return new OperationContext(scenarioId, runId, runId + ":" + operation);
         }
     }
 
@@ -158,7 +147,6 @@ public final class Base {
             @JsonProperty("settled_amount") String settledAmount,
             String resource,
             @JsonProperty("challenge_hash") String challengeHash,
-            @JsonProperty("idempotency_key") String idempotencyKey,
             @JsonProperty("request_hash") String requestHash,
             PaymentStatus status,
             @JsonProperty("reservation_status") ReservationStatus reservationStatus,
@@ -195,8 +183,7 @@ public final class Base {
     public static Map<String, Object> contextMap(OperationContext context) {
         var value = new LinkedHashMap<String, Object>();
         value.put("scenario_id", context.scenarioId());
-        if (context.runId() != null) value.put("run_id", context.runId());
-        value.put("idempotency_key", context.idempotencyKey());
+        value.put("run_id", context.runId());
         return value;
     }
 }

@@ -43,7 +43,7 @@ services:
     depends_on:
       agentvault-postgres: { condition: service_healthy }
       agentvault-redis: { condition: service_healthy }
-    expose: [8080, 9091]
+    expose: [8080, 9091, 50051]
     ports:
       - 127.0.0.1:9091:9091
 

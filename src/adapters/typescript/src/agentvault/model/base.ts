@@ -16,8 +16,7 @@ export type ReservationStatus = 'unreserved' | 'reserved' | 'consumed' | 'releas
 
 export interface OperationContext {
   scenario_id: string;
-  run_id?: string;
-  idempotency_key: string;
+  run_id: string;
 }
 
 export interface AssetIdentity {
@@ -109,7 +108,6 @@ export interface PaymentIntent {
   settled_amount: string;
   resource: string;
   challenge_hash?: string;
-  idempotency_key: string;
   request_hash: string;
   status: PaymentStatus;
   reservation_status: ReservationStatus;
@@ -144,6 +142,6 @@ export function required(name: string, value: string): void {
   if (!value.trim()) throw new Error(`${name} cannot be blank`);
 }
 
-export function assertIdempotencyKey(value: string): void {
-  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('invalid idempotency key');
+export function assertRunId(value: string): void {
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('invalid runId');
 }

@@ -21,7 +21,7 @@ use crate::{
     protocol::x402::eip3009_authorization_identity,
     storage::{
         ChallengeIssuanceGuard, ChallengeWrite, EventStorage, IdempotentWrite, OfferStorage, OutboxMessage,
-        OutboxStatus, PageRequest, PaymentProgressWrite, PaymentStorage, PaymentWallet, PolicyStorage, SettlementWrite,
+        OutboxStatus, PaymentProgressWrite, PaymentStorage, PaymentWallet, PolicyStorage, SettlementWrite,
         VerificationWrite, WalletStorage,
     },
     utils::secure_material::{SealedSensitiveMaterial, SensitiveMaterialProtector},
@@ -50,7 +50,7 @@ pub enum SettlementOperation {
 #[serde(rename_all = "camelCase")]
 pub struct SettlementProviderRequest {
     pub protocol: String,
-    pub idempotency_key: String,
+    pub run_id: String,
     pub payment_payload: Value,
     pub payment_requirements: Value,
 }
@@ -241,7 +241,6 @@ pub struct IssuePaymentChallenge {
     pub resource: String,
     pub origin: String,
     pub protocol: String,
-    pub idempotency_key: String,
     /// Stable digest of the protected HTTP/MCP business request. The trusted
     /// business SDK computes this once and reuses it for every retry.
     pub request_hash: String,
@@ -252,7 +251,6 @@ pub struct VerifyIncomingPayment {
     pub scenario_id: String,
     pub run_id: String,
     pub challenge_hash: String,
-    pub idempotency_key: String,
     pub request_hash: String,
     pub credential: PaymentCredential,
 }
@@ -268,7 +266,6 @@ pub struct IncomingVerification {
 pub struct SettleIncomingPayment {
     pub scenario_id: String,
     pub run_id: String,
-    pub execution_key: String,
     pub intent_id: String,
     pub verification_ref: String,
 }
@@ -277,9 +274,6 @@ pub struct SettleIncomingPayment {
 pub struct SettledIncomingPayment {
     pub intent: PaymentIntent,
     pub receipt: PaymentReceipt,
-    /// The business platform must use this key to make resource delivery
-    /// idempotent after a confirmed payment.
-    pub execution_key: String,
 }
 
 /// Payee-side challenge, verification, settlement, and ledger orchestration.
@@ -372,7 +366,7 @@ impl SettlementHandler {
         }
         let request = SettlementProviderRequest {
             protocol: settlement.protocol,
-            idempotency_key: format!("{}:verify", intent.id),
+            run_id: intent.run_id.clone(),
             payment_payload: settlement.payment_payload,
             payment_requirements: settlement.payment_requirements,
         };
@@ -483,15 +477,11 @@ impl SettlementHandler {
     ) -> Result<PaymentChallenge> {
         validate_issue_command(command)?;
         let access = self.scenarios.authorize(principal, &command.scenario_id).await?;
-        if let Some(existing) = self
-            .payments
-            .find_idempotency(&command.scenario_id, &command.idempotency_key)
-            .await?
-        {
+        if let Some(existing) = self.payments.find_run(&command.scenario_id, &command.run_id).await? {
             ensure_replay_identity(&existing.intent, command)?;
             if existing.intent.direction != PaymentDirection::Inbound {
                 return Err(Error::PaymentConflict(
-                    "idempotency key is already bound to an outbound payment".to_owned(),
+                    "run_id is already bound to an outbound payment".to_owned(),
                 ));
             }
             return self.load_challenge(&existing.intent).await;
@@ -673,12 +663,7 @@ impl SettlementHandler {
             .get_for_challenge(&command.scenario_id, &command.challenge_hash)
             .await?
             .ok_or_else(|| Error::NotFound("payment challenge".to_owned()))?;
-        ensure_incoming_identity(
-            &intent,
-            &command.run_id,
-            &command.idempotency_key,
-            &command.request_hash,
-        )?;
+        ensure_incoming_identity(&intent, &command.run_id, &command.request_hash)?;
         if intent.status == PaymentStatus::Settled || intent.status == PaymentStatus::PendingSettlement {
             self.ensure_credential_replay(&intent, &command.credential).await?;
             return self.load_verification(&intent).await;
@@ -785,7 +770,7 @@ impl SettlementHandler {
             .await?;
         let request = SettlementProviderRequest {
             protocol: settlement.protocol,
-            idempotency_key: format!("{}:verify", submitted.id),
+            run_id: submitted.run_id.clone(),
             payment_payload: settlement.payment_payload,
             payment_requirements: settlement.payment_requirements,
         };
@@ -812,7 +797,7 @@ impl SettlementHandler {
             intent.clone(),
             SettlementProviderRequest {
                 protocol: settlement.protocol,
-                idempotency_key: format!("{}:verify", intent.id),
+                run_id: intent.run_id.clone(),
                 payment_payload: settlement.payment_payload,
                 payment_requirements: settlement.payment_requirements,
             },
@@ -842,10 +827,7 @@ impl SettlementHandler {
         ensure_settlement_intent_binding(&intent, command)?;
         if intent.status == PaymentStatus::Settled {
             let receipt = self.load_receipt(&intent).await?;
-            return Ok(with_execution_key(
-                settled_response(intent, receipt),
-                &command.execution_key,
-            ));
+            return Ok(settled_response(intent, receipt));
         }
         if intent.status != PaymentStatus::PendingSettlement {
             return Err(Error::InvalidTransition(format!(
@@ -864,18 +846,15 @@ impl SettlementHandler {
             SettlementRequestRecord::Replay(intent) => {
                 if intent.status == PaymentStatus::Settled {
                     let receipt = self.load_receipt(&intent).await?;
-                    return Ok(with_execution_key(
-                        settled_response(intent, receipt),
-                        &command.execution_key,
-                    ));
+                    return Ok(settled_response(intent, receipt));
                 }
                 let recovered = self.recover_requested_settlement(&intent, now).await?;
-                return Ok(with_execution_key(recovered, &command.execution_key));
+                return Ok(recovered);
             }
         };
         let request = SettlementProviderRequest {
             protocol: settlement.protocol,
-            idempotency_key: format!("{}:settle", intent.id),
+            run_id: intent.run_id.clone(),
             payment_payload: settlement.payment_payload,
             payment_requirements: settlement.payment_requirements,
         };
@@ -926,7 +905,7 @@ impl SettlementHandler {
         let settled = self
             .commit_confirmed(&intent, &provider.authority, &result, now, None)
             .await?;
-        Ok(with_execution_key(settled, &command.execution_key))
+        Ok(settled)
     }
 
     async fn recover_requested_settlement(&self, intent: &PaymentIntent, now: i64) -> Result<SettledIncomingPayment> {
@@ -1114,17 +1093,8 @@ impl SettlementHandler {
             PaymentDirection::Outbound => PaymentEventType::ChallengeReceived,
         };
         self.events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, expected_event, 0)
             .await?
-            .items
-            .into_iter()
-            .find(|event| event.event_type == expected_event)
             .and_then(|event| event.payload.get("challenge").cloned())
             .map(serde_json::from_value)
             .transpose()?
@@ -1140,17 +1110,9 @@ impl SettlementHandler {
     ) -> Result<crate::protocol::ProtocolSettlement> {
         if self
             .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, PaymentEventType::Submitted, 0)
             .await?
-            .items
-            .iter()
-            .any(|event| event.event_type == PaymentEventType::Submitted)
+            .is_some()
         {
             return self.load_submission(intent).await.map(|(_, settlement)| settlement);
         }
@@ -1163,17 +1125,8 @@ impl SettlementHandler {
         let challenge = self.load_challenge(intent).await?;
         let event = self
             .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, PaymentEventType::Signed, 0)
             .await?
-            .items
-            .into_iter()
-            .find(|event| event.event_type == PaymentEventType::Signed)
             .ok_or_else(|| Error::Storage("outbound reconciliation has no durable signed credential".to_owned()))?;
         let sealed = event
             .payload
@@ -1199,17 +1152,8 @@ impl SettlementHandler {
     async fn load_verification(&self, intent: &PaymentIntent) -> Result<IncomingVerification> {
         let event = self
             .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, PaymentEventType::CredentialVerified, 0)
             .await?
-            .items
-            .into_iter()
-            .find(|event| event.event_type == PaymentEventType::CredentialVerified)
             .ok_or_else(|| Error::Storage("credential verification event is missing".to_owned()))?;
         let verification_ref = event
             .payload
@@ -1246,21 +1190,14 @@ impl SettlementHandler {
         &self,
         intent: &PaymentIntent,
     ) -> Result<(String, crate::protocol::ProtocolSettlement)> {
-        let events = self
+        let event = self
             .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, PaymentEventType::CredentialVerified, 0)
             .await?
-            .items;
-        let verification_ref = events
-            .iter()
-            .find(|event| event.event_type == PaymentEventType::CredentialVerified)
-            .and_then(|event| event.payload.get("verification_ref"))
+            .ok_or_else(|| Error::Storage("credential verification event is missing".to_owned()))?;
+        let verification_ref = event
+            .payload
+            .get("verification_ref")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| Error::Storage("verification reference is missing".to_owned()))?;
@@ -1271,17 +1208,8 @@ impl SettlementHandler {
     async fn load_submission(&self, intent: &PaymentIntent) -> Result<(String, crate::protocol::ProtocolSettlement)> {
         let event = self
             .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
+            .find_for_intent_type(&intent.id, PaymentEventType::Submitted, 0)
             .await?
-            .items
-            .into_iter()
-            .find(|event| event.event_type == PaymentEventType::Submitted)
             .ok_or_else(|| Error::Storage("durable submission event is missing".to_owned()))?;
         let fingerprint = event
             .payload
@@ -1303,23 +1231,28 @@ impl SettlementHandler {
     }
 
     async fn load_receipt(&self, intent: &PaymentIntent) -> Result<PaymentReceipt> {
-        self.events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: 1_000,
-                },
-            )
-            .await?
-            .items
-            .into_iter()
-            .find(|event| event.event_type == PaymentEventType::Settled)
-            .and_then(|event| event.payload.get("receipt").cloned())
-            .map(serde_json::from_value)
-            .transpose()?
-            .ok_or_else(|| Error::Storage("settled intent has no durable receipt".to_owned()))
+        let settled = self
+            .events
+            .find_for_intent_type(&intent.id, PaymentEventType::Settled, 0)
+            .await?;
+        let reconciled = if settled.is_some() {
+            None
+        } else {
+            self.events
+                .find_for_intent_type(&intent.id, PaymentEventType::Reconciled, 0)
+                .await?
+        };
+        durable_receipt(settled.as_ref(), reconciled.as_ref())
     }
+}
+
+fn durable_receipt(settled: Option<&PaymentEvent>, reconciled: Option<&PaymentEvent>) -> Result<PaymentReceipt> {
+    settled
+        .or(reconciled)
+        .and_then(|event| event.payload.get("receipt").cloned())
+        .map(serde_json::from_value)
+        .transpose()?
+        .ok_or_else(|| Error::Storage("settled intent has no durable receipt".to_owned()))
 }
 
 fn authorization_query(
@@ -1354,10 +1287,7 @@ fn authorization_query(
 
 fn settlement_request_payload(intent: &PaymentIntent, from_block: Option<u64>) -> Value {
     let mut payload = serde_json::Map::from_iter([
-        (
-            "operation_key".to_owned(),
-            Value::String(format!("{}:settle", intent.id)),
-        ),
+        ("run_id".to_owned(), Value::String(intent.run_id.clone())),
         (
             "recovery".to_owned(),
             Value::String(
@@ -1387,17 +1317,16 @@ fn settlement_request_from_block(intent: &PaymentIntent, event: &PaymentEvent) -
         "provider_verify"
     };
     let exact_fields = payload.len() == if intent.protocol == "x402" { 3 } else { 2 }
-        && payload.contains_key("operation_key")
+        && payload.contains_key("run_id")
         && payload.contains_key("recovery")
         && (intent.protocol != "x402" || payload.contains_key("from_block"));
-    let operation_key = format!("{}:settle", intent.id);
     if event.intent_id != intent.id
         || event.event_type != PaymentEventType::SettlementRequested
         || event.attempt_no != 0
         || event.signature_ref.is_some()
         || event.tx_hash.is_some()
         || !exact_fields
-        || payload.get("operation_key").and_then(Value::as_str) != Some(operation_key.as_str())
+        || payload.get("run_id").and_then(Value::as_str) != Some(intent.run_id.as_str())
         || payload.get("recovery").and_then(Value::as_str) != Some(expected_recovery)
     {
         return Err(Error::Storage(
@@ -1435,7 +1364,6 @@ fn validate_issue_command(command: &IssuePaymentChallenge) -> Result<()> {
     validate_identifier("run_id", &command.run_id)?;
     validate_identifier("offer_id", &command.offer_id)?;
     validate_identifier("protocol", &command.protocol)?;
-    validate_identifier("idempotency_key", &command.idempotency_key)?;
     validate_identifier("request_hash", &command.request_hash)?;
     if command.resource.trim().is_empty() || canonical_http_origin(&command.resource)? != command.origin {
         return Err(Error::InvalidRequest(
@@ -1467,7 +1395,6 @@ fn build_inbound_intent(
         settled_amount: Amount::ZERO,
         resource: offer.resource.clone(),
         challenge_hash: Some(challenge.challenge_hash.clone()),
-        idempotency_key: command.idempotency_key.clone(),
         request_hash: command.request_hash.clone(),
         status: PaymentStatus::Created,
         reservation_status: ReservationStatus::Reserved,
@@ -1490,7 +1417,6 @@ fn validate_verify_command(command: &VerifyIncomingPayment) -> Result<()> {
     validate_identifier("scenario_id", &command.scenario_id)?;
     validate_identifier("run_id", &command.run_id)?;
     validate_identifier("challenge_hash", &command.challenge_hash)?;
-    validate_identifier("idempotency_key", &command.idempotency_key)?;
     validate_identifier("request_hash", &command.request_hash)?;
     validate_identifier("credential.protocol", &command.credential.protocol)?;
     validate_identifier("credential.challenge_hash", &command.credential.challenge_hash)?;
@@ -1506,10 +1432,6 @@ fn validate_verify_command(command: &VerifyIncomingPayment) -> Result<()> {
 fn validate_settle_command(command: &SettleIncomingPayment) -> Result<()> {
     validate_identifier("scenario_id", &command.scenario_id)?;
     validate_identifier("run_id", &command.run_id)?;
-    validate_identifier("execution_key", &command.execution_key)?;
-    if command.execution_key.len() > 96 {
-        return Err(Error::InvalidRequest("execution_key exceeds 96 characters".to_owned()));
-    }
     validate_identifier("intent_id", &command.intent_id)?;
     validate_identifier("verification_ref", &command.verification_ref)
 }
@@ -1517,11 +1439,6 @@ fn validate_settle_command(command: &SettleIncomingPayment) -> Result<()> {
 fn ensure_settlement_intent_binding(intent: &PaymentIntent, command: &SettleIncomingPayment) -> Result<()> {
     if intent.run_id != command.run_id || intent.direction != PaymentDirection::Inbound {
         return Err(Error::Forbidden);
-    }
-    if intent.idempotency_key != format!("{}.challenge", command.execution_key) {
-        return Err(Error::PaymentConflict(
-            "execution key is not bound to the payment challenge".to_owned(),
-        ));
     }
     Ok(())
 }
@@ -1532,32 +1449,23 @@ fn ensure_replay_identity(intent: &PaymentIntent, command: &IssuePaymentChalleng
         || intent.offer_id.as_deref() != Some(command.offer_id.as_str())
         || intent.resource != command.resource
         || intent.protocol != command.protocol
-        || intent.idempotency_key != command.idempotency_key
         || intent.request_hash != command.request_hash
     {
         return Err(Error::PaymentConflict(
-            "idempotency key was reused for different challenge content".to_owned(),
+            "run_id was reused for different challenge content".to_owned(),
         ));
     }
     Ok(())
 }
 
-fn ensure_incoming_identity(
-    intent: &PaymentIntent,
-    run_id: &str,
-    idempotency_key: &str,
-    request_hash: &str,
-) -> Result<()> {
+fn ensure_incoming_identity(intent: &PaymentIntent, run_id: &str, request_hash: &str) -> Result<()> {
     if intent.direction != PaymentDirection::Inbound || intent.run_id != run_id {
         return Err(Error::Forbidden);
     }
-    match intent.check_idempotency(idempotency_key, request_hash) {
-        crate::model::IdempotencyCheck::Replay => Ok(()),
-        crate::model::IdempotencyCheck::Conflict => Err(Error::PaymentConflict(
-            "idempotency key was reused for different request content".to_owned(),
-        )),
-        crate::model::IdempotencyCheck::Miss => Err(Error::PaymentConflict(
-            "verification must reuse the challenge operation idempotency key".to_owned(),
+    match intent.check_replay(request_hash) {
+        crate::model::ReplayCheck::Replay => Ok(()),
+        crate::model::ReplayCheck::Conflict => Err(Error::PaymentConflict(
+            "run_id was reused for different request content".to_owned(),
         )),
     }
 }
@@ -1724,8 +1632,8 @@ fn confirmed_outbox(intent: &PaymentIntent, confirmed_at: i64) -> OutboxMessage 
         event_type: "payment_settled".to_owned(),
         destination: format!("scenario:{}.payments", intent.scenario_id),
         correlation_id: intent.id.clone(),
-        idempotency_key: format!("payment-settled:{}", intent.id),
-        payload: json!({"intent_id": intent.id, "scenario_id": intent.scenario_id}),
+        run_id: intent.run_id.clone(),
+        payload: json!({"intent_id": intent.id, "scenario_id": intent.scenario_id, "run_id": intent.run_id}),
         status: OutboxStatus::Pending,
         attempt_count: 0,
         available_at: confirmed_at,
@@ -1738,16 +1646,7 @@ fn confirmed_outbox(intent: &PaymentIntent, confirmed_at: i64) -> OutboxMessage 
 }
 
 fn settled_response(intent: PaymentIntent, receipt: PaymentReceipt) -> SettledIncomingPayment {
-    SettledIncomingPayment {
-        execution_key: format!("payment:{}", intent.id),
-        intent,
-        receipt,
-    }
-}
-
-fn with_execution_key(mut payment: SettledIncomingPayment, execution_key: &str) -> SettledIncomingPayment {
-    execution_key.clone_into(&mut payment.execution_key);
-    payment
+    SettledIncomingPayment { intent, receipt }
 }
 
 #[derive(Clone, Debug)]
@@ -1810,10 +1709,7 @@ impl ExternalSettlementProvider for HttpSettlementProvider {
             SettlementOperation::Verify => ProviderHttpEndpoint::Verify,
             SettlementOperation::Settle => ProviderHttpEndpoint::Settle,
         };
-        let response = self
-            .transport
-            .post_json(endpoint, &request.idempotency_key, request)
-            .await?;
+        let response = self.transport.post_json(endpoint, &request.run_id, request).await?;
         if !response.status.is_success() {
             return Err(Error::Settlement(format!("provider returned HTTP {}", response.status)));
         }

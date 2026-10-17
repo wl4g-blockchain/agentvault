@@ -15,17 +15,20 @@ WORKLOAD_PASSWORD = os.environ["MQTT_WORKLOAD_PASSWORD"]
 APPROVER_PASSWORD = os.environ["MQTT_APPROVER_PASSWORD"]
 VAULT_PASSWORD = os.environ["MQTT_VAULT_PASSWORD"]
 PREFIX = "agentvault/v1/clients"
+CONSUMER_GROUP = os.environ.get("MQTT_CONSUMER_GROUP", "agentvault-e2e")
 OWN = f"{PREFIX}/client-quantstream/commands/authorize"
 CROSS = f"{PREFIX}/client-forbidden/commands/authorize"
 DECISION = f"{PREFIX}/client-quantstream/approvers/principal-quantstream-admin/decisions"
 RESULT = f"{PREFIX}/client-quantstream/results/acl-roundtrip"
+APPROVAL = f"{PREFIX}/client-quantstream/approvals/required"
+PAYMENT_EVENT = f"{PREFIX}/client-quantstream/payments/events/+"
 COMMAND_FILTERS = [
-    f"{PREFIX}/+/commands/authorize",
-    f"{PREFIX}/+/commands/outbound-response",
-    f"{PREFIX}/+/commands/resolve-offer",
-    f"{PREFIX}/+/commands/create-challenge",
-    f"{PREFIX}/+/commands/verify-payment",
-    f"{PREFIX}/+/commands/settle-payment",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/authorize",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/outbound-response",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/resolve-offer",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/create-challenge",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/verify-payment",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/settle-payment",
 ]
 
 
@@ -86,12 +89,14 @@ def connect(client_id: str, username: str, password: str, accepted: bool = True)
     return connection
 
 
-def subscribe(connection: socket.socket, topic: str, packet_id: int) -> None:
+def subscribe(connection: socket.socket, topic: str, packet_id: int, accepted: bool = True) -> None:
     payload = struct.pack("!H", packet_id) + utf8(topic) + bytes([1])
     connection.sendall(packet(8, 2, payload))
     kind, body = read_packet(connection)
-    if kind != 9 or body[:2] != struct.pack("!H", packet_id) or body[2:] != b"\x01":
-        raise RuntimeError("authorized MQTT subscription failed")
+    expected = b"\x01" if accepted else b"\x80"
+    if kind != 9 or body[:2] != struct.pack("!H", packet_id) or body[2:] != expected:
+        outcome = "authorized" if accepted else "unauthorized"
+        raise RuntimeError(f"{outcome} MQTT subscription had an unexpected SUBACK")
 
 
 def publish(connection: socket.socket, topic: str, message: bytes, packet_id: int) -> None:
@@ -125,9 +130,11 @@ connect("bad-password-probe", "quantstream-workload", "definitely-wrong", accept
 vault = connect("vault-acl-probe", "agentvault-vault", VAULT_PASSWORD)
 for packet_id, topic in enumerate(COMMAND_FILTERS, start=1):
     subscribe(vault, topic, packet_id)
-subscribe(vault, f"{PREFIX}/+/approvers/+/decisions", 20)
+subscribe(vault, f"$share/{CONSUMER_GROUP}/{PREFIX}/+/approvers/+/decisions", 20)
 workload = connect("workload-acl-probe", "quantstream-workload", WORKLOAD_PASSWORD)
 subscribe(workload, f"{PREFIX}/client-quantstream/results/+", 1)
+subscribe(workload, APPROVAL, 2, accepted=False)
+subscribe(workload, PAYMENT_EVENT, 3, accepted=False)
 own_marker = b"allowed-own-client"
 publish(workload, OWN, own_marker, 3)
 if not receive_publish(vault, own_marker, 2.0):
@@ -141,6 +148,7 @@ publish(workload, DECISION, forged_decision_marker, 5)
 if receive_publish(vault, forged_decision_marker, 1.0):
     raise RuntimeError("workload MQTT identity published an approval decision")
 approver = connect("approver-acl-probe", "quantstream-approver", APPROVER_PASSWORD)
+subscribe(approver, APPROVAL, 7)
 decision_marker = b"allowed-registered-approver"
 publish(approver, DECISION, decision_marker, 6)
 if not receive_publish(vault, decision_marker, 2.0):

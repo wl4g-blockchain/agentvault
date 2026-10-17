@@ -17,7 +17,7 @@ use crate::{
         canonicalize_payment_recipient, PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEvent,
         PaymentEventType, PaymentIntent, PaymentStatus,
     },
-    storage::{EventStorage, IdempotentWrite, OutboundEvidenceWrite, PageRequest, PaymentStorage},
+    storage::{EventStorage, IdempotentWrite, OutboundEvidenceWrite, PaymentStorage},
     utils::secure_material::{SealedSensitiveMaterial, SensitiveMaterialProtector},
     Error, Result,
 };
@@ -29,14 +29,12 @@ use super::{
 };
 
 const MAX_PAYMENT_RESPONSE_BYTES: usize = 16 * 1024;
-const EVENT_PAGE_SIZE: u32 = 1_000;
 
 #[derive(Clone, Debug)]
 pub struct RecordOutboundPaymentResponse {
     pub scenario_id: String,
     pub run_id: String,
     pub intent_id: String,
-    pub idempotency_key: String,
     pub payment_response: String,
 }
 
@@ -161,7 +159,7 @@ impl OutboundEvidenceHandler {
         let transaction = response.transaction.to_ascii_lowercase();
         let evidence_hash = merchant_evidence_hash(
             &intent.id,
-            &command.idempotency_key,
+            &intent.run_id,
             &response.network,
             &transaction,
             &response_payer,
@@ -183,7 +181,7 @@ impl OutboundEvidenceHandler {
             payload: json!({
                 "source": "x402_payment_response",
                 "evidence_hash": evidence_hash,
-                "idempotency_key": command.idempotency_key,
+                "run_id": intent.run_id,
                 "merchant_response": {
                     "success": true,
                     "transaction": transaction,
@@ -223,23 +221,17 @@ impl OutboundEvidenceHandler {
                 "outbound x402 evidence received an incompatible intent".to_owned(),
             ));
         }
-        let events = self.load_events(intent).await?;
-        let Some(event) = events
-            .iter()
-            .find(|event| event.event_type == PaymentEventType::Submitted && event.attempt_no == 0)
+        let Some(event) = self
+            .events
+            .find_for_intent_type(&intent.id, PaymentEventType::Submitted, 0)
+            .await?
         else {
             return Ok(OutboundEvidenceObservation::Unavailable {
                 reason: "merchant PAYMENT-RESPONSE has not been durably reported".to_owned(),
             });
         };
-        let stored = stored_response(event, intent)?;
-        let expected_payer = expected_payer_from_events(
-            intent,
-            &events,
-            self.protocols.as_ref(),
-            self.material_protector.as_ref(),
-        )
-        .await?;
+        let stored = stored_response(&event, intent)?;
+        let expected_payer = self.load_expected_payer(intent).await?;
         if stored.payer != expected_payer {
             return Ok(OutboundEvidenceObservation::Unknown {
                 reason: "durable merchant payer conflicts with the signed credential".to_owned(),
@@ -274,28 +266,24 @@ impl OutboundEvidenceHandler {
     }
 
     async fn load_expected_payer(&self, intent: &PaymentIntent) -> Result<String> {
-        let events = self.load_events(intent).await?;
+        let challenge = self
+            .events
+            .find_for_intent_type(&intent.id, PaymentEventType::ChallengeReceived, 0)
+            .await?
+            .ok_or_else(|| Error::Storage("outbound challenge event is missing".to_owned()))?;
+        let signed = self
+            .events
+            .find_for_intent_type(&intent.id, PaymentEventType::Signed, 0)
+            .await?
+            .ok_or_else(|| Error::Storage("outbound signed event is missing".to_owned()))?;
         expected_payer_from_events(
             intent,
-            &events,
+            &challenge,
+            &signed,
             self.protocols.as_ref(),
             self.material_protector.as_ref(),
         )
         .await
-    }
-
-    async fn load_events(&self, intent: &PaymentIntent) -> Result<Vec<PaymentEvent>> {
-        let page = self
-            .events
-            .list_for_intent(
-                &intent.id,
-                PageRequest {
-                    offset: 0,
-                    limit: EVENT_PAGE_SIZE,
-                },
-            )
-            .await?;
-        Ok(page.items)
     }
 }
 
@@ -358,21 +346,18 @@ fn decode_payment_response(encoded: &str) -> Result<X402SettlementResponse> {
 
 async fn expected_payer_from_events(
     intent: &PaymentIntent,
-    events: &[PaymentEvent],
+    challenge_event: &PaymentEvent,
+    signed: &PaymentEvent,
     protocols: &ProtocolRegistry,
     material_protector: &dyn SensitiveMaterialProtector,
 ) -> Result<String> {
-    let challenge: PaymentChallenge = events
-        .iter()
-        .find(|event| event.event_type == PaymentEventType::ChallengeReceived)
-        .and_then(|event| event.payload.get("challenge").cloned())
+    let challenge: PaymentChallenge = challenge_event
+        .payload
+        .get("challenge")
+        .cloned()
         .map(serde_json::from_value)
         .transpose()?
         .ok_or_else(|| Error::Storage("outbound challenge event is missing".to_owned()))?;
-    let signed = events
-        .iter()
-        .find(|event| event.event_type == PaymentEventType::Signed)
-        .ok_or_else(|| Error::Storage("outbound signed event is missing".to_owned()))?;
     let sealed: SealedSensitiveMaterial = signed
         .payload
         .get("sealed_credential")
@@ -413,11 +398,11 @@ fn stored_response(event: &PaymentEvent, intent: &PaymentIntent) -> Result<Store
         .map(serde_json::from_value)
         .transpose()?
         .ok_or_else(|| Error::Storage("outbound merchant response is missing".to_owned()))?;
-    let key = event
+    let run_id = event
         .payload
-        .get("idempotency_key")
+        .get("run_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::Storage("outbound merchant response idempotency key is missing".to_owned()))?;
+        .ok_or_else(|| Error::Storage("outbound merchant response run ID is missing".to_owned()))?;
     let evidence_hash = event
         .payload
         .get("evidence_hash")
@@ -425,12 +410,13 @@ fn stored_response(event: &PaymentEvent, intent: &PaymentIntent) -> Result<Store
         .ok_or_else(|| Error::Storage("outbound merchant response hash is missing".to_owned()))?;
     let expected_hash = merchant_evidence_hash(
         &intent.id,
-        key,
+        run_id,
         &response.network,
         &response.transaction,
         &response.payer,
     );
     if !response.success
+        || run_id != intent.run_id
         || response.network != intent.asset.network
         || !valid_transaction_hash(&response.transaction)
         || !canonicalize_payment_recipient(&intent.asset.network, &response.payer)
@@ -448,7 +434,6 @@ fn validate_command(command: &RecordOutboundPaymentResponse) -> Result<()> {
     validate_identifier("scenario_id", &command.scenario_id)?;
     validate_identifier("run_id", &command.run_id)?;
     validate_identifier("intent_id", &command.intent_id)?;
-    validate_identifier("idempotency_key", &command.idempotency_key)?;
     if command.payment_response.is_empty() {
         return Err(Error::InvalidRequest("payment_response is required".to_owned()));
     }
@@ -476,17 +461,11 @@ fn validate_intent_binding(intent: &PaymentIntent, command: &RecordOutboundPayme
     Ok(())
 }
 
-fn merchant_evidence_hash(
-    intent_id: &str,
-    idempotency_key: &str,
-    network: &str,
-    transaction: &str,
-    payer: &str,
-) -> String {
+fn merchant_evidence_hash(intent_id: &str, run_id: &str, network: &str, transaction: &str, payer: &str) -> String {
     hash_parts(&[
         b"agentvault.x402.merchant-evidence.v1",
         intent_id.as_bytes(),
-        idempotency_key.as_bytes(),
+        run_id.as_bytes(),
         network.as_bytes(),
         transaction.as_bytes(),
         payer.as_bytes(),

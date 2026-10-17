@@ -9,16 +9,16 @@ use crate::{
     config::SqliteStorageConfig,
     model::{
         Amount, AssetIdentity, BudgetUnit, LedgerEntryType, PaymentChallenge, PaymentClient, PaymentDirection,
-        PaymentEvent, PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentPolicy, PaymentPolicyLimits,
-        PaymentScenario, PaymentScenarioApprover, PaymentStatus, ReservationStatus,
+        PaymentEvent, PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentOffer, PaymentPolicy,
+        PaymentPolicyLimits, PaymentScenario, PaymentScenarioApprover, PaymentStatus, ReservationStatus,
     },
     protocol::ProtocolSigningRequest,
     storage::{
         ApproverStorage as _, AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite,
         EncryptedWalletKeyVersion, IdempotentWrite, IntentBoundPaymentSignatureRequest, LedgerStorage as _,
-        OutboxDeliveryClass, OutboxLeaseRequest, OutboxStorage as _, PaymentProgressWrite, PaymentQuery,
-        PaymentStorage as _, PaymentWallet, ReconciliationLeaseRequest, SettlementWrite, WalletKeyStatus,
-        WalletPaymentSignature, WalletPaymentSigner as _, WalletStorage as _,
+        OfferStorage as _, OutboxDeliveryClass, OutboxLeaseRequest, OutboxStorage as _, PaymentProgressWrite,
+        PaymentQuery, PaymentStorage as _, PaymentWallet, PolicyStorage as _, ReconciliationLeaseRequest,
+        SettlementWrite, WalletKeyStatus, WalletPaymentSignature, WalletPaymentSigner as _, WalletStorage as _,
     },
     utils::aead::{parse_uuid_nonce, WALLET_KEY_ENCRYPTION_SCHEME},
     Error,
@@ -136,7 +136,7 @@ async fn outbox_class_claim_does_not_lease_foreign_rows_and_replays_after_restar
     ] {
         sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
-             correlation_id, idempotency_key, payload, status, attempt_count, available_at, created_at) \
+             correlation_id, run_id, payload, status, attempt_count, available_at, created_at) \
              VALUES (?1, 'payment_intent', 'intent-1', ?2, ?3, 'intent-1', ?1, '{}', 'pending', 0, 10, 10)",
         )
         .bind(id)
@@ -278,7 +278,13 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         budget_unit: unit.clone(),
         allowed_recipients: vec![recipient.clone()],
         allowed_origins: vec!["https://feed.example".to_owned()],
-        inbound_limits: None,
+        inbound_limits: Some(PaymentPolicyLimits {
+            max_per_payment: Amount::new(100),
+            max_per_day: Amount::new(100),
+            approval_threshold: None,
+            approval_enabled: true,
+            approval_overage: None,
+        }),
         outbound_limits: Some(PaymentPolicyLimits {
             max_per_payment: Amount::new(100),
             max_per_day: Amount::new(100),
@@ -291,6 +297,38 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         updated_at: 3,
     };
     crate::storage::PolicyStorage::insert(&storage, &policy).await.unwrap();
+    assert!(storage
+        .has_enabled_wallet_binding(&scenario.id, &wallet.id)
+        .await
+        .unwrap());
+    assert!(!storage
+        .has_enabled_wallet_binding(&scenario.id, "wallet-not-bound")
+        .await
+        .unwrap());
+
+    let offer = PaymentOffer {
+        id: "offer-1".to_owned(),
+        scenario_id: scenario.id.clone(),
+        policy_id: policy.id.clone(),
+        resource: "https://feed.example/paid".to_owned(),
+        protocols: vec!["x402".to_owned()],
+        asset: asset.clone(),
+        amount: Amount::new(10),
+        wallet_id: wallet.id.clone(),
+        enabled: true,
+        created_at: 4,
+        updated_at: 4,
+    };
+    crate::storage::OfferStorage::insert(&storage, &offer).await.unwrap();
+    assert_eq!(
+        storage.resolve_resource(&scenario.id, &offer.resource).await.unwrap(),
+        Some(offer.clone())
+    );
+    assert!(storage
+        .resolve_resource(&scenario.id, "https://feed.example/missing")
+        .await
+        .unwrap()
+        .is_none());
 
     let first = intent(
         "intent-a",
@@ -355,6 +393,16 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .await
         .unwrap();
     assert!(matches!(replay, IdempotentWrite::Replay(_)));
+    let challenge_event = crate::storage::EventStorage::find_for_intent_type(
+        &storage,
+        &current.id,
+        PaymentEventType::ChallengeReceived,
+        0,
+    )
+    .await
+    .unwrap()
+    .expect("authorization must persist its exact recovery event");
+    assert_eq!(challenge_event.intent_id, current.id);
 
     // Settlement is intentionally a dedicated atomic port. Seed its already-
     // submitted precondition directly in this storage contract test rather
@@ -589,7 +637,7 @@ fn recover_address(bytes: &[u8], digest: &[u8; 32]) -> String {
 
 fn intent(
     id: &str,
-    idempotency_key: &str,
+    run_id: &str,
     scenario_id: &str,
     wallet_id: &str,
     policy_id: &str,
@@ -599,7 +647,7 @@ fn intent(
     PaymentIntent {
         id: id.to_owned(),
         scenario_id: scenario_id.to_owned(),
-        run_id: format!("run-{id}"),
+        run_id: run_id.to_owned(),
         wallet_id: Some(wallet_id.to_owned()),
         policy_id: Some(policy_id.to_owned()),
         offer_id: None,
@@ -611,7 +659,6 @@ fn intent(
         settled_amount: Amount::ZERO,
         resource: "https://feed.example/mcp/realtime".to_owned(),
         challenge_hash: Some(format!("challenge-{id}")),
-        idempotency_key: idempotency_key.to_owned(),
         request_hash: format!("request-{id}"),
         status: PaymentStatus::Authorized,
         reservation_status: ReservationStatus::Reserved,

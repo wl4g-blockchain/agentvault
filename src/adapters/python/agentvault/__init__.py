@@ -15,7 +15,6 @@ from .model import (
     CreateChallengeRequest,
     HttpCredential,
     HttpProtectionRequest,
-    IncomingPayment,
     McpProtectionRequest,
     OperationContext,
     PayeeOperation,

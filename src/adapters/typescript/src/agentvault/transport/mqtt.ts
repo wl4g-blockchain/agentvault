@@ -30,12 +30,8 @@ export class MqttVaultTransport implements VaultTransport {
   private client: MqttClient | undefined;
   private readonly prefix: string;
   private readonly pending = new Map<string, PendingRequest>();
-  private readonly completed = new Map<string, WireResponse>();
 
-  constructor(
-    public readonly config: MqttConfig,
-    private readonly approvalHandler?: (value: Record<string, unknown>) => void,
-  ) {
+  constructor(public readonly config: MqttConfig) {
     this.prefix = `agentvault/v1/clients/${config.vaultClientId}`;
   }
 
@@ -58,20 +54,32 @@ export class MqttVaultTransport implements VaultTransport {
     });
     this.client = client;
     client.on('message', (topic, payload) => this.onMessage(topic, payload));
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('MQTT connect timed out')), this.config.timeoutMs);
-      client.once('error', (error) => {
-        clearTimeout(timer);
-        reject(new Error(`MQTT connection failed: ${error.name}`));
-      });
-      client.once('connect', () => {
-        client.subscribe([`${this.prefix}/results/+`, `${this.prefix}/approvals/required`], { qos: 1 }, (error) => {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('MQTT connect timed out')), this.config.timeoutMs);
+        client.once('error', (error) => {
           clearTimeout(timer);
-          if (error) reject(new Error(`MQTT subscribe failed: ${error.name}`));
-          else resolve();
+          reject(new Error(`MQTT connection failed: ${error.name}`));
+        });
+        client.once('connect', () => {
+          client.subscribe(
+            `${this.prefix}/results/+`,
+            { qos: 1 },
+            (error, granted) => {
+              clearTimeout(timer);
+              if (error) reject(new Error(`MQTT subscribe failed: ${error.name}`));
+              else if (!subscriptionGranted(granted, 1)) {
+                reject(new Error('AgentVault MQTT subscriptions were rejected or downgraded'));
+              } else resolve();
+            },
+          );
         });
       });
-    });
+    } catch (error) {
+      this.client = undefined;
+      await new Promise<void>((resolve) => client.end(true, {}, () => resolve()));
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -85,14 +93,13 @@ export class MqttVaultTransport implements VaultTransport {
     }
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const operation = this.operation(method, path);
     if (body === undefined) throw new Error('MQTT payment commands require a request body');
     if (!this.client?.connected) throw new Error('MQTT transport is not connected');
     if (this.pending.size >= 256) throw new Error('too many pending MQTT payment requests');
     const correlationId = randomBytes(16).toString('hex');
     const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json' };
-    if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const payload = Buffer.from(JSON.stringify({
       type: operation.messageType,
       version: 1,
@@ -203,16 +210,6 @@ export class MqttVaultTransport implements VaultTransport {
     } catch {
       return;
     }
-    if (topic === `${this.prefix}/approvals/required`) {
-      if (value.type === 'payment.approval_required' && value.version === 1) {
-        try {
-          this.approvalHandler?.(value);
-        } catch {
-          // Application callbacks cannot break the transport consumer.
-        }
-      }
-      return;
-    }
     const correlation = value.correlationId;
     const waiting = typeof correlation === 'string' ? this.pending.get(correlation) : undefined;
     const status = value.status;
@@ -230,12 +227,12 @@ export class MqttVaultTransport implements VaultTransport {
       return;
     }
     const response = value as unknown as WireResponse;
-    if (!this.completed.has(correlation)) {
-      this.completed.set(correlation, response);
-      if (this.completed.size > 256) this.completed.delete(this.completed.keys().next().value!);
-    }
     clearTimeout(waiting.timer);
     this.pending.delete(correlation);
     waiting.resolve(response);
   }
+}
+
+function subscriptionGranted(grants: ReadonlyArray<{ qos: number }> | undefined, expectedCount: number): boolean {
+  return grants?.length === expectedCount && grants.every((grant) => grant.qos === 1);
 }

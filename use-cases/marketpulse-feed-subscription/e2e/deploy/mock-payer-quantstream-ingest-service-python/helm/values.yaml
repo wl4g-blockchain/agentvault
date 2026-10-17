@@ -12,20 +12,12 @@ args:
   - "--once"
 env:
   MARKETPULSE_URL: "http://marketpulse:8081/mcp"
-  MARKETPULSE_ORIGIN: "http://marketpulse:8081"
   QUANTSTREAM_CLIENT_ID: "client-quantstream"
   QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-market-ingestion"
-  QUANTSTREAM_WALLET_ID: "wallet-quantstream-primary"
   AGENTVAULT_MQTT_HOST: "emqx"
   AGENTVAULT_MQTT_PORT: "1883"
   AGENTVAULT_MQTT_TLS: "false"
   AGENTVAULT_MQTT_USERNAME: "quantstream-workload"
-  PAYMENT_NETWORK: "eip155:31337"
-  PAYMENT_ASSET: "USDC"
-  PAYMENT_TOKEN_CONTRACT: "0x5fbdb2315678afecb367f032d93f642f64180aa3"
-  PAYMENT_DECIMALS: "6"
-  PAYMENT_AMOUNT: "1000000"
-  PAYMENT_RECIPIENT: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
   QUANTSTREAM_DATABASE: "/var/lib/quantstream/ingestion.sqlite3"
 secret:
   name: marketpulse-e2e-secrets
@@ -53,4 +45,3 @@ persistence:
 resources:
   requests: { cpu: 20m, memory: 32Mi }
   limits: { cpu: 1000m, memory: 512Mi }
-

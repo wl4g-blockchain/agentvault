@@ -1,17 +1,11 @@
 package model
 
-import (
-	"errors"
-	"strings"
-)
-
 // PayeeOperation is the stable business identity and server-owned Offer
 // binding for one inbound request. Framework adapters only populate it; the
 // shared PayeeMiddleware owns challenge, verification, and settlement.
 type PayeeOperation struct {
 	ScenarioID        string
 	RunID             string
-	ExecutionKey      string
 	OfferID           string
 	Resource          string
 	Origin            string
@@ -23,7 +17,7 @@ type PayeeOperation struct {
 func (operation PayeeOperation) Validate() error {
 	for name, value := range map[string]string{
 		"scenario_id": operation.ScenarioID, "run_id": operation.RunID,
-		"execution_key": operation.ExecutionKey, "offer_id": operation.OfferID,
+		"offer_id": operation.OfferID,
 		"resource": operation.Resource, "origin": operation.Origin,
 		"protocol": operation.Protocol, "request_hash": operation.RequestHash,
 	} {
@@ -31,35 +25,15 @@ func (operation PayeeOperation) Validate() error {
 			return err
 		}
 	}
-	if len(operation.ExecutionKey) > 96 {
-		return errors.New("execution_key must contain 1..=96 safe ASCII characters")
-	}
-	for _, character := range []byte(operation.ExecutionKey) {
-		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') || strings.ContainsRune("-_.", rune(character)) {
-			continue
-		}
-		return errors.New("execution_key must contain 1..=96 safe ASCII characters")
-	}
 	return nil
 }
 
 func (operation PayeeOperation) ChallengeContext() (OperationContext, error) {
-	return operation.phaseContext("challenge")
+	return NewOperationContext(operation.ScenarioID, operation.RunID)
 }
 
 func (operation PayeeOperation) SettlementContext() (OperationContext, error) {
-	return operation.phaseContext("settle")
-}
-
-func (operation PayeeOperation) phaseContext(phase string) (OperationContext, error) {
-	key, err := NewIdempotencyKey(operation.ExecutionKey + "." + phase)
-	if err != nil {
-		return OperationContext{}, err
-	}
-	value, err := NewOperationContext(operation.ScenarioID, key)
-	value.RunID = operation.RunID
-	return value, err
+	return NewOperationContext(operation.ScenarioID, operation.RunID)
 }
 
 type ResolveOfferRequest struct {
@@ -105,25 +79,13 @@ type PaymentVerification struct {
 
 type SettlePaymentRequest struct {
 	OperationContext
-	ExecutionKey    string `json:"execution_key"`
 	IntentID        string `json:"intent_id"`
 	VerificationRef string `json:"verification_ref"`
 }
 
-type IncomingPayment struct {
-	ScenarioID     string            `json:"scenario_id"`
-	RunID          string            `json:"run_id"`
-	OfferID        string            `json:"offer_id"`
-	Resource       string            `json:"resource"`
-	IdempotencyKey string            `json:"idempotency_key"`
-	RequestHash    string            `json:"request_hash"`
-	Credential     PaymentCredential `json:"credential"`
-}
-
 type SettledIncomingPayment struct {
-	Intent       PaymentIntent  `json:"intent"`
-	Receipt      PaymentReceipt `json:"receipt"`
-	ExecutionKey string         `json:"execution_key"`
+	Intent  PaymentIntent  `json:"intent"`
+	Receipt PaymentReceipt `json:"receipt"`
 }
 
 type HTTPProtectionRequest struct {

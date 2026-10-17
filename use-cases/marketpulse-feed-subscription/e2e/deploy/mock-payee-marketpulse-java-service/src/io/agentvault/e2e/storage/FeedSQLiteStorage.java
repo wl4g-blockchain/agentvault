@@ -54,7 +54,7 @@ public final class FeedSQLiteStorage implements AutoCloseable {
                       access_tier TEXT NOT NULL CHECK(access_tier IN ('yesterday','realtime')))""");
                 statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS mcp_delivery(
-                      execution_key TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
+                      run_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,intent_id TEXT NOT NULL,settlement_json TEXT NOT NULL,
                       response_json TEXT,status TEXT NOT NULL CHECK(status IN ('settled','delivered')),
                       failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL)""");
             }
@@ -115,14 +115,14 @@ public final class FeedSQLiteStorage implements AutoCloseable {
         }
     }
 
-    public synchronized DeliveryState delivery(String executionKey, String requestHash) {
+    public synchronized DeliveryState delivery(String runId, String requestHash) {
         try (var statement = connection.prepareStatement("""
-                SELECT request_hash,intent_id,COALESCE(response_json,''),status FROM mcp_delivery WHERE execution_key=?""")) {
-            statement.setString(1, executionKey);
+                SELECT request_hash,intent_id,COALESCE(response_json,''),status FROM mcp_delivery WHERE run_id=?""")) {
+            statement.setString(1, runId);
             try (var row = statement.executeQuery()) {
                 if (!row.next()) return new DeliveryState(null, null);
                 if (!requestHash.equals(row.getString(1)) || !("settled".equals(row.getString(4)) || "delivered".equals(row.getString(4)))) {
-                    throw new IllegalStateException("MCP execution key conflicts with durable delivery");
+                    throw new IllegalStateException("MCP run_id conflicts with durable delivery");
                 }
                 String response = row.getString(3);
                 return new DeliveryState(row.getString(2), response.isBlank() ? null : response);
@@ -132,40 +132,40 @@ public final class FeedSQLiteStorage implements AutoCloseable {
         }
     }
 
-    public synchronized void recordSettled(String executionKey, String requestHash, String intentId, String vaultExecutionKey) {
+    public synchronized void recordSettled(String runId, String requestHash, String intentId) {
         try (var statement = connection.prepareStatement("""
-                INSERT INTO mcp_delivery(execution_key,request_hash,intent_id,settlement_json,response_json,status,updated_at)
-                VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(execution_key) DO NOTHING""")) {
-            statement.setString(1, executionKey); statement.setString(2, requestHash); statement.setString(3, intentId);
-            statement.setString(4, encode(java.util.Map.of("intentId", intentId, "executionKey", vaultExecutionKey)));
+                INSERT INTO mcp_delivery(run_id,request_hash,intent_id,settlement_json,response_json,status,updated_at)
+                VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(run_id) DO NOTHING""")) {
+            statement.setString(1, runId); statement.setString(2, requestHash); statement.setString(3, intentId);
+            statement.setString(4, encode(java.util.Map.of("intentId", intentId, "runId", runId)));
             statement.setLong(5, Instant.now().getEpochSecond()); statement.executeUpdate();
-            if (!intentId.equals(delivery(executionKey, requestHash).intentId())) {
-                throw new IllegalStateException("MCP execution key is already bound to another settlement");
+            if (!intentId.equals(delivery(runId, requestHash).intentId())) {
+                throw new IllegalStateException("MCP run_id is already bound to another settlement");
             }
         } catch (SQLException error) {
             throw new IllegalStateException("record MCP settlement", error);
         }
     }
 
-    public synchronized void recordDelivered(String executionKey, String requestHash, String response) {
+    public synchronized void recordDelivered(String runId, String requestHash, String response) {
         if (update("UPDATE mcp_delivery SET response_json=?,status='delivered',updated_at=? "
-                + "WHERE execution_key=? AND request_hash=? AND status='settled'", response, executionKey, requestHash) != 1) {
+                + "WHERE run_id=? AND request_hash=? AND status='settled'", response, runId, requestHash) != 1) {
             throw new IllegalStateException("MCP delivery was not in settled state");
         }
     }
 
-    public synchronized boolean recordFailure(String executionKey, String requestHash) {
+    public synchronized boolean recordFailure(String runId, String requestHash) {
         return update("UPDATE mcp_delivery SET response_json=response_json,failure_injections=1,updated_at=? "
-                + "WHERE execution_key=? AND request_hash=? AND status='settled' AND failure_injections=0",
-                null, executionKey, requestHash) == 1;
+                + "WHERE run_id=? AND request_hash=? AND status='settled' AND failure_injections=0",
+                null, runId, requestHash) == 1;
     }
 
-    private int update(String sql, String response, String executionKey, String requestHash) {
+    private int update(String sql, String response, String runId, String requestHash) {
         try (var statement = connection.prepareStatement(sql)) {
             int offset = response == null ? 0 : 1;
             if (response != null) statement.setString(1, response);
             statement.setLong(1 + offset, Instant.now().getEpochSecond());
-            statement.setString(2 + offset, executionKey); statement.setString(3 + offset, requestHash);
+            statement.setString(2 + offset, runId); statement.setString(3 + offset, requestHash);
             return statement.executeUpdate();
         } catch (SQLException error) {
             throw new IllegalStateException("update MCP delivery", error);

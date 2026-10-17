@@ -58,7 +58,6 @@ impl<T: VaultTransport> AgentVault<T> {
             .post(
                 format!("{}/{}/decision", paths::APPROVALS, percent_encode(&request.approval_id)),
                 request,
-                Some(&request.context.idempotency_key),
             )
             .await
     }

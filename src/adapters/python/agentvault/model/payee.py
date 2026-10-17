@@ -70,7 +70,6 @@ class PaymentOffer:
 class PayeeOperation:
     scenario_id: str
     run_id: str
-    execution_key: str
     offer_id: str
     resource: str
     origin: str
@@ -81,22 +80,17 @@ class PayeeOperation:
     def __post_init__(self) -> None:
         for name, value in (
             ("scenario_id", self.scenario_id), ("run_id", self.run_id),
-            ("execution_key", self.execution_key), ("offer_id", self.offer_id),
+            ("offer_id", self.offer_id),
             ("resource", self.resource), ("origin", self.origin),
             ("protocol", self.protocol), ("request_hash", self.request_hash),
         ):
             required(name, value)
-        if len(self.execution_key) > 96 or any(
-            not (character.isascii() and (character.isalnum() or character in "-_."))
-            for character in self.execution_key
-        ):
-            raise ValueError("execution_key must contain 1..=96 safe ASCII characters")
 
     def challenge_context(self) -> OperationContext:
-        return OperationContext(self.scenario_id, f"{self.execution_key}.challenge", self.run_id)
+        return OperationContext(self.scenario_id, self.run_id)
 
     def settlement_context(self) -> OperationContext:
-        return OperationContext(self.scenario_id, f"{self.execution_key}.settle", self.run_id)
+        return OperationContext(self.scenario_id, self.run_id)
 
 
 @dataclass(frozen=True)
@@ -151,33 +145,20 @@ class PaymentVerification:
 @dataclass(frozen=True)
 class SettlePaymentRequest:
     context: OperationContext
-    execution_key: str
     intent_id: str
     verification_ref: str
 
     def wire(self) -> dict[str, Any]:
         return {
-            **self.context.wire(), "execution_key": self.execution_key,
+            **self.context.wire(),
             "intent_id": self.intent_id, "verification_ref": self.verification_ref,
         }
-
-
-@dataclass(frozen=True)
-class IncomingPayment:
-    scenario_id: str
-    run_id: str
-    offer_id: str
-    resource: str
-    idempotency_key: str
-    request_hash: str
-    credential: PaymentCredential
 
 
 @dataclass(frozen=True)
 class SettledIncomingPayment:
     intent: PaymentIntent
     receipt: PaymentReceipt
-    execution_key: str
 
     @classmethod
     def from_wire(cls, value: Mapping[str, Any]) -> "SettledIncomingPayment":
@@ -188,7 +169,6 @@ class SettledIncomingPayment:
         return cls(
             intent=PaymentIntent.from_wire(intent),
             receipt=PaymentReceipt.from_wire(receipt),
-            execution_key=str(value.get("execution_key", "")),
         )
 
 
@@ -225,7 +205,7 @@ class ProtectionOutcome:
 
 
 __all__ = [
-    "CreateChallengeRequest", "HttpProtectionRequest", "IncomingPayment", "McpProtectionRequest",
+    "CreateChallengeRequest", "HttpProtectionRequest", "McpProtectionRequest",
     "PayeeOperation", "PaymentOffer", "PaymentVerification", "ProtectionOutcome", "ResolveOfferRequest",
     "SettlePaymentRequest", "SettledIncomingPayment",
 ]

@@ -4,8 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.AgentVault;
 import io.agentvault.sdk.config.Config.MqttConfig;
 import io.agentvault.sdk.config.Config.PayerConfig;
-import io.agentvault.sdk.model.Base.AssetIdentity;
-import io.agentvault.sdk.model.Payer.PayerRequestContext;
 import io.agentvault.sdk.transport.MqttVaultTransport;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -31,14 +29,12 @@ public final class MCPHelper implements AutoCloseable {
 
     private static final class Operation {
         private final String runId;
-        private final String executionKey;
         private final boolean paid;
         private final boolean failAfterSettlement;
         private String paymentIntentId;
 
-        private Operation(String runId, String executionKey, boolean paid, boolean failAfterSettlement) {
+        private Operation(String runId, boolean paid, boolean failAfterSettlement) {
             this.runId = runId;
-            this.executionKey = executionKey;
             this.paid = paid;
             this.failAfterSettlement = failAfterSettlement;
         }
@@ -67,15 +63,6 @@ public final class MCPHelper implements AutoCloseable {
             mqttTransport.connect();
             PayerConfig payerConfig = new PayerConfig(
                     required("QUANTSTREAM_SCENARIO_ID"),
-                    required("QUANTSTREAM_WALLET_ID"),
-                    "x402",
-                    new AssetIdentity(
-                            required("PAYMENT_NETWORK"),
-                            required("PAYMENT_ASSET"),
-                            required("PAYMENT_TOKEN_CONTRACT"),
-                            decimals()),
-                    required("PAYMENT_AMOUNT"),
-                    required("PAYMENT_RECIPIENT"),
                     Duration.ofSeconds(positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")),
                     Duration.ofSeconds(1),
                     1,
@@ -125,20 +112,20 @@ public final class MCPHelper implements AutoCloseable {
     }
 
     public ToolResult yesterdayNews(String runId) throws Exception {
-        return call(YESTERDAY_TOOL, runId, runId + ".yesterday", false);
+        return call(YESTERDAY_TOOL, runId, false);
     }
 
     public ToolResult realtimeNews(String runId, boolean failAfterSettlement) throws Exception {
-        return call(REALTIME_TOOL, runId, runId + ".realtime", failAfterSettlement);
+        return call(REALTIME_TOOL, runId, failAfterSettlement);
     }
 
-    private ToolResult call(String tool, String runId, String executionKey, boolean failAfterSettlement)
+    private ToolResult call(String tool, String runId, boolean failAfterSettlement)
             throws Exception {
         Boolean paid = tools.get(tool);
         if (paid == null) throw new IllegalArgumentException("MarketPulse MCP tool is not registered: " + tool);
-        Operation current = new Operation(runId, executionKey, paid, failAfterSettlement);
+        Operation current = new Operation(runId, paid, failAfterSettlement);
         operation.set(current);
-        activeOperations.put(executionKey, current);
+        activeOperations.put(runId, current);
         try {
             var result = mcp.callTool(new CallToolRequest(tool, Map.of()));
             if (Boolean.TRUE.equals(result.isError())) {
@@ -154,7 +141,7 @@ public final class MCPHelper implements AutoCloseable {
             }
             return new ToolResult(body, current.paymentIntentId);
         } finally {
-            activeOperations.remove(executionKey);
+            activeOperations.remove(runId);
             operation.remove();
         }
     }
@@ -164,13 +151,7 @@ public final class MCPHelper implements AutoCloseable {
             Operation current = operation.get();
             if (current == null) return next.exchange(request);
             ClientRequest.Builder enriched = ClientRequest.from(request)
-                    .header("x-run-id", current.runId)
-                    .header("mcp-execution-key", current.executionKey);
-            if (current.paid) {
-                enriched.header(
-                        "x-agentvault-idempotency-key",
-                        PayerRequestContext.forOperation(current.runId, "marketpulse-realtime").idempotencyKey());
-            }
+                    .header("x-run-id", current.runId);
             if (current.failAfterSettlement) {
                 enriched.header("x-e2e-fail-after-settlement", "once");
             }
@@ -180,8 +161,8 @@ public final class MCPHelper implements AutoCloseable {
 
     private ExchangeFilterFunction paymentEvidence() {
         return (request, next) -> next.exchange(request).doOnNext(response -> {
-            String executionKey = request.headers().getFirst("mcp-execution-key");
-            Operation current = executionKey == null ? null : activeOperations.get(executionKey);
+            String runId = request.headers().getFirst("x-run-id");
+            Operation current = runId == null ? null : activeOperations.get(runId);
             if (current != null) {
                 current.paymentIntentId = response.headers().header("x-agentvault-payment-intent-id")
                         .stream().findFirst().orElse(current.paymentIntentId);
@@ -215,9 +196,4 @@ public final class MCPHelper implements AutoCloseable {
         return Boolean.parseBoolean(value);
     }
 
-    private static int decimals() {
-        int value = Integer.parseInt(required("PAYMENT_DECIMALS"));
-        if (value < 0 || value > 255) throw new IllegalStateException("invalid decimals");
-        return value;
-    }
 }

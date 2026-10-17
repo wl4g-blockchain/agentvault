@@ -18,7 +18,7 @@ use std::{
 use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish, QoS, Transport};
+use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish, QoS, SubAck, SubscribeReasonCode, Transport};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -96,11 +96,12 @@ impl MqttController {
         if password.is_empty() {
             return Err(Error::Config("MQTT broker password must not be empty".to_owned()));
         }
+        let client_id = crate::utils::runtime_identity::unique_runtime_id(&config.client_id);
         Ok(Self {
             settings: MqttSettings {
                 host: config.host,
                 port: config.port,
-                client_id: config.client_id,
+                client_id,
                 consumer_group: config.consumer_group,
                 topic_prefix: config.topic_prefix,
                 tls: config.tls,
@@ -120,8 +121,11 @@ impl MqttController {
 
     async fn serve(self, mut shutdown: Shutdown) -> anyhow::Result<()> {
         let (client, mut event_loop) = AsyncClient::new(mqtt_options(&self.settings), MAX_IN_FLIGHT * 2);
-        let command_filters = command_subscription_filters(&self.settings.topic_prefix);
-        let decision_filter = format!("{}/+/approvers/+/decisions", self.settings.topic_prefix);
+        let command_filters = command_subscription_filters(&self.settings.topic_prefix, &self.settings.consumer_group);
+        let decision_filter = shared_subscription_filter(
+            &self.settings.consumer_group,
+            &format!("{}/+/approvers/+/decisions", self.settings.topic_prefix),
+        );
         let mut outbox_shutdown = shutdown.clone();
         let outbox_task = tokio::spawn(run_outbox_publisher(
             client.clone(),
@@ -157,6 +161,14 @@ impl MqttController {
                     match event {
                         Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                             self.subscribe_commands(&client, &command_filters, &decision_filter).await?;
+                        }
+                        Ok(Event::Incoming(Incoming::SubAck(ack))) => {
+                            validate_subscription_ack(&ack, command_filters.len() + 1)?;
+                            tracing::info!(
+                                mqtt.client_id = %self.settings.client_id,
+                                mqtt.consumer_group = %self.settings.consumer_group,
+                                "AgentVault MQTT command subscriptions authorized"
+                            );
                         }
                         Ok(Event::Incoming(Incoming::Publish(message))) => {
                             self.handle_command_publish(&client, &mut workers, message).await;
@@ -206,12 +218,10 @@ impl MqttController {
             .subscribe_many(filters)
             .await
             .context("subscribe to MQTT payment commands")?;
-        tracing::info!(
-            mqtt.client_id = %self.settings.client_id,
-            mqtt.consumer_group = %self.settings.consumer_group,
+        tracing::debug!(
             mqtt.command_filters = ?command_filters,
             mqtt.decision_filter = %decision_filter,
-            "AgentVault MQTT controller connected"
+            "requested AgentVault MQTT command subscriptions"
         );
         Ok(())
     }
@@ -320,21 +330,40 @@ impl MqttController {
     }
 }
 
-pub(super) fn command_subscription_filters(prefix: &str) -> [String; 6] {
+pub(super) fn command_subscription_filters(prefix: &str, consumer_group: &str) -> [String; 6] {
     [
-        format!("{prefix}/+/commands/authorize"),
-        format!("{prefix}/+/commands/outbound-response"),
-        format!("{prefix}/+/commands/resolve-offer"),
-        format!("{prefix}/+/commands/create-challenge"),
-        format!("{prefix}/+/commands/verify-payment"),
-        format!("{prefix}/+/commands/settle-payment"),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/authorize")),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/outbound-response")),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/resolve-offer")),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/create-challenge")),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/verify-payment")),
+        shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/settle-payment")),
     ]
+}
+
+fn shared_subscription_filter(consumer_group: &str, filter: &str) -> String {
+    format!("$share/{consumer_group}/{filter}")
+}
+
+fn validate_subscription_ack(ack: &SubAck, expected: usize) -> anyhow::Result<()> {
+    if ack.return_codes.len() != expected
+        || ack
+            .return_codes
+            .iter()
+            .any(|code| !matches!(code, SubscribeReasonCode::Success(QoS::AtLeastOnce)))
+    {
+        anyhow::bail!("MQTT broker rejected one or more AgentVault command subscriptions");
+    }
+    Ok(())
 }
 
 fn mqtt_options(settings: &MqttSettings) -> MqttOptions {
     let mut options = MqttOptions::new(&settings.client_id, &settings.host, settings.port);
     options.set_keep_alive(Duration::from_secs(15));
-    options.set_clean_session(false);
+    // Every replica owns a unique connection identity and re-subscribes to a
+    // shared consumer group after reconnect. Retaining an ephemeral session
+    // would leak one broker session per process restart.
+    options.set_clean_session(true);
     options.set_credentials(&settings.username, settings.password.as_str());
     if settings.tls {
         options.set_transport(Transport::tls_with_default_config());
@@ -475,8 +504,6 @@ async fn process_resolve_offer(work: &CommandWork, dependencies: &CommandDepende
         &work.payload,
         "payment.resolve_offer",
         "/api/v1/offers/resolve",
-        false,
-        |_| None,
     ) {
         Ok(request) => request,
         Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
@@ -500,8 +527,6 @@ async fn process_create_challenge(work: &CommandWork, dependencies: &CommandDepe
         &work.payload,
         "payment.create_challenge",
         "/api/v1/payee/challenges",
-        true,
-        |request| Some(request.context.idempotency_key.clone()),
     ) {
         Ok(request) => request,
         Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
@@ -524,16 +549,11 @@ async fn process_create_challenge(work: &CommandWork, dependencies: &CommandDepe
 }
 
 async fn process_verify_payment(work: &CommandWork, dependencies: &CommandDependencies) -> ResponseEnvelope {
-    let request = match parse_payee_command::<VerifyPaymentRequest>(
-        &work.payload,
-        "payment.verify",
-        "/api/v1/payee/verify",
-        true,
-        |request| Some(request.context.idempotency_key.clone()),
-    ) {
-        Ok(request) => request,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
-    };
+    let request =
+        match parse_payee_command::<VerifyPaymentRequest>(&work.payload, "payment.verify", "/api/v1/payee/verify") {
+            Ok(request) => request,
+            Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
         dependencies
@@ -552,16 +572,11 @@ async fn process_verify_payment(work: &CommandWork, dependencies: &CommandDepend
 }
 
 async fn process_settle_payment(work: &CommandWork, dependencies: &CommandDependencies) -> ResponseEnvelope {
-    let request = match parse_payee_command::<SettlePaymentRequest>(
-        &work.payload,
-        "payment.settle",
-        "/api/v1/payee/settle",
-        true,
-        |request| Some(request.context.idempotency_key.clone()),
-    ) {
-        Ok(request) => request,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
-    };
+    let request =
+        match parse_payee_command::<SettlePaymentRequest>(&work.payload, "payment.settle", "/api/v1/payee/settle") {
+            Ok(request) => request,
+            Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
         dependencies
@@ -784,12 +799,6 @@ fn parse_authorize_command(payload: &[u8]) -> Result<AuthorizePaymentRequest, &'
     let body = decode_canonical_body(&envelope.request.body)?;
     let request: AuthorizePaymentRequest =
         serde_json::from_slice(&body).map_err(|_| "invalid MQTT authorization request body")?;
-    let Some(idempotency_key) = envelope.request.headers.get("idempotency-key") else {
-        return Err("idempotency-key header is required");
-    };
-    if idempotency_key != &request.context.idempotency_key {
-        return Err("idempotency-key header and body differ");
-    }
     Ok(request)
 }
 
@@ -813,22 +822,10 @@ fn parse_outbound_response_command(payload: &[u8]) -> Result<OutboundResponseCom
     let body = decode_canonical_body(&envelope.request.body)?;
     let request: ReportOutboundResponseRequest =
         serde_json::from_slice(&body).map_err(|_| "invalid MQTT outbound response body")?;
-    let Some(idempotency_key) = envelope.request.headers.get("idempotency-key") else {
-        return Err("idempotency-key header is required");
-    };
-    if idempotency_key != &request.context.idempotency_key {
-        return Err("idempotency-key header and body differ");
-    }
     Ok(OutboundResponseCommand { intent_id, request })
 }
 
-fn parse_payee_command<T>(
-    payload: &[u8],
-    message_type: &str,
-    path: &str,
-    require_idempotency: bool,
-    idempotency_key: impl FnOnce(&T) -> Option<String>,
-) -> Result<T, &'static str>
+fn parse_payee_command<T>(payload: &[u8], message_type: &str, path: &str) -> Result<T, &'static str>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -846,16 +843,7 @@ where
     }
     validate_wire_headers(&envelope.request.headers)?;
     let body = decode_canonical_body(&envelope.request.body)?;
-    let request: T = serde_json::from_slice(&body).map_err(|_| "invalid MQTT payee request body")?;
-    let header_key = envelope.request.headers.get("idempotency-key");
-    let body_key = idempotency_key(&request);
-    if require_idempotency && (header_key.is_none() || header_key != body_key.as_ref()) {
-        return Err("idempotency-key header and body differ");
-    }
-    if !require_idempotency && header_key.is_some() {
-        return Err("unexpected idempotency-key header");
-    }
-    Ok(request)
+    serde_json::from_slice(&body).map_err(|_| "invalid MQTT payee request body")
 }
 
 fn outbound_intent_id_from_path(path: &str) -> Option<&str> {
@@ -901,15 +889,8 @@ fn parse_decision_command(payload: &[u8]) -> std::result::Result<ApprovalDecisio
     let body = decode_canonical_body(&envelope.request.body).map_err(DecisionParseError::invalid)?;
     let request: SubmitApprovalDecisionRequest = serde_json::from_slice(&body)
         .map_err(|_| DecisionParseError::invalid("invalid MQTT approval decision body"))?;
-    let idempotency_key = envelope
-        .request
-        .headers
-        .get("idempotency-key")
-        .ok_or_else(|| DecisionParseError::invalid("idempotency-key header is required"))?;
-    if idempotency_key != &request.context.idempotency_key || path_approval_id != request.approval_id {
-        return Err(DecisionParseError::invalid(
-            "approval path, header, and body binding mismatch",
-        ));
+    if path_approval_id != request.approval_id {
+        return Err(DecisionParseError::invalid("approval path and body binding mismatch"));
     }
     Ok(ApprovalDecisionCommand { request })
 }
@@ -943,7 +924,7 @@ fn validate_wire_headers(headers: &BTreeMap<String, String>) -> Result<(), &'sta
             || value.len() > MAX_HEADER_VALUE_BYTES
             || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-')
             || value.bytes().any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
-            || !matches!(name.as_str(), "accept" | "content-type" | "idempotency-key")
+            || !matches!(name.as_str(), "accept" | "content-type")
         {
             return Err("invalid MQTT authorization headers");
         }
@@ -1386,7 +1367,7 @@ struct PaymentEventEnvelope<'a> {
     message_type: &'static str,
     version: u8,
     correlation_id: &'a str,
-    idempotency_key: &'a str,
+    run_id: &'a str,
     aggregate_type: &'a str,
     aggregate_id: &'a str,
     event_type: &'a str,
@@ -1487,7 +1468,7 @@ fn payment_event_destination(destination: &str) -> Result<PaymentEventDestinatio
 fn payment_event_envelope(message: &OutboxMessage) -> Result<PaymentEventEnvelope<'_>, &'static str> {
     for value in [
         message.correlation_id.as_str(),
-        message.idempotency_key.as_str(),
+        message.run_id.as_str(),
         message.aggregate_type.as_str(),
         message.aggregate_id.as_str(),
     ] {
@@ -1499,7 +1480,7 @@ fn payment_event_envelope(message: &OutboxMessage) -> Result<PaymentEventEnvelop
         message_type: "payment.event",
         version: 1,
         correlation_id: &message.correlation_id,
-        idempotency_key: &message.idempotency_key,
+        run_id: &message.run_id,
         aggregate_type: &message.aggregate_type,
         aggregate_id: &message.aggregate_id,
         event_type: &message.event_type,
@@ -1639,6 +1620,7 @@ struct ApprovalRequiredEnvelope {
     correlation_id: String,
     approval_id: String,
     intent_id: String,
+    run_id: String,
     scenario_id: String,
     requested_amount: String,
     expires_at: i64,
@@ -1647,7 +1629,11 @@ struct ApprovalRequiredEnvelope {
 fn approval_envelope(message: &OutboxMessage) -> Result<ApprovalRequiredEnvelope, &'static str> {
     let approval_id = required_payload_string(&message.payload, "approval_id")?;
     let intent_id = required_payload_string(&message.payload, "intent_id")?;
+    let run_id = required_payload_string(&message.payload, "run_id")?;
     let scenario_id = required_payload_string(&message.payload, "scenario_id")?;
+    if run_id != message.run_id {
+        return Err("approval run does not match the outbox run");
+    }
     let requested_amount = required_payload_string(&message.payload, "amount")?;
     if requested_amount.is_empty() || !requested_amount.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("approval amount is invalid");
@@ -1666,6 +1652,7 @@ fn approval_envelope(message: &OutboxMessage) -> Result<ApprovalRequiredEnvelope
         correlation_id: message.correlation_id.clone(),
         approval_id: approval_id.to_owned(),
         intent_id: intent_id.to_owned(),
+        run_id: run_id.to_owned(),
         scenario_id: scenario_id.to_owned(),
         requested_amount: requested_amount.to_owned(),
         expires_at,

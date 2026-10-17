@@ -14,7 +14,6 @@ class VaultTransport(Protocol):
         method: str,
         path: str,
         body: Mapping[str, Any] | None = None,
-        idempotency_key: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -52,8 +51,7 @@ class HttpVaultTransport:
         edge = "<redacted>" if self.authguard_bearer else "disabled"
         return f"HttpVaultTransport(origin={parsed.scheme + '://' + parsed.netloc!r}, authguard_bearer={edge})"
 
-    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None,
-                idempotency_key: str | None = None) -> dict[str, Any]:
+    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if not path.startswith("/") or path.startswith("//") or "\\" in path:
             raise ValueError("AgentVault path must be origin-relative")
         base = urllib.parse.urlsplit(self.base_url)
@@ -64,8 +62,6 @@ class HttpVaultTransport:
             headers["Authorization"] = f"Bearer {self.authguard_bearer}"
         if encoded is not None:
             headers["Content-Type"] = "application/json"
-        if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
         request = urllib.request.Request(target, data=encoded, headers=headers, method=method)
         try:
             response = urllib.request.build_opener(_NoRedirect).open(request, timeout=self.timeout)

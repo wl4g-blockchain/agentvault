@@ -14,11 +14,11 @@ fn operation_metadata_drives_only_declared_paid_tool_calls() {
     let message = serde_json::json!({
         "method": "tools/call",
         "params": {"_meta": {"agentvault": {
-            "runId": "run-rust-1", "executionKey": "run-rust-1.realtime",
+            "runId": "run-rust-1",
             "paid": true, "failAfterSettlement": false
         }}}
     });
     let operation = MCPOperation::from_message(&message).expect("operation metadata");
     assert!(operation.paid);
-    assert_eq!(operation.execution_key, "run-rust-1.realtime");
+    assert_eq!(operation.run_id, "run-rust-1");
 }

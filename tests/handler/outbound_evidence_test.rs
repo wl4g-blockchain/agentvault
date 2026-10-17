@@ -26,17 +26,17 @@ fn parses_only_the_official_settlement_response_wire() {
 }
 
 #[test]
-fn evidence_hash_binds_the_stable_operation_key() {
+fn evidence_hash_binds_the_stable_run_id() {
     let first = merchant_evidence_hash(
         "intent-1",
-        "run-1:paid-feed",
+        "run-1",
         "eip155:8453",
         &format!("0x{}", "11".repeat(32)),
         &format!("0x{}", "22".repeat(20)),
     );
     let changed = merchant_evidence_hash(
         "intent-1",
-        "different-key",
+        "different-run",
         "eip155:8453",
         &format!("0x{}", "11".repeat(32)),
         &format!("0x{}", "22".repeat(20)),

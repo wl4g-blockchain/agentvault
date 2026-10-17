@@ -24,6 +24,7 @@ class ApprovalDecisionKind(str, Enum):
 class ApprovalRequest:
     id: str
     intent_id: str
+    run_id: str
     requested_amount: str
     approved_amount: str | None
     requested_by: str
@@ -45,6 +46,7 @@ class ApprovalRequest:
         return cls(
             id=text("id"),
             intent_id=text("intent_id"),
+            run_id=text("run_id"),
             requested_amount=text("requested_amount"),
             approved_amount=optional_text("approved_amount"),
             requested_by=text("requested_by"),

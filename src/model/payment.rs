@@ -285,7 +285,6 @@ pub struct PaymentIntent {
     pub resource: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub challenge_hash: Option<String>,
-    pub idempotency_key: String,
     pub request_hash: String,
     pub status: PaymentStatus,
     pub reservation_status: ReservationStatus,
@@ -306,14 +305,33 @@ pub struct PaymentIntent {
 
 impl PaymentIntent {
     #[must_use]
-    pub fn check_idempotency(&self, key: &str, request_hash: &str) -> IdempotencyCheck {
-        if self.idempotency_key != key {
-            IdempotencyCheck::Miss
-        } else if self.request_hash == request_hash {
-            IdempotencyCheck::Replay
+    pub fn check_replay(&self, request_hash: &str) -> ReplayCheck {
+        if self.request_hash == request_hash {
+            ReplayCheck::Replay
         } else {
-            IdempotencyCheck::Conflict
+            ReplayCheck::Conflict
         }
+    }
+
+    /// Returns the policy and wallet selected internally by `AgentVault`.
+    /// These identifiers are durable authorization evidence, never payer
+    /// request inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the missing or empty authority field.
+    pub fn authority_ids(&self) -> Result<(&str, &str), &'static str> {
+        let policy_id = self
+            .policy_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("policy_id")?;
+        let wallet_id = self
+            .wallet_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("wallet_id")?;
+        Ok((policy_id, wallet_id))
     }
 
     /// Returns whether a state transition preserves every field that defines
@@ -335,7 +353,6 @@ impl PaymentIntent {
             && self.amount == other.amount
             && self.resource == other.resource
             && self.challenge_hash == other.challenge_hash
-            && self.idempotency_key == other.idempotency_key
             && self.request_hash == other.request_hash
             && self.created_at == other.created_at
             && self.expires_at == other.expires_at
@@ -367,20 +384,7 @@ impl PaymentIntent {
         if self.run_id.trim().is_empty() {
             return Err("run_id");
         }
-        if self
-            .wallet_id
-            .as_deref()
-            .is_none_or(|wallet_id| wallet_id.trim().is_empty())
-        {
-            return Err("wallet_id");
-        }
-        if self
-            .policy_id
-            .as_deref()
-            .is_none_or(|policy_id| policy_id.trim().is_empty())
-        {
-            return Err("policy_id");
-        }
+        self.authority_ids()?;
         match self.direction {
             PaymentDirection::Inbound
                 if self
@@ -403,9 +407,6 @@ impl PaymentIntent {
         if self.amount.is_zero() {
             return Err("amount");
         }
-        if self.idempotency_key.trim().is_empty() {
-            return Err("idempotency_key");
-        }
         if self.request_hash.trim().is_empty() {
             return Err("request_hash");
         }
@@ -423,8 +424,7 @@ impl PaymentIntent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IdempotencyCheck {
-    Miss,
+pub enum ReplayCheck {
     Replay,
     Conflict,
 }
@@ -466,19 +466,6 @@ pub enum PaymentAuthorizationResult {
     Denied { intent_id: String, reason: String },
     RequiresApproval { intent_id: String, approval_id: String },
     Authorized { intent_id: String, reserved_amount: Amount },
-}
-
-/// A payee-side payment submission, before verification and settlement.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct IncomingPayment {
-    pub scenario_id: String,
-    pub run_id: String,
-    pub offer_id: String,
-    pub resource: String,
-    pub idempotency_key: String,
-    pub request_hash: String,
-    pub credential: PaymentCredential,
 }
 
 #[cfg(test)]

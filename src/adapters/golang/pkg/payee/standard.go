@@ -76,9 +76,8 @@ func (middleware *StandardPayeeMiddleware) Handler(next http.Handler) http.Handl
 			return
 		}
 		runID := strings.TrimSpace(request.Header.Get("X-Run-Id"))
-		executionKey := strings.TrimSpace(request.Header.Get("Mcp-Execution-Key"))
-		if runID == "" || executionKey == "" {
-			writeStandardError(writer, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id and mcp-execution-key are required")
+		if runID == "" {
+			writeStandardError(writer, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
 			return
 		}
 		payload, err := presentedCredential(request.Header.Get("Payment-Signature"), middleware.maxBodyBytes)
@@ -87,7 +86,7 @@ func (middleware *StandardPayeeMiddleware) Handler(next http.Handler) http.Handl
 			return
 		}
 		outcome, err := middleware.core.Protect(request.Context(), model.PayeeOperation{
-			ScenarioID: route.ScenarioID, RunID: runID, ExecutionKey: executionKey,
+			ScenarioID: route.ScenarioID, RunID: runID,
 			OfferID: route.OfferID, Resource: route.Resource, Origin: route.Origin,
 			Protocol: route.Protocol, RequestHash: hashRequest(request, body), CredentialPayload: payload,
 		})

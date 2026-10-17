@@ -36,6 +36,15 @@ impl ApiError {
     }
 
     #[must_use]
+    pub fn dependency_unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "DEPENDENCY_UNAVAILABLE",
+            message: "a required identity dependency is unavailable".to_owned(),
+        }
+    }
+
+    #[must_use]
     pub fn not_found(resource: &'static str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,

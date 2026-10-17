@@ -33,8 +33,7 @@ class GrpcVaultTransport:
     def __repr__(self) -> str:
         return f"GrpcVaultTransport(config={self.config!r}, channel=<redacted>)"
 
-    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None,
-                idempotency_key: str | None = None) -> dict[str, Any]:
+    def request(self, method: str, path: str, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if method not in ("GET", "POST") or not path.startswith("/api/v1/") or "\\" in path:
             raise ValueError("invalid AgentVault gRPC request")
         encoded_body = b"" if body is None else json.dumps(
@@ -42,8 +41,6 @@ class GrpcVaultTransport:
         headers = {"accept": "application/json"}
         if body is not None:
             headers["content-type"] = "application/json"
-        if idempotency_key:
-            headers["idempotency-key"] = idempotency_key
         envelope = json.dumps({
             "method": method,
             "path": path,

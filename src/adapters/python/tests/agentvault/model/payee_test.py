@@ -4,10 +4,10 @@ from agentvault.model import PayeeOperation
 
 
 class PayeeModelTest(unittest.TestCase):
-    def test_payee_phase_keys_are_bound_to_one_execution(self):
+    def test_payee_phases_reuse_one_run_identity(self):
         operation = PayeeOperation(
-            "scenario", "run", "run.realtime", "offer", "mcp://marketpulse/realtime",
+            "scenario", "run", "offer", "mcp://marketpulse/realtime",
             "https://marketpulse.test", "x402", "hash",
         )
-        self.assertEqual(operation.challenge_context().idempotency_key, "run.realtime.challenge")
-        self.assertEqual(operation.settlement_context().idempotency_key, "run.realtime.settle")
+        self.assertEqual(operation.challenge_context().run_id, "run")
+        self.assertEqual(operation.settlement_context().run_id, "run")

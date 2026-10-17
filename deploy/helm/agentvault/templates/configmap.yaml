@@ -15,6 +15,10 @@ data:
       authguard:
         enabled: {{ include "agentvault.authguardEnabled" . }}
         direct_context_hmac_key: { file: "", env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY }
+        scope_resolver:
+          enabled: {{ .Values.runtime.authguard.scopeResolver.enabled }}
+          target: {{ default (printf "http://%s-authguard-middleware:8081" .Release.Name) .Values.runtime.authguard.scopeResolver.target | quote }}
+          timeout: {{ .Values.runtime.authguard.scopeResolver.timeout }}
       shutdown_timeout: {{ .Values.runtime.server.shutdownTimeout }}
       request:
         max_body_bytes: {{ .Values.runtime.server.maxBodyBytes }}
@@ -24,7 +28,10 @@ data:
       host: 0.0.0.0
       port: {{ .Values.service.managementPort }}
       context_path: /
-      health: { liveness_path: /healthz, readiness_path: /readyz }
+      health:
+        liveness_path: /healthz
+        readiness_path: /readyz
+        probe_timeout: {{ .Values.management.health.probeTimeout }}
       metrics: { enabled: true, path: /metrics }
       otel:
         enabled: {{ .Values.management.otel.enabled }}
@@ -121,7 +128,6 @@ data:
         active_key_id: recovery-v1
         keys: { recovery-v1: { file: "", env: AGENTVAULT_RECOVERY_KEY_V1 } }
       approval:
-        enabled: {{ .Values.runtime.approval.enabled }}
         request_ttl: {{ .Values.runtime.approval.requestTtl }}
         grant_ttl: {{ .Values.runtime.approval.grantTtl }}
         expiry_interval: {{ .Values.runtime.approval.expiryInterval }}

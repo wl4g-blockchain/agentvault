@@ -71,6 +71,8 @@ impl ApprovalStatus {
 pub struct ApprovalRequest {
     pub id: String,
     pub intent_id: String,
+    /// Canonical business run shared with the bound payment intent.
+    pub run_id: String,
     pub requested_amount: Amount,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approved_amount: Option<Amount>,

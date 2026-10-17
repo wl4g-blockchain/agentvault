@@ -7,7 +7,6 @@ use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
@@ -17,6 +16,7 @@ use serde_json::{json, Value};
 use x402_types::util::b64::Base64Bytes;
 
 use crate::{
+    apm::AgentVaultMetrics,
     handler::{
         ApprovalHandler, ApprovalPrincipalAuthorizer, AuthorizePayment, IssuePaymentChallenge, OfferHandler,
         OutboundEvidenceHandler, OutboundSigningHandler, ProtocolRegistry, RecordOutboundPaymentResponse,
@@ -60,6 +60,7 @@ pub struct PaymentApiDependencies {
     pub events: Arc<dyn EventStorage>,
     pub ledger: Arc<dyn LedgerStorage>,
     pub balances: Arc<dyn WalletBalanceSource>,
+    pub metrics: AgentVaultMetrics,
 }
 
 /// One authenticated application service used by HTTP, Unix socket, and MQTT
@@ -84,6 +85,7 @@ pub struct PaymentApi {
     events: Arc<dyn EventStorage>,
     ledger: Arc<dyn LedgerStorage>,
     balances: Arc<dyn WalletBalanceSource>,
+    metrics: AgentVaultMetrics,
 }
 
 impl PaymentApi {
@@ -109,11 +111,12 @@ impl PaymentApi {
             events: dependencies.events,
             ledger: dependencies.ledger,
             balances: dependencies.balances,
+            metrics: dependencies.metrics,
         }
     }
 
     /// Parses, authorizes, and signs one merchant challenge. An approval
-    /// replay uses the same operation key and reaches signing only after the
+    /// replay uses the same run identity and reaches signing only after the
     /// one-time internal grant has been consumed transactionally.
     pub(crate) async fn authorize(
         &self,
@@ -121,7 +124,8 @@ impl PaymentApi {
         request: &AuthorizePaymentRequest,
         now: i64,
     ) -> Result<AuthorizePaymentResponse> {
-        let run_id = request.context.required_run_id()?;
+        let mut operation_metric = self.metrics.payment_operation("authorize", "outbound");
+        request.context.validate()?;
         let challenge = self.parse_outbound_challenge(request, now).await?;
         let authorization = self
             .payments_handler
@@ -129,9 +133,7 @@ impl PaymentApi {
                 principal,
                 &AuthorizePayment {
                     scenario_id: request.context.scenario_id.clone(),
-                    run_id: run_id.to_owned(),
-                    wallet_id: request.wallet_id.clone(),
-                    idempotency_key: request.context.idempotency_key.clone(),
+                    run_id: request.context.run_id.clone(),
                     challenge: challenge.clone(),
                 },
                 now,
@@ -147,6 +149,7 @@ impl PaymentApi {
         let mut approval = None;
         match &authorization {
             PaymentAuthorizationResult::Authorized { .. } => {
+                let mut signing_metric = self.metrics.payment_operation("sign", "outbound");
                 let signed = self
                     .signing_handler
                     .sign(
@@ -158,6 +161,7 @@ impl PaymentApi {
                         now,
                     )
                     .await?;
+                signing_metric.succeed();
                 intent = signed.intent;
                 credential = Some(PaymentCredentialDto::for_http(
                     signed.credential,
@@ -174,30 +178,26 @@ impl PaymentApi {
             }
             PaymentAuthorizationResult::Denied { .. } => {}
         }
-        Ok(AuthorizePaymentResponse {
+        let response = AuthorizePaymentResponse {
             authorization,
             intent,
             credential,
             approval,
-        })
+        };
+        operation_metric.succeed();
+        Ok(response)
     }
 
     async fn parse_outbound_challenge(&self, request: &AuthorizePaymentRequest, now: i64) -> Result<PaymentChallenge> {
         request.context.validate()?;
-        let origin = canonical_origin(&request.resource)?;
-        if request.resource != request.challenge.resource
-            || request.challenge.origin != origin
-            || request
-                .challenge
-                .protocol_hint
-                .as_ref()
-                .is_some_and(|hint| hint != &request.protocol)
-        {
+        let origin = canonical_origin(&request.challenge.resource)?;
+        if request.challenge.origin != origin {
             return Err(Error::InvalidRequest(
                 "opaque 402 metadata does not match the requested resource".to_owned(),
             ));
         }
-        let wire = match request.protocol.as_str() {
+        let protocol = payment_protocol(&request.challenge)?;
+        let wire = match protocol {
             "x402" => serde_json::from_str::<Value>(&request.challenge.body)
                 .map_err(|_| Error::InvalidRequest("x402 402 body is not valid JSON".to_owned()))?,
             "mpp" => {
@@ -206,32 +206,26 @@ impl PaymentApi {
                 })?;
                 json!({"www_authenticate": authenticate})
             }
-            _ => {
-                return Err(Error::PaymentProtocol(format!(
-                    "unsupported payment protocol: {}",
-                    request.protocol
+            unsupported => {
+                return Err(Error::InvalidRequest(format!(
+                    "unsupported outbound payment protocol: {unsupported}"
                 )))
             }
         };
         let challenge = self
             .payer_protocols
-            .get(&request.protocol)?
+            .get(protocol)?
             .parse_challenge(
                 &request.context.scenario_id,
-                &request.resource,
+                &request.challenge.resource,
                 &wire,
                 now,
                 parse_advertised_expiry(request.challenge.expires_at.as_deref())?,
             )
             .await?;
-        if challenge.protocol != request.protocol
-            || challenge.asset != request.asset
-            || challenge.amount != request.amount
-            || challenge.recipient != request.recipient
-            || challenge.resource != request.resource
-        {
+        if challenge.protocol != protocol || challenge.resource != request.challenge.resource {
             return Err(Error::PaymentConflict(
-                "caller projections differ from the protocol challenge".to_owned(),
+                "parsed protocol challenge differs from the captured 402 metadata".to_owned(),
             ));
         }
         Ok(challenge)
@@ -285,45 +279,37 @@ impl PaymentApi {
         request: &ReportOutboundResponseRequest,
         now: i64,
     ) -> Result<ReportOutboundResponseResponse> {
-        let run_id = request.context.required_run_id()?;
+        let mut operation_metric = self.metrics.payment_operation("settle", "outbound");
+        request.context.validate()?;
         let recorded = self
             .outbound_evidence_handler
             .record_merchant_response(
                 principal,
                 &RecordOutboundPaymentResponse {
                     scenario_id: request.context.scenario_id.clone(),
-                    run_id: run_id.to_owned(),
+                    run_id: request.context.run_id.clone(),
                     intent_id: intent_id.to_owned(),
-                    idempotency_key: request.context.idempotency_key.clone(),
                     payment_response: request.payment_response.clone(),
                 },
                 now,
             )
             .await?;
-        Ok(ReportOutboundResponseResponse {
+        let response = ReportOutboundResponseResponse {
             intent: recorded.intent,
             accepted: recorded.accepted,
             replayed: recorded.replayed,
-        })
+        };
+        operation_metric.succeed();
+        Ok(response)
     }
 
     async fn get_balance(&self, principal: &str, query: &BalanceQuery, now: i64) -> Result<PaymentBalance> {
         let asset = query.asset_identity();
         let _ = self.scenarios.authorize(principal, &query.scenario_id).await?;
-        let policies = self
+        if !self
             .policies
-            .list_for_scenario(
-                &query.scenario_id,
-                PageRequest {
-                    offset: 0,
-                    limit: PAGE_SIZE,
-                },
-            )
-            .await?;
-        if !policies
-            .items
-            .iter()
-            .any(|policy| policy.allows_wallet(&query.wallet_id))
+            .has_enabled_wallet_binding(&query.scenario_id, &query.wallet_id)
+            .await?
         {
             return Err(Error::Forbidden);
         }
@@ -451,10 +437,21 @@ impl PaymentApi {
         request: &SubmitApprovalDecisionRequest,
         now: i64,
     ) -> Result<ApprovalRequest> {
+        let mut operation_metric = self.metrics.payment_operation("approve", "outbound");
         request.context.validate()?;
         let approval = self
             .get_approval(principal, &request.context.scenario_id, &request.approval_id)
             .await?;
+        let intent = self
+            .payments
+            .get_for_scenario(&request.context.scenario_id, &approval.intent_id)
+            .await?
+            .ok_or(Error::Forbidden)?;
+        if intent.run_id != request.context.run_id {
+            return Err(Error::PaymentConflict(
+                "approval decision run_id does not match its payment intent".to_owned(),
+            ));
+        }
         let decision = self
             .approval_handler
             .submit_decision(
@@ -476,10 +473,13 @@ impl PaymentApi {
                 .consume(principal, &approval.id, &approval.intent_id, now)
                 .await?;
         }
-        self.approvals
+        let approval = self
+            .approvals
             .get(&approval.id)
             .await?
-            .ok_or_else(|| Error::Storage("decided approval disappeared".to_owned()))
+            .ok_or_else(|| Error::Storage("decided approval disappeared".to_owned()))?;
+        operation_metric.succeed();
+        Ok(approval)
     }
 
     pub(crate) async fn resolve_offer(&self, principal: &str, request: &ResolveOfferRequest) -> Result<PaymentOffer> {
@@ -487,26 +487,11 @@ impl PaymentApi {
             protocol.to_owned()
         } else {
             let _ = self.scenarios.authorize(principal, &request.scenario_id).await?;
-            let page = self
+            let offer = self
                 .offers
-                .list_for_scenario(
-                    &request.scenario_id,
-                    PageRequest {
-                        offset: 0,
-                        limit: PAGE_SIZE,
-                    },
-                )
-                .await?;
-            let mut matches = page
-                .items
-                .into_iter()
-                .filter(|offer| offer.enabled && offer.resource == request.resource);
-            let offer = matches
-                .next()
+                .resolve_resource(&request.scenario_id, &request.resource)
+                .await?
                 .ok_or_else(|| Error::NotFound("payment offer".to_owned()))?;
-            if matches.next().is_some() {
-                return Err(Error::Storage("ambiguous active payment offers".to_owned()));
-            }
             offer
                 .protocols
                 .first()
@@ -524,23 +509,26 @@ impl PaymentApi {
         request: &CreateChallengeRequest,
         now: i64,
     ) -> Result<PaymentChallenge> {
-        let run_id = request.context.required_run_id()?;
-        self.settlement_handler
+        let mut operation_metric = self.metrics.payment_operation("authorize", "inbound");
+        request.context.validate()?;
+        let challenge = self
+            .settlement_handler
             .issue_challenge(
                 principal,
                 &IssuePaymentChallenge {
                     scenario_id: request.context.scenario_id.clone(),
-                    run_id: run_id.to_owned(),
+                    run_id: request.context.run_id.clone(),
                     offer_id: request.offer_id.clone(),
                     resource: request.resource.clone(),
                     origin: request.origin.clone(),
                     protocol: request.protocol.clone(),
-                    idempotency_key: request.context.idempotency_key.clone(),
                     request_hash: request.request_hash.clone(),
                 },
                 now,
             )
-            .await
+            .await?;
+        operation_metric.succeed();
+        Ok(challenge)
     }
 
     pub(crate) async fn verify_payment(
@@ -549,27 +537,29 @@ impl PaymentApi {
         request: &VerifyPaymentRequest,
         now: i64,
     ) -> Result<PaymentVerification> {
-        let run_id = request.context.required_run_id()?;
+        let mut operation_metric = self.metrics.payment_operation("verify", "inbound");
+        request.context.validate()?;
         let verification = self
             .settlement_handler
             .verify_payment(
                 principal,
                 &VerifyIncomingPayment {
                     scenario_id: request.context.scenario_id.clone(),
-                    run_id: run_id.to_owned(),
+                    run_id: request.context.run_id.clone(),
                     challenge_hash: request.challenge_hash.clone(),
-                    idempotency_key: request.context.idempotency_key.clone(),
                     request_hash: request.request_hash.clone(),
                     credential: request.credential.clone().into_domain(),
                 },
                 now,
             )
             .await?;
-        Ok(PaymentVerification {
+        let response = PaymentVerification {
             intent: verification.intent,
             valid: verification.valid,
             verification_ref: verification.verification_ref,
-        })
+        };
+        operation_metric.succeed();
+        Ok(response)
     }
 
     pub(crate) async fn settle_payment(
@@ -578,34 +568,27 @@ impl PaymentApi {
         request: &SettlePaymentRequest,
         now: i64,
     ) -> Result<SettledPaymentResponse> {
-        let run_id = request.context.required_run_id()?;
-        validate_identifier("execution_key", &request.execution_key)?;
-        if request.execution_key.len() > 96
-            || request.context.idempotency_key != format!("{}.settle", request.execution_key)
-        {
-            return Err(Error::InvalidRequest(
-                "settlement idempotency key is not bound to execution_key".to_owned(),
-            ));
-        }
+        let mut operation_metric = self.metrics.payment_operation("settle", "inbound");
+        request.context.validate()?;
         let settled = self
             .settlement_handler
             .settle_payment(
                 principal,
                 &SettleIncomingPayment {
                     scenario_id: request.context.scenario_id.clone(),
-                    run_id: run_id.to_owned(),
-                    execution_key: request.execution_key.clone(),
+                    run_id: request.context.run_id.clone(),
                     intent_id: request.intent_id.clone(),
                     verification_ref: request.verification_ref.clone(),
                 },
                 now,
             )
             .await?;
-        Ok(SettledPaymentResponse {
+        let response = SettledPaymentResponse {
             intent: settled.intent,
             receipt: settled.receipt,
-            execution_key: settled.execution_key,
-        })
+        };
+        operation_metric.succeed();
+        Ok(response)
     }
 }
 
@@ -710,10 +693,8 @@ async fn list_offers(
 async fn authorize_payment(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
-    headers: HeaderMap,
     Json(request): Json<AuthorizePaymentRequest>,
 ) -> std::result::Result<Json<AuthorizePaymentResponse>, ApiError> {
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(api.authorize(principal.as_str(), &request, unix_time()?).await?))
 }
 
@@ -745,10 +726,8 @@ async fn report_outbound_response(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
     Path(intent_id): Path<String>,
-    headers: HeaderMap,
     Json(request): Json<ReportOutboundResponseRequest>,
 ) -> std::result::Result<Json<ReportOutboundResponseResponse>, ApiError> {
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(
         api.report_outbound_response(principal.as_str(), &intent_id, &request, unix_time()?)
             .await?,
@@ -794,13 +773,11 @@ async fn decide_approval(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
     Path(approval_id): Path<String>,
-    headers: HeaderMap,
     Json(request): Json<SubmitApprovalDecisionRequest>,
 ) -> std::result::Result<Json<ApprovalRequest>, ApiError> {
     if approval_id != request.approval_id {
         return Err(Error::PaymentConflict("approval path and body differ".to_owned()).into());
     }
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(
         api.decide_approval(principal.as_str(), &request, unix_time()?).await?,
     ))
@@ -817,10 +794,8 @@ async fn resolve_offer(
 async fn create_challenge(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
-    headers: HeaderMap,
     Json(request): Json<CreateChallengeRequest>,
 ) -> std::result::Result<Json<PaymentChallenge>, ApiError> {
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(
         api.create_challenge(principal.as_str(), &request, unix_time()?).await?,
     ))
@@ -829,10 +804,8 @@ async fn create_challenge(
 async fn verify_payment(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
-    headers: HeaderMap,
     Json(request): Json<VerifyPaymentRequest>,
 ) -> std::result::Result<Json<PaymentVerification>, ApiError> {
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(
         api.verify_payment(principal.as_str(), &request, unix_time()?).await?,
     ))
@@ -841,10 +814,8 @@ async fn verify_payment(
 async fn settle_payment(
     State(api): State<Arc<PaymentApi>>,
     principal: CallerPrincipal,
-    headers: HeaderMap,
     Json(request): Json<SettlePaymentRequest>,
 ) -> std::result::Result<Json<SettledPaymentResponse>, ApiError> {
-    require_idempotency_header(&headers, &request.context.idempotency_key)?;
     Ok(Json(
         api.settle_payment(principal.as_str(), &request, unix_time()?).await?,
     ))
@@ -854,30 +825,18 @@ async fn settle_payment(
 #[serde(deny_unknown_fields)]
 pub(crate) struct OperationContextDto {
     pub scenario_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
-    pub idempotency_key: String,
+    pub run_id: String,
 }
 
 impl OperationContextDto {
     fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("scenario_id", self.scenario_id.as_str()),
-            ("idempotency_key", self.idempotency_key.as_str()),
+            ("run_id", self.run_id.as_str()),
         ] {
             validate_identifier(name, value)?;
         }
-        if let Some(run_id) = &self.run_id {
-            validate_identifier("run_id", run_id)?;
-        }
         Ok(())
-    }
-
-    fn required_run_id(&self) -> Result<&str> {
-        self.validate()?;
-        self.run_id
-            .as_deref()
-            .ok_or_else(|| Error::InvalidRequest("run_id is required".to_owned()))
     }
 }
 
@@ -901,12 +860,6 @@ pub(crate) struct PaymentRequiredDto {
 pub(crate) struct AuthorizePaymentRequest {
     #[serde(flatten)]
     pub context: OperationContextDto,
-    pub wallet_id: String,
-    pub protocol: String,
-    pub asset: AssetIdentity,
-    pub amount: Amount,
-    pub recipient: String,
-    pub resource: String,
     pub challenge: PaymentRequiredDto,
 }
 
@@ -1181,7 +1134,6 @@ pub struct PaymentVerification {
 pub struct SettlePaymentRequest {
     #[serde(flatten)]
     pub context: OperationContextDto,
-    pub execution_key: String,
     pub intent_id: String,
     pub verification_ref: String,
 }
@@ -1190,7 +1142,6 @@ pub struct SettlePaymentRequest {
 pub struct SettledPaymentResponse {
     pub intent: PaymentIntent,
     pub receipt: PaymentReceipt,
-    pub execution_key: String,
 }
 
 fn authorization_intent_id(result: &PaymentAuthorizationResult) -> &str {
@@ -1199,19 +1150,6 @@ fn authorization_intent_id(result: &PaymentAuthorizationResult) -> &str {
         | PaymentAuthorizationResult::RequiresApproval { intent_id, .. }
         | PaymentAuthorizationResult::Authorized { intent_id, .. } => intent_id,
     }
-}
-
-fn require_idempotency_header(headers: &HeaderMap, expected: &str) -> Result<()> {
-    let supplied = headers
-        .get("idempotency-key")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| Error::InvalidRequest("Idempotency-Key header is required".to_owned()))?;
-    if supplied != expected {
-        return Err(Error::PaymentConflict(
-            "Idempotency-Key header differs from the request body".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 fn validate_identifier(name: &str, value: &str) -> Result<()> {
@@ -1245,6 +1183,22 @@ fn header_value<'a>(headers: &'a BTreeMap<String, String>, wanted: &str) -> Opti
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
         .map(|(_, value)| value.as_str())
+}
+
+fn payment_protocol(challenge: &PaymentRequiredDto) -> Result<&str> {
+    if let Some(hint) = challenge.protocol_hint.as_deref() {
+        if hint != hint.trim() || !matches!(hint, "x402" | "mpp") {
+            return Err(Error::PaymentProtocol(format!(
+                "unsupported payment protocol hint: {hint}"
+            )));
+        }
+        return Ok(hint);
+    }
+    if header_value(&challenge.headers, "www-authenticate").is_some() {
+        Ok("mpp")
+    } else {
+        Ok("x402")
+    }
 }
 
 fn confirmed_totals(entries: &[PaymentLedgerEntry]) -> Result<(Amount, Amount)> {

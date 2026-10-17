@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -33,7 +33,6 @@ const approvalTopic = topics.required;
 const decisionTopic = topics.decision;
 const decisionResultPrefix = topics.resultPrefix;
 const pending = new ApprovalQueue(scenarioId);
-const decisionKeys = new Map();
 const decisionAcks = new Map();
 const mqttClient = mqtt.connect(mqttURL, mqttConnectionOptions(
   clientId,
@@ -96,10 +95,8 @@ const server = createServer(async (request, response) => {
       if (body.decision !== "approve" && body.decision !== "reject") {
         return json(response, 400, { error: "decision must be approve or reject" });
       }
-      const decisionKey = decisionKeys.get(match[1]) ?? randomUUID();
-      decisionKeys.set(match[1], decisionKey);
       const correlationId = randomBytes(16).toString("hex");
-      const decisionBody = approvalDecisionBody(approval, body.decision, decisionKey);
+      const decisionBody = approvalDecisionBody(approval, body.decision);
       if (typeof body.reason === "string" && body.reason.trim()) decisionBody.reason = body.reason.slice(0, 512);
       const message = {
         type: "payment.approval_decision",
@@ -108,10 +105,7 @@ const server = createServer(async (request, response) => {
         request: {
           method: "POST",
           path: `/api/v1/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": decisionKey
-          },
+          headers: {"content-type": "application/json"},
           body: Buffer.from(JSON.stringify(decisionBody), "utf8").toString("base64url")
         }
       };

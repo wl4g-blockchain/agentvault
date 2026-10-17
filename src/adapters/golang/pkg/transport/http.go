@@ -49,7 +49,7 @@ type Transport interface {
 	Do(context.Context, TransportRequest) (TransportResponse, error)
 }
 
-var ErrIdempotencyConflict = errors.New("agentvault idempotency conflict")
+var ErrRunConflict = errors.New("agentvault run conflict")
 
 type APIError struct {
 	Status  int
@@ -63,7 +63,7 @@ func (failure *APIError) Error() string {
 
 func (failure *APIError) Unwrap() error {
 	if failure.Status == http.StatusConflict {
-		return ErrIdempotencyConflict
+		return ErrRunConflict
 	}
 	return nil
 }
@@ -78,15 +78,12 @@ func (client *Client) Get(ctx context.Context, path string, result any) error {
 	return client.execute(ctx, TransportRequest{Method: MethodGet, Path: path, Headers: map[string]string{"accept": "application/json"}}, result)
 }
 
-func (client *Client) Post(ctx context.Context, path string, body, result any, key string) error {
+func (client *Client) Post(ctx context.Context, path string, body, result any) error {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("encode AgentVault request: %w", err)
 	}
 	headers := map[string]string{"accept": "application/json", "content-type": "application/json"}
-	if key != "" {
-		headers["idempotency-key"] = key
-	}
 	return client.execute(ctx, TransportRequest{Method: MethodPost, Path: path, Headers: headers, Body: encoded}, result)
 }
 

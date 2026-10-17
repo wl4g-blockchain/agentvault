@@ -14,9 +14,18 @@ use crate::{
     config::ManagementConfig,
 };
 
+#[async_trait]
+pub(crate) trait ReadinessProbe: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    async fn check(&self) -> anyhow::Result<()>;
+}
+
 #[derive(Clone)]
 struct ManagementState {
     metrics: AgentVaultMetrics,
+    readiness_probes: Vec<std::sync::Arc<dyn ReadinessProbe>>,
+    probe_timeout: std::time::Duration,
 }
 
 pub struct ManagementServer {
@@ -27,7 +36,20 @@ pub struct ManagementServer {
 impl ManagementServer {
     #[must_use]
     pub fn new(config: ManagementConfig, metrics: AgentVaultMetrics) -> Self {
-        let state = ManagementState { metrics };
+        Self::with_readiness_probes(config, metrics, Vec::new())
+    }
+
+    #[must_use]
+    pub(crate) fn with_readiness_probes(
+        config: ManagementConfig,
+        metrics: AgentVaultMetrics,
+        readiness_probes: Vec<std::sync::Arc<dyn ReadinessProbe>>,
+    ) -> Self {
+        let state = ManagementState {
+            metrics,
+            readiness_probes,
+            probe_timeout: config.health.probe_timeout,
+        };
         let mut endpoints = Router::new()
             .route(&config.health.liveness_path, get(liveness))
             .route(&config.health.readiness_path, get(readiness))
@@ -71,7 +93,24 @@ async fn liveness() -> &'static str {
     "ok"
 }
 
-async fn readiness() -> Response {
+async fn readiness(State(state): State<ManagementState>) -> Response {
+    for probe in &state.readiness_probes {
+        match tokio::time::timeout(state.probe_timeout, probe.check()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(dependency = probe.name(), %error, "readiness dependency is unavailable");
+                return (StatusCode::SERVICE_UNAVAILABLE, "not ready").into_response();
+            }
+            Err(_) => {
+                tracing::warn!(
+                    dependency = probe.name(),
+                    timeout_ms = u64::try_from(state.probe_timeout.as_millis()).unwrap_or(u64::MAX),
+                    "readiness dependency timed out"
+                );
+                return (StatusCode::SERVICE_UNAVAILABLE, "not ready").into_response();
+            }
+        }
+    }
     (StatusCode::OK, "ready").into_response()
 }
 

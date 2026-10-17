@@ -1,7 +1,5 @@
 import { isIP } from 'node:net';
 import { inspect } from 'node:util';
-import type { AssetIdentity } from '../model/base.js';
-
 const IDENTIFIER = /^[A-Za-z0-9_.-]{1,128}$/;
 
 function loopback(host: string): boolean {
@@ -12,11 +10,6 @@ function loopback(host: string): boolean {
 
 export interface PayerConfig {
   scenarioId: string;
-  walletId: string;
-  protocol: string;
-  asset: AssetIdentity;
-  amount: string;
-  recipient: string;
   approvalTimeoutMs?: number;
   approvalPollIntervalMs?: number;
   deliveryRetries?: number;

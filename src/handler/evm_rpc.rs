@@ -9,8 +9,9 @@ use std::{collections::BTreeMap, net::IpAddr, str::FromStr as _, time::Duration}
 use reqwest::{header::HeaderMap, redirect::Policy as RedirectPolicy, Client, Url};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing::Instrument as _;
 
-use crate::{Error, Result};
+use crate::{apm::inject_current_trace_context, Error, Result};
 
 pub(super) struct FixedEvmRpcClient {
     client: Client,
@@ -46,7 +47,13 @@ impl FixedEvmRpcClient {
             let normalized = name.to_ascii_lowercase();
             if matches!(
                 normalized.as_str(),
-                "connection" | "content-length" | "content-type" | "host" | "transfer-encoding"
+                "connection"
+                    | "content-length"
+                    | "content-type"
+                    | "host"
+                    | "traceparent"
+                    | "tracestate"
+                    | "transfer-encoding"
             ) {
                 return Err(Error::Config("EVM RPC secret header name is reserved".to_owned()));
             }
@@ -78,14 +85,28 @@ impl FixedEvmRpcClient {
         {
             return Err(Error::Settlement("EVM RPC method is invalid".to_owned()));
         }
-        let response = self
-            .client
-            .post(self.endpoint.clone())
-            .headers(self.headers.clone())
-            .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
-            .send()
-            .await
-            .map_err(|error| Error::Settlement(format!("EVM RPC request failed: {}", error.without_url())))?;
+        let span = tracing::info_span!(
+            "evm.rpc.request",
+            otel.kind = "client",
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            server.address = self.endpoint.host_str().unwrap_or(""),
+            http.response.status_code = tracing::field::Empty,
+        );
+        let response = async {
+            let mut headers = self.headers.clone();
+            inject_current_trace_context(&mut headers);
+            self.client
+                .post(self.endpoint.clone())
+                .headers(headers)
+                .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+                .send()
+                .await
+                .map_err(|error| Error::Settlement(format!("EVM RPC request failed: {}", error.without_url())))
+        }
+        .instrument(span.clone())
+        .await?;
+        span.record("http.response.status_code", response.status().as_u16());
         if !response.status().is_success() {
             return Err(Error::Settlement(format!(
                 "EVM RPC returned HTTP {}",

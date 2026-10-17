@@ -25,6 +25,81 @@ fn validates_optional_authguard_context_key() {
 }
 
 #[test]
+fn validates_authguard_scope_resolver_configuration() {
+    let mut config = AppConfig::default();
+    config.server.authguard.scope_resolver.target = "authguard:8081".to_owned();
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("scope_resolver")
+    ));
+
+    config.server.authguard.scope_resolver.target = "http://127.0.0.1:8081".to_owned();
+    config.server.authguard.scope_resolver.timeout = Duration::ZERO;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("scope_resolver")
+    ));
+}
+
+#[test]
+fn validates_authguard_when_grpc_is_the_only_edge_transport() {
+    let mut config = AppConfig::default();
+    config.server.enabled = false;
+    config.mgmt.enabled = false;
+    config.agentvault.transport.grpc.enabled = true;
+    config.server.authguard.direct_context_hmac_key = SecretRefConfig::default();
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("direct_context_hmac_key")
+    ));
+}
+
+#[test]
+fn rejects_listener_address_collisions() {
+    let mut config = AppConfig::default();
+    config.agentvault.transport.grpc.enabled = true;
+    config.agentvault.transport.grpc.host = config.server.host;
+    config.agentvault.transport.grpc.port = config.server.port;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("listeners")
+    ));
+}
+
+#[test]
+fn rejects_management_route_collisions() {
+    let mut config = AppConfig::default();
+    config.mgmt.health.readiness_path = config.mgmt.health.liveness_path.clone();
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("routes must be distinct")
+    ));
+
+    config.mgmt.health.readiness_path = "/readyz".to_owned();
+    config.mgmt.metrics.path = "/debug/runtime".to_owned();
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("routes must be distinct")
+    ));
+}
+
+#[test]
+fn requires_a_bounded_management_readiness_timeout() {
+    let mut config = AppConfig::default();
+    config.mgmt.health.probe_timeout = Duration::ZERO;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("probe_timeout")
+    ));
+
+    config.mgmt.health.probe_timeout = Duration::from_secs(31);
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("probe_timeout")
+    ));
+}
+
+#[test]
 fn requires_an_absolute_sqlite_database_path() {
     let mut config = AppConfig::default();
     config.storage.sqlite.database_file = "agentvault.sqlite3".to_owned();
@@ -254,6 +329,18 @@ fn payer_and_payee_adapters_are_enabled_independently() {
 }
 
 #[test]
+fn rejects_unimplemented_mpp_payer_at_startup() {
+    let mut config = AppConfig::default();
+    config.agentvault.payer.enabled = true;
+    config.agentvault.payer.mpp.enabled = true;
+
+    assert!(matches!(
+        config.validate_agentvault(),
+        Err(Error::Config(message)) if message.contains("payer.mpp") && message.contains("signing")
+    ));
+}
+
+#[test]
 fn shared_chain_registry_accepts_non_evm_families_without_enabling_unsupported_protocols() {
     let mut config = AppConfig::default();
     config.agentvault.chains.insert(
@@ -297,4 +384,15 @@ fn permits_explicit_loopback_development_provider() {
     };
 
     validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
+}
+
+#[test]
+fn trace_context_headers_are_transport_owned() {
+    for name in ["traceparent", "tracestate"] {
+        let headers = BTreeMap::from([(name.to_owned(), SecretHeaderConfig::default())]);
+        assert!(matches!(
+            validate_secret_headers("agentvault.chains.test.rpc", &headers),
+            Err(Error::Config(message)) if message.contains("unsafe secret header")
+        ));
+    }
 }

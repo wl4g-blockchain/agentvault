@@ -57,16 +57,8 @@ class PayerMiddleware:
             protocol_hint=_header(response.headers, "payment-protocol") or None,
             expires_at=_header(response.headers, "payment-expires-at") or None,
         )
-        if required.protocol_hint is not None and required.protocol_hint != self.config.protocol:
-            raise RuntimeError("protocol must match the 402 protocol hint")
         authorization_request = AuthorizePaymentRequest(
             context=operation.operation_context(self.config.scenario_id),
-            wallet_id=self.config.wallet_id,
-            protocol=self.config.protocol,
-            asset=self.config.asset,
-            amount=self.config.amount,
-            recipient=self.config.recipient,
-            resource=original.url,
             challenge=required,
         )
         response = self._authorize_until_terminal(authorization_request)
@@ -80,16 +72,13 @@ class PayerMiddleware:
             not intent.id
             or intent.scenario_id != self.config.scenario_id
             or intent.run_id != operation.run_id
-            or intent.wallet_id != self.config.wallet_id
+            or not intent.wallet_id
+            or not intent.policy_id
             or intent.direction.value != "outbound"
-            or intent.protocol != self.config.protocol
+            or (required.protocol_hint is not None and intent.protocol != required.protocol_hint)
             or intent.protocol != credential.protocol
-            or intent.asset != self.config.asset
-            or intent.amount != self.config.amount
-            or intent.recipient != self.config.recipient
             or intent.resource != original.url
             or intent.challenge_hash != credential.challenge_hash
-            or intent.idempotency_key != operation.idempotency_key
         ):
             raise RuntimeError("credential, outbound intent, and paid resource are not bound to the same payment")
         return AuthorizedPayment(intent, credential)
@@ -125,8 +114,7 @@ class PayerMiddleware:
         return name, value
 
     def _authorize(self, request: AuthorizePaymentRequest) -> AuthorizePaymentResponse:
-        value = self._transport.request(
-            "POST", "/api/v1/payments/authorize", request.wire(), request.context.idempotency_key)
+        value = self._transport.request("POST", "/api/v1/payments/authorize", request.wire())
         return AuthorizePaymentResponse.from_wire(value)
 
     def _authorize_until_terminal(self, request: AuthorizePaymentRequest) -> AuthorizePaymentResponse:
@@ -141,7 +129,7 @@ class PayerMiddleware:
             if expected_intent is None:
                 expected_intent = intent_id
             elif intent_id != expected_intent:
-                raise RuntimeError("idempotent authorization changed payment intent")
+                raise RuntimeError("replayed run changed payment intent")
             if outcome is not AuthorizationOutcome.REQUIRES_APPROVAL:
                 return response
             remaining = deadline - time.monotonic()
@@ -155,7 +143,7 @@ class PayerMiddleware:
         _required_query("intent_id", intent_id)
         request = ReportOutboundResponseRequest(context, payment_response)
         path = f"/api/v1/payments/{urllib.parse.quote(intent_id, safe='')}/outbound-response"
-        value = self._transport.request("POST", path, request.wire(), context.idempotency_key)
+        value = self._transport.request("POST", path, request.wire())
         return ReportOutboundResponseResponse.from_wire(value)
 
     def get_payment(self, scenario_id: str, intent_id: str) -> PaymentIntent:

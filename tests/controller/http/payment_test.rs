@@ -31,6 +31,60 @@ fn advertised_expiry_accepts_only_canonical_unix_seconds() {
         ));
     }
 }
+
+fn required(protocol_hint: Option<&str>, headers: &[(&str, &str)]) -> PaymentRequiredDto {
+    PaymentRequiredDto {
+        protocol_hint: protocol_hint.map(str::to_owned),
+        origin: "https://merchant.example".to_owned(),
+        resource: "https://merchant.example/mcp".to_owned(),
+        content_type: "application/json".to_owned(),
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        body: "{}".to_owned(),
+        expires_at: None,
+    }
+}
+
+#[test]
+fn payment_protocol_comes_only_from_captured_402_metadata() {
+    assert_eq!(payment_protocol(&required(Some("x402"), &[])).unwrap(), "x402");
+    assert_eq!(
+        payment_protocol(&required(None, &[("WWW-Authenticate", "Payment abc")])).unwrap(),
+        "mpp"
+    );
+    assert_eq!(payment_protocol(&required(None, &[])).unwrap(), "x402");
+    for invalid in ["", " X402", "X402", "unknown"] {
+        assert!(matches!(
+            payment_protocol(&required(Some(invalid), &[])),
+            Err(Error::PaymentProtocol(_))
+        ));
+    }
+}
+
+#[test]
+fn authorization_request_rejects_caller_selected_wallet_and_payment_projection() {
+    let base = json!({
+        "scenario_id": "scenario-1",
+        "run_id": "run-1",
+        "challenge": {
+            "origin": "https://merchant.example",
+            "resource": "https://merchant.example/mcp",
+            "content_type": "application/json",
+            "body": "{}"
+        }
+    });
+    assert!(serde_json::from_value::<AuthorizePaymentRequest>(base.clone()).is_ok());
+    for field in ["wallet_id", "policy_id", "asset", "amount", "recipient", "protocol"] {
+        let mut request = base.clone();
+        request[field] = json!("caller-selected");
+        assert!(
+            serde_json::from_value::<AuthorizePaymentRequest>(request).is_err(),
+            "caller-controlled field {field} must be rejected"
+        );
+    }
+}
 use crate::model::LedgerEntryType;
 
 fn asset() -> AssetIdentity {

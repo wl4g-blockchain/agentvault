@@ -46,14 +46,14 @@ public final class HttpVaultTransport implements VaultTransport {
     }
 
     @Override public <T> T get(String path, Class<T> type) {
-        return request("GET", path, null, null, type);
+        return request("GET", path, null, type);
     }
 
-    @Override public <T> T post(String path, Object body, String idempotencyKey, Class<T> type) {
-        return request("POST", path, body, idempotencyKey, type);
+    @Override public <T> T post(String path, Object body, Class<T> type) {
+        return request("POST", path, body, type);
     }
 
-    private <T> T request(String method, String path, Object body, String idempotencyKey, Class<T> type) {
+    private <T> T request(String method, String path, Object body, Class<T> type) {
         if (!path.startsWith("/") || path.startsWith("//") || path.contains("\\")) {
             throw new IllegalArgumentException("path must be origin-relative");
         }
@@ -63,7 +63,6 @@ public final class HttpVaultTransport implements VaultTransport {
                     .timeout(timeout)
                     .header("Accept", "application/json");
             if (authguardBearer != null) builder.header("Authorization", "Bearer " + authguardBearer);
-            if (idempotencyKey != null) builder.header("Idempotency-Key", idempotencyKey);
             if (body == null) {
                 builder.GET();
             } else {
