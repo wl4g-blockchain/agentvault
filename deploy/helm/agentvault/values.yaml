@@ -3,7 +3,7 @@ global:
 
 replicaCount: 2
 image:
-  repository: ghcr.io/wl4g/agentvault
+  repository: ghcr.io/wl4g-blockchain/agentvault
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -28,7 +28,7 @@ web:
   enabled: true
   replicaCount: 2
   image:
-    repository: ghcr.io/wl4g/agentvault-web
+    repository: ghcr.io/wl4g-blockchain/agentvault-web
     tag: ""
     pullPolicy: IfNotPresent
   service: { type: ClusterIP, port: 8080 }

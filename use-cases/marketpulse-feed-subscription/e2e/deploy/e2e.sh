@@ -354,17 +354,26 @@ wait_for_host_capacity() {
 build_full_images() {
   local payer_language=$1
   local payee_language=$2
+  local -a targets=(
+    "marketpulse-$payee_language"
+    admin-ui
+    "quantstream-$payer_language"
+  )
   if test "${E2E_RUNNER_SKIP_BUILD:-0}" = 1; then
     printf 'Skipping E2E image build by explicit request.\n'
     return 0
   fi
   check_target_budget
-  if test "${E2E_RUNNER_REUSE_BUILD:-0}" = 1; then
-    compose_full "$payer_language" "$payee_language" build agentvault \
-      "marketpulse-$payee_language" admin-ui "quantstream-$payer_language"
+  if test "${E2E_RUNNER_PREBUILT_AGENTVAULT:-0}" = 1; then
+    test -n "${E2E_AGENTVAULT_IMAGE:-}" || \
+      die "E2E_RUNNER_PREBUILT_AGENTVAULT requires E2E_AGENTVAULT_IMAGE"
   else
-    compose_full "$payer_language" "$payee_language" build --pull agentvault \
-      "marketpulse-$payee_language" admin-ui "quantstream-$payer_language"
+    targets=(agentvault "${targets[@]}")
+  fi
+  if test "${E2E_RUNNER_REUSE_BUILD:-0}" = 1; then
+    compose_full "$payer_language" "$payee_language" build "${targets[@]}"
+  else
+    compose_full "$payer_language" "$payee_language" build --pull "${targets[@]}"
   fi
 }
 

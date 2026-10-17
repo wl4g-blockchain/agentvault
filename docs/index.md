@@ -65,7 +65,7 @@ Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC
 
 `run_id` 在 SDK、HTTP/gRPC/MQTT wire、Intent、Outbox 和业务交付中保持不变，授权轮询、网络超时、重发、Verify、Settle 及交付恢复都复用它；不再存在第二个公开的业务幂等字段。同一 Scenario 下，同 `run_id` 且同请求指纹返回原结果；同 `run_id` 但不同指纹必须冲突并 Fail Closed。
 
-可观测标识与业务标识严格分离：W3C `traceparent` 传递 `trace_id/span_id/parent_span_id`。规范要求每次实际 HTTP/gRPC/MQTT/Provider 调用或重试由 OpenTelemetry 自动创建新的子 Span，但始终复用同一 `run_id`。`span_id` 只区分一次调用，不是由业务方传入的字段，不得进入业务唯一约束、去重逻辑或恢复查询；需持久化的内部尝试由 `attempt_no + event_type` 表达。异步协议的 `correlation_id` 仅用于请求/响应配对，不得改名或冒充 `span_id`；消息重投可保持 Correlation 不变但必须创建新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 仅把 `run_id` 映射为该协议头，不创建新身份。
+可观测标识与业务标识严格分离：W3C `traceparent` 传递 `trace_id/span_id/parent_span_id`。规范要求每次实际 HTTP/gRPC/MQTT/Provider 调用或重试由 OpenTelemetry 自动创建新的子 Span，但始终复用同一 `run_id`。`span_id` 只区分一次调用，不是由业务方传入的字段，不得进入业务唯一约束、去重逻辑或恢复查询；需持久化的内部尝试由 `attempt_no + event_type` 表达。异步协议的 `correlation_id` 仅由 SDK/Transport 内部生成，用于一次请求/响应会话配对，并记录为 OTel `messaging.message.conversation_id`；业务调用方无需管理它。一次会话可包含 publish、consume、response 与重投等多个 Span，因此 `correlation_id` 不得改名、复用或冒充 `span_id`；消息重投可保持 Correlation 不变但必须创建新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 仅把 `run_id` 映射为该协议头，不创建新身份。
 
 OUTBOUND 时 AgentVault 把 Scenario 下所有匹配的 Policy-Wallet membership 视为候选钱包池。协议、资产、Origin、Recipient 或方向不匹配的 membership 不进入候选；Wallet 停用、缺少本地 Active Key、算法/规范地址不兼容 Challenge 网络或预算拒绝则保留为可审计的拒绝结果。系统按“可直接授权、需审批、拒绝”分组，在同组内优先选择当日已花费加预留最少的 Wallet，并以请求哈希做稳定散列决胜。选择结果写入 Intent 作为内部审计事实；幂等重放始终返回同一结果。候选数量有界，最终 membership、网络兼容性、Key Version、Policy 快照与双层预算在 SQL 锁内再次校验，因此并发选择不能绕过限额。多个匹配 Policy 是替代授权（OR）；需要叠加限制时应合并为一个 Policy，避免用重叠 Policy 表达交集语义。链上余额会在每次签名前再次 Fail Closed 检查；它不是负载均衡权重，也不会把同一个 Intent 静默改绑到另一 Wallet。
 
