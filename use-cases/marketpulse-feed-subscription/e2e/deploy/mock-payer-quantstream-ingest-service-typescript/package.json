@@ -1,0 +1,23 @@
+{
+  "name": "quantstream-ingestor-typescript",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/main.ts",
+    "test": "find tests -type f -name '*_test.ts' -print0 | sort -z | xargs -0 node --import tsx --test"
+  },
+  "dependencies": {
+    "@agentvault/sdk": "file:../../../../../src/adapters/typescript",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "express": "5.1.0",
+    "node-cron": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/node": "^22.18.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: quantstream-golang
+description: MarketPulse subscription E2E quantstream-golang component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+

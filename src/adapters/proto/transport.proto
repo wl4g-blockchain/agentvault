@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package agentvault.transport.v1;
+
+// Internal SDK transport. The envelope carries the same bounded, canonical
+// JSON contract used by HTTP/Unix/MQTT; payment DTOs remain language SDK types.
+service PaymentTransport {
+  rpc Execute(Envelope) returns (Envelope);
+}
+
+message Envelope {
+  bytes value = 1;
+}

@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentvault.fullname" . }}-config
+  labels:
+    {{- include "agentvault.labels" . | nindent 4 }}
+data:
+  agentvault.yaml: |
+    server:
+      enabled: true
+      service_name: {{ .Values.runtime.server.serviceName | quote }}
+      host: 0.0.0.0
+      port: {{ .Values.service.apiPort }}
+      context_path: /api/v1
+      authguard:
+        enabled: {{ include "agentvault.authguardEnabled" . }}
+        direct_context_hmac_key: { file: "", env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY }
+        scope_resolver:
+          enabled: {{ .Values.runtime.authguard.scopeResolver.enabled }}
+          target: {{ default (printf "http://%s-authguard-middleware:8081" .Release.Name) .Values.runtime.authguard.scopeResolver.target | quote }}
+          timeout: {{ .Values.runtime.authguard.scopeResolver.timeout }}
+      shutdown_timeout: {{ .Values.runtime.server.shutdownTimeout }}
+      request:
+        max_body_bytes: {{ .Values.runtime.server.maxBodyBytes }}
+        timeout: {{ .Values.runtime.server.requestTimeout }}
+    mgmt:
+      enabled: true
+      host: 0.0.0.0
+      port: {{ .Values.service.managementPort }}
+      context_path: /
+      health:
+        liveness_path: /healthz
+        readiness_path: /readyz
+        probe_timeout: {{ .Values.management.health.probeTimeout }}
+      metrics: { enabled: true, path: /metrics }
+      otel:
+        enabled: {{ .Values.management.otel.enabled }}
+        endpoint: {{ .Values.management.otel.endpoint | quote }}
+        protocol: {{ .Values.management.otel.protocol | quote }}
+        timeout: {{ .Values.management.otel.timeout }}
+        sample_rate: {{ .Values.management.otel.sampleRate }}
+    logging: { mode: JSON, level: info }
+    storage:
+      instance_key: primary
+      provider: postgres
+      postgres:
+        dsn: { file: "", env: AGENTVAULT_STORAGE_POSTGRES_URL }
+        max_connections: {{ .Values.runtime.postgres.maxConnections }}
+        connect_timeout: {{ .Values.runtime.postgres.connectTimeout }}
+    cache:
+      instance_key: primary
+      provider: {{ ternary "redis" "memory" .Values.runtime.redis.enabled }}
+      memory:
+        max_entries: {{ .Values.runtime.memory.maxEntries | int }}
+        max_value_bytes: {{ .Values.runtime.memory.maxValueBytes | int }}
+        default_ttl: {{ .Values.runtime.memory.defaultTtl }}
+      redis:
+        mode: standalone
+        urls: [{ file: "", env: AGENTVAULT_CACHE_REDIS_URL }]
+        key_prefix: {{ .Values.runtime.redis.keyPrefix | quote }}
+        max_value_bytes: {{ .Values.runtime.redis.maxValueBytes | int }}
+        connect_timeout: {{ .Values.runtime.redis.connectTimeout }}
+        operation_timeout: {{ .Values.runtime.redis.operationTimeout }}
+        default_ttl: {{ .Values.runtime.redis.defaultTtl }}
+        retry_attempts: {{ .Values.runtime.redis.retryAttempts }}
+        min_retry_wait: {{ .Values.runtime.redis.minRetryWait }}
+        max_retry_wait: {{ .Values.runtime.redis.maxRetryWait }}
+    agentvault:
+      payer:
+        enabled: {{ .Values.runtime.payer.enabled }}
+        x402:
+          enabled: {{ .Values.runtime.payer.x402.enabled }}
+          max_challenge_ttl: {{ .Values.runtime.payer.x402.maxChallengeTtl }}
+          assets:
+            {{- toYaml .Values.runtime.payer.x402.assets | nindent 12 }}
+        mpp:
+          enabled: false
+          max_challenge_ttl: 5m
+          assets: []
+      payee:
+        enabled: {{ .Values.runtime.payee.enabled }}
+        x402:
+          enabled: {{ .Values.runtime.payee.x402.enabled }}
+          max_challenge_ttl: {{ .Values.runtime.payee.x402.maxChallengeTtl }}
+          assets:
+            {{- toYaml .Values.runtime.payee.x402.assets | nindent 12 }}
+          facilitator:
+            id: {{ .Values.runtime.payee.x402.facilitator.id | quote }}
+            base_url: {{ .Values.runtime.payee.x402.facilitator.baseUrl | quote }}
+            verify_path: {{ .Values.runtime.payee.x402.facilitator.verifyPath | quote }}
+            settle_path: {{ .Values.runtime.payee.x402.facilitator.settlePath | quote }}
+            timeout: {{ .Values.runtime.payee.x402.facilitator.timeout }}
+            max_response_bytes: {{ .Values.runtime.payee.x402.facilitator.maxResponseBytes }}
+            allow_insecure_loopback: {{ .Values.runtime.payee.x402.facilitator.allowInsecureLoopback }}
+            secret_headers: {}
+        mpp:
+          enabled: false
+          max_challenge_ttl: 5m
+          realm: agentvault
+          challenge_secret: { file: "", env: AGENTVAULT_MPP_CHALLENGE_SECRET }
+          assets: []
+          provider:
+            id: mpp-primary
+            base_url: https://provider.example/mpp/
+            verify_path: verify
+            settle_path: settle
+            timeout: 10s
+            max_response_bytes: 262144
+            allow_insecure_loopback: false
+            secret_headers: {}
+      chains:
+        {{- range .Values.runtime.chains }}
+        {{ .network | quote }}:
+          family: {{ .family }}
+          rpc:
+            endpoint: {{ .rpc.endpoint | quote }}
+            timeout: {{ .rpc.timeout }}
+            max_response_bytes: {{ .rpc.maxResponseBytes }}
+            allow_insecure_loopback: {{ .rpc.allowInsecureLoopback }}
+            secret_headers: {}
+          minimum_native_balance: {{ .minimumNativeBalance | quote }}
+          confirmation_depth: {{ .confirmationDepth }}
+        {{- end }}
+      key_management:
+        active_key_id: wallet-kek-v1
+        keys: { wallet-kek-v1: { file: "", env: AGENTVAULT_WALLET_KEK_V1 } }
+      recovery_encryption:
+        active_key_id: recovery-v1
+        keys: { recovery-v1: { file: "", env: AGENTVAULT_RECOVERY_KEY_V1 } }
+      approval:
+        request_ttl: {{ .Values.runtime.approval.requestTtl }}
+        grant_ttl: {{ .Values.runtime.approval.grantTtl }}
+        expiry_interval: {{ .Values.runtime.approval.expiryInterval }}
+        expiry_batch_size: {{ .Values.runtime.approval.expiryBatchSize }}
+        jwt:
+          issuer: {{ .Values.runtime.approval.issuer | quote }}
+          audience: {{ .Values.runtime.approval.audience | quote }}
+          active_key_id: approval-hs256-v1
+          signing_keys: { approval-hs256-v1: { file: "", env: AGENTVAULT_APPROVAL_JWT_KEY_V1 } }
+      reconciliation:
+        enabled: {{ .Values.runtime.reconciliation.enabled }}
+        interval: {{ .Values.runtime.reconciliation.interval }}
+        lease_ttl: {{ .Values.runtime.reconciliation.leaseTtl }}
+        batch_size: {{ .Values.runtime.reconciliation.batchSize }}
+        initial_backoff: {{ .Values.runtime.reconciliation.initialBackoff }}
+        max_backoff: {{ .Values.runtime.reconciliation.maxBackoff }}
+      transport:
+        grpc:
+          enabled: {{ .Values.runtime.grpc.enabled }}
+          host: 0.0.0.0
+          port: {{ .Values.service.grpcPort }}
+          max_message_bytes: {{ .Values.runtime.grpc.maxMessageBytes }}
+          request_timeout: {{ .Values.runtime.grpc.requestTimeout }}
+        local: { enabled: false }
+        mqtt:
+          enabled: {{ .Values.runtime.mqtt.enabled }}
+          host: {{ .Values.runtime.mqtt.host | quote }}
+          port: {{ .Values.runtime.mqtt.port }}
+          client_id: {{ .Values.runtime.mqtt.clientId | quote }}
+          consumer_group: {{ .Values.runtime.mqtt.consumerGroup | quote }}
+          topic_prefix: {{ .Values.runtime.mqtt.topicPrefix | quote }}
+          qos: {{ .Values.runtime.mqtt.qos }}
+          tls: {{ .Values.runtime.mqtt.tls }}
+          username: {{ .Values.runtime.mqtt.username | quote }}
+          password: { file: "", env: AGENTVAULT_MQTT_PASSWORD }
+          request_timeout: {{ .Values.runtime.mqtt.requestTimeout }}
+          reconnect_delay: {{ .Values.runtime.mqtt.reconnectDelay }}

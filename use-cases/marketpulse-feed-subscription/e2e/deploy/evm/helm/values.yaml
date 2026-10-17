@@ -1,0 +1,41 @@
+workload:
+  kind: Job
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Never
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/foundry_anvil"
+  tag: "1.7.1"
+  pullPolicy: IfNotPresent
+command:
+  - "/usr/bin/bash"
+  - "/fixture/deploy.sh"
+args: []
+env:
+  EVM_RPC_URL: "http://anvil:8545"
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports: []
+service:
+  enabled: false
+probe:
+  enabled: false
+  type: tcp
+  path: "/"
+  port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

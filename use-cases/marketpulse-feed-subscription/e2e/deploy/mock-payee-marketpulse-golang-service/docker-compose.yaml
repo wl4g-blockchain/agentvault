@@ -1,0 +1,27 @@
+services:
+  marketpulse-golang:
+    image: ${E2E_MARKETPULSE_GOLANG_IMAGE:-marketpulse-golang-e2e:local}
+    build:
+      context: ${E2E_MARKETPULSE_REPOSITORY_ROOT:-../../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-golang-service/Dockerfile
+      network: host
+      args:
+        HTTPS_PROXY: ${E2E_MARKETPULSE_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_MARKETPULSE_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_MARKETPULSE_GOLANG_BUILD_IMAGE: ${E2E_MARKETPULSE_GOLANG_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/golang:1.26-alpine}
+        E2E_MARKETPULSE_GOLANG_RUNTIME_IMAGE: ${E2E_MARKETPULSE_GOLANG_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/alpine:3.21}
+    environment: &marketpulse-environment
+      MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
+      AGENTVAULT_URL: ${E2E_MARKETPULSE_AGENTVAULT_URL:-http://agentvault:8080/api/v1}
+      MARKETPULSE_SCENARIO_ID: ${E2E_MARKETPULSE_SCENARIO_ID:-scenario-marketpulse-feed}
+      MARKETPULSE_OFFER_ID: ${E2E_MARKETPULSE_OFFER_ID:-offer-realtime-news}
+      MARKETPULSE_RESOURCE_URL: ${E2E_MARKETPULSE_RESOURCE_URL:-http://marketpulse-golang:8081/mcp}
+      MARKETPULSE_ORIGIN: ${E2E_MARKETPULSE_ORIGIN:-http://marketpulse-golang:8081}
+      MARKETPULSE_DATABASE: ${E2E_MARKETPULSE_DATABASE:-/var/lib/marketpulse/marketpulse.sqlite3}
+      MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION: ${E2E_MARKETPULSE_ALLOW_FAILURE_INJECTION:-true}
+    ports: ["127.0.0.1:${E2E_MARKETPULSE_GOLANG_PORT:-38082}:8081"]
+    volumes: ["marketpulse-golang-data:/var/lib/marketpulse"]
+    healthcheck: { test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/healthz"], interval: 3s, timeout: 3s, retries: 30 }
+volumes:
+  marketpulse-golang-data: {}

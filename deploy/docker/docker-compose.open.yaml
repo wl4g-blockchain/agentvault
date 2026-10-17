@@ -1,0 +1,68 @@
+x-agentvault: &agentvault
+  image: ${AGENTVAULT_IMAGE:?set AGENTVAULT_IMAGE in .env}
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  command: [--config, /etc/agentvault/agentvault.yaml, serve]
+  env_file: ["${AGENTVAULT_ENV_FILE:-.env}"]
+  environment:
+    RUST_LOG: ${RUST_LOG:-info}
+    AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
+  volumes:
+    - ./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro
+  restart: unless-stopped
+
+services:
+  agentvault-postgres:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3
+    environment:
+      POSTGRESQL_USERNAME: agentvault
+      POSTGRESQL_PASSWORD: ${AGENTVAULT_POSTGRES_PASSWORD:?set AGENTVAULT_POSTGRES_PASSWORD in .env}
+      POSTGRESQL_DATABASE: agentvault
+    volumes: [agentvault-postgres-data:/bitnami/postgresql]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U agentvault -d agentvault]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  agentvault-redis:
+    image: redis:7.2-alpine
+    command: [redis-server, --save, "", --appendonly, "no", --requirepass, "${AGENTVAULT_REDIS_PASSWORD:?set AGENTVAULT_REDIS_PASSWORD in .env}"]
+    environment:
+      AGENTVAULT_REDIS_PASSWORD: ${AGENTVAULT_REDIS_PASSWORD:?set AGENTVAULT_REDIS_PASSWORD in .env}
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli --no-auth-warning -a "$${AGENTVAULT_REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  agentvault:
+    <<: *agentvault
+    depends_on:
+      agentvault-postgres: { condition: service_healthy }
+      agentvault-redis: { condition: service_healthy }
+    expose: [8080, 9091, 50051]
+    ports:
+      - 127.0.0.1:9091:9091
+
+  agentvault-web:
+    image: ${AGENTVAULT_WEB_IMAGE:?set AGENTVAULT_WEB_IMAGE in .env}
+    build: { context: ../../web, dockerfile: Dockerfile }
+    expose: [8080]
+    restart: unless-stopped
+
+  envoy:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+    command: [-c, /etc/envoy/envoy.yaml, --log-level, info]
+    volumes: [./config/envoy-open.yaml:/etc/envoy/envoy.yaml:ro]
+    ports: [8080:8080]
+    depends_on:
+      agentvault: { condition: service_started }
+      agentvault-web: { condition: service_started }
+    restart: unless-stopped
+
+volumes:
+  agentvault-postgres-data: {}

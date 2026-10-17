@@ -1,6 +1,11 @@
 # Rust build and tooling output
 /target/
 /debug/
+**/target/
+**/node_modules/
+**/dist/
+**/__pycache__/
+**/*.pyc
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
@@ -11,3 +16,4 @@
 /secrets/
 /etc/agentvault.local.yaml
 *.local.yaml
+/deploy/docker/.env

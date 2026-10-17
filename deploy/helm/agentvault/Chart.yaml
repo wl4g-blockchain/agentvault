@@ -1,0 +1,13 @@
+apiVersion: v2
+name: agentvault
+description: Enterprise AI-agent payment infrastructure
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [agent, payment, x402, mpp, wallet]
+dependencies:
+  - name: authguard
+    alias: authguard-middleware
+    version: 1.0.1
+    repository: oci://ghcr.io/wl4g/charts
+    condition: authguard-middleware.enabled

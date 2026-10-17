@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantstream-ingestor-python"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "agentvault-sdk==0.1.0",
+  "APScheduler>=3.11,<4",
+  "fastapi>=0.119,<1",
+  "mcp==1.30.0",
+  "uvicorn>=0.37,<1",
+]
+
+[project.scripts]
+quantstream-python = "app.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

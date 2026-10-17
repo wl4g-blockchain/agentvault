@@ -1,0 +1,11 @@
+services:
+  facilitator:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/x402_facilitator:1.4.9
+    ports: ["127.0.0.1:${E2E_FACILITATOR_PORT:-38085}:8085"]
+    volumes: ["./config.json:/app/config.json:ro"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8085/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped

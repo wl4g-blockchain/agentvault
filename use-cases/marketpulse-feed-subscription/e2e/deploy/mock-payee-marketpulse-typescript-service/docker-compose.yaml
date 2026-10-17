@@ -1,0 +1,26 @@
+services:
+  marketpulse-typescript:
+    image: ${E2E_MARKETPULSE_TYPESCRIPT_IMAGE:-marketpulse-typescript-e2e:local}
+    build:
+      context: ${E2E_MARKETPULSE_REPOSITORY_ROOT:-../../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-typescript-service/Dockerfile
+      network: host
+      args:
+        HTTPS_PROXY: ${E2E_MARKETPULSE_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_MARKETPULSE_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+    environment:
+      MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
+      AGENTVAULT_URL: ${E2E_MARKETPULSE_AGENTVAULT_URL:-http://agentvault:8080/api/v1}
+      MARKETPULSE_SCENARIO_ID: ${E2E_MARKETPULSE_SCENARIO_ID:-scenario-marketpulse-feed}
+      MARKETPULSE_OFFER_ID: ${E2E_MARKETPULSE_OFFER_ID:-offer-realtime-news}
+      MARKETPULSE_RESOURCE_URL: ${E2E_MARKETPULSE_RESOURCE_URL:-http://marketpulse-typescript:8081/mcp}
+      MARKETPULSE_ORIGIN: ${E2E_MARKETPULSE_ORIGIN:-http://marketpulse-typescript:8081}
+      MARKETPULSE_DATABASE: ${E2E_MARKETPULSE_DATABASE:-/var/lib/marketpulse/marketpulse.sqlite3}
+      MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION: ${E2E_MARKETPULSE_ALLOW_FAILURE_INJECTION:-true}
+    ports: ["127.0.0.1:${E2E_MARKETPULSE_TYPESCRIPT_PORT:-38084}:8081"]
+    volumes: ["marketpulse-typescript-data:/var/lib/marketpulse"]
+    healthcheck: { test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"], interval: 3s, timeout: 3s, retries: 30 }
+volumes:
+  marketpulse-typescript-data: {}

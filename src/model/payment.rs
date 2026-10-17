@@ -1,0 +1,473 @@
+use std::{fmt, str::FromStr};
+
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+
+/// An amount expressed in an asset's smallest indivisible unit.
+///
+/// JSON encodes amounts as decimal strings so values are never rounded by
+/// consumers whose native number type cannot represent 128-bit integers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Amount(u128);
+
+impl Amount {
+    pub const ZERO: Self = Self(0);
+
+    #[must_use]
+    pub const fn new(value: u128) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u128 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+
+    #[must_use]
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_add(rhs.0) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_sub(rhs.0) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+}
+
+impl From<u128> for Amount {
+    fn from(value: u128) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Amount> for u128 {
+    fn from(value: Amount) -> Self {
+        value.0
+    }
+}
+
+impl FromStr for Amount {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse().map(Self)
+    }
+}
+
+impl fmt::Display for Amount {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Serialize for Amount {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AmountVisitor;
+
+        impl de::Visitor<'_> for AmountVisitor {
+            type Value = Amount;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a non-negative base-10 integer encoded as a string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(AmountVisitor)
+    }
+}
+
+/// Complete identity of a fungible asset on a particular network.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct AssetIdentity {
+    pub network: String,
+    pub asset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_contract: Option<String>,
+    pub decimals: u8,
+}
+
+/// Unit shared by scalar policy and wallet limits.
+///
+/// Network and token contract deliberately do not participate: the same
+/// asset denomination must consume one shared budget when it moves across
+/// supported networks or contract deployments.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetUnit {
+    pub asset: String,
+    pub decimals: u8,
+}
+
+impl BudgetUnit {
+    /// Validates the denomination used by scalar budget amounts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `asset` when the asset identifier is empty.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.asset.trim().is_empty() {
+            return Err("asset");
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn matches(&self, asset: &AssetIdentity) -> bool {
+        self.asset == asset.asset && self.decimals == asset.decimals
+    }
+}
+
+impl AssetIdentity {
+    /// Validates the stable identity fields needed for authorization and
+    /// settlement matching.
+    ///
+    /// # Errors
+    ///
+    /// Returns the invalid field name when an identity is ambiguous.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network.trim().is_empty() {
+            return Err("network");
+        }
+        if self.asset.trim().is_empty() {
+            return Err("asset");
+        }
+        if self
+            .token_contract
+            .as_ref()
+            .is_some_and(|contract| contract.trim().is_empty())
+        {
+            return Err("token_contract");
+        }
+        Ok(())
+    }
+
+    /// Returns the denomination in which policy and wallet limits are
+    /// expressed, intentionally excluding network and token contract.
+    #[must_use]
+    pub fn budget_unit(&self) -> BudgetUnit {
+        BudgetUnit {
+            asset: self.asset.clone(),
+            decimals: self.decimals,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentDirection {
+    Inbound,
+    Outbound,
+}
+
+impl PaymentDirection {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbound => "inbound",
+            Self::Outbound => "outbound",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentStatus {
+    Created,
+    PendingApproval,
+    Authorized,
+    Signed,
+    Submitted,
+    PendingSettlement,
+    Settled,
+    Failed,
+    Expired,
+    Unknown,
+}
+
+impl PaymentStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::PendingApproval => "pending_approval",
+            Self::Authorized => "authorized",
+            Self::Signed => "signed",
+            Self::Submitted => "submitted",
+            Self::PendingSettlement => "pending_settlement",
+            Self::Settled => "settled",
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_final(self) -> bool {
+        matches!(self, Self::Settled | Self::Failed | Self::Expired)
+    }
+}
+
+/// Durable state of a budget reservation. A reservation is separate from the
+/// payment state because external settlement and local database commits cannot
+/// be one atomic operation.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ReservationStatus {
+    #[default]
+    Unreserved,
+    Reserved,
+    Consumed,
+    Released,
+}
+
+impl ReservationStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreserved => "unreserved",
+            Self::Reserved => "reserved",
+            Self::Consumed => "consumed",
+            Self::Released => "released",
+        }
+    }
+}
+
+/// Current state of one inbound or outbound payment operation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaymentIntent {
+    pub id: String,
+    pub scenario_id: String,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallet_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+    pub direction: PaymentDirection,
+    pub protocol: String,
+    pub asset: AssetIdentity,
+    pub recipient: String,
+    pub amount: Amount,
+    pub settled_amount: Amount,
+    pub resource: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub challenge_hash: Option<String>,
+    pub request_hash: String,
+    pub status: PaymentStatus,
+    pub reservation_status: ReservationStatus,
+    pub reserved_amount: Amount,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settlement_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_reconcile_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<i64>,
+}
+
+impl PaymentIntent {
+    #[must_use]
+    pub fn check_replay(&self, request_hash: &str) -> ReplayCheck {
+        if self.request_hash == request_hash {
+            ReplayCheck::Replay
+        } else {
+            ReplayCheck::Conflict
+        }
+    }
+
+    /// Returns the policy and wallet selected internally by `AgentVault`.
+    /// These identifiers are durable authorization evidence, never payer
+    /// request inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the missing or empty authority field.
+    pub fn authority_ids(&self) -> Result<(&str, &str), &'static str> {
+        let policy_id = self
+            .policy_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("policy_id")?;
+        let wallet_id = self
+            .wallet_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("wallet_id")?;
+        Ok((policy_id, wallet_id))
+    }
+
+    /// Returns whether a state transition preserves every field that defines
+    /// the authorized payment operation. Storage may update lifecycle,
+    /// reservation, settlement, and lease fields only; it must never rewrite
+    /// this identity after creation.
+    #[must_use]
+    pub fn same_immutable_identity_as(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.scenario_id == other.scenario_id
+            && self.run_id == other.run_id
+            && self.wallet_id == other.wallet_id
+            && self.policy_id == other.policy_id
+            && self.offer_id == other.offer_id
+            && self.direction == other.direction
+            && self.protocol == other.protocol
+            && self.asset == other.asset
+            && self.recipient == other.recipient
+            && self.amount == other.amount
+            && self.resource == other.resource
+            && self.challenge_hash == other.challenge_hash
+            && self.request_hash == other.request_hash
+            && self.created_at == other.created_at
+            && self.expires_at == other.expires_at
+    }
+
+    #[must_use]
+    pub const fn needs_reconciliation(&self) -> bool {
+        matches!(
+            self.status,
+            PaymentStatus::Signed
+                | PaymentStatus::Submitted
+                | PaymentStatus::PendingSettlement
+                | PaymentStatus::Unknown
+        )
+    }
+
+    /// Checks invariants that are independent of protocol and storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the invalid field or invariant name.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.id.trim().is_empty() {
+            return Err("id");
+        }
+        if self.scenario_id.trim().is_empty() {
+            return Err("scenario_id");
+        }
+        if self.run_id.trim().is_empty() {
+            return Err("run_id");
+        }
+        self.authority_ids()?;
+        match self.direction {
+            PaymentDirection::Inbound
+                if self
+                    .offer_id
+                    .as_deref()
+                    .is_none_or(|offer_id| offer_id.trim().is_empty()) =>
+            {
+                return Err("offer_id");
+            }
+            PaymentDirection::Outbound if self.offer_id.is_some() => return Err("offer_id"),
+            _ => {}
+        }
+        if self.protocol.trim().is_empty() {
+            return Err("protocol");
+        }
+        self.asset.validate()?;
+        if self.recipient.trim().is_empty() {
+            return Err("recipient");
+        }
+        if self.amount.is_zero() {
+            return Err("amount");
+        }
+        if self.request_hash.trim().is_empty() {
+            return Err("request_hash");
+        }
+        if self.settled_amount > self.amount {
+            return Err("settled_amount");
+        }
+        if self.reserved_amount > self.amount {
+            return Err("reserved_amount");
+        }
+        if self.status == PaymentStatus::Settled && self.settled_at.is_none() {
+            return Err("settled_at");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplayCheck {
+    Replay,
+    Conflict,
+}
+
+/// Protocol-neutral representation of a merchant payment challenge.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaymentChallenge {
+    pub scenario_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+    pub resource: String,
+    pub protocol: String,
+    pub asset: AssetIdentity,
+    pub amount: Amount,
+    pub recipient: String,
+    pub nonce: String,
+    pub challenge_hash: String,
+    pub expires_at: i64,
+    /// Adapter-owned fields. The payment core treats this as opaque data.
+    pub payload: Value,
+}
+
+/// Protocol-neutral credential returned to a payer SDK or received by a payee.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaymentCredential {
+    pub protocol: String,
+    pub challenge_hash: String,
+    pub credential_hash: String,
+    /// Adapter-owned fields. The payment core never infers settlement from it.
+    pub payload: Value,
+}
+
+/// Result of policy evaluation and budget reservation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PaymentAuthorizationResult {
+    Denied { intent_id: String, reason: String },
+    RequiresApproval { intent_id: String, approval_id: String },
+    Authorized { intent_id: String, reserved_amount: Amount },
+}
+
+#[cfg(test)]
+#[path = "../../tests/model/payment_test.rs"]
+mod tests;

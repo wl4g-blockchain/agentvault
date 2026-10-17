@@ -9,60 +9,84 @@ concurrency:
   group: agentvault-release
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: "4"
-  IMAGE: ghcr.io/wl4g-blockchain/agentvault
-
 jobs:
   prepare:
     name: Prepare release
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
+      pull-requests: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       short_sha: ${{ steps.version.outputs.short_sha }}
+      should_release: ${{ steps.version.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - name: Determine semantic release version
+      - name: Update release comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENTVAULT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          AGENTVAULT_COMMENT_KIND: release
+          AGENTVAULT_COMMENT_PHASE: started
+          AGENTVAULT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node .github/scripts/upsert-pr-status-comment.mjs || \
+            echo "::warning title=AgentVault Release comment::Could not publish the release status comment."
+
+      - name: Determine release version
         id: version
+        shell: bash
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
+          if grep -qiE '^refactor(\([^)]+\))?!?:' <<< "${PR_TITLE}"; then
+            bump=major
+          elif grep -qiE '^feat(\([^)]+\))?:' <<< "${PR_TITLE}"; then
+            bump=minor
+          elif grep -qiE '^(fix|ci)(\([^)]+\))?:' <<< "${PR_TITLE}"; then
+            bump=patch
+          else
+            echo "PR title does not trigger a release (only refactor:, feat:, fix:, ci:)."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           head_tag=$(git tag --points-at "${MERGE_SHA}" -l 'v[0-9]*' --sort=-v:refname | head -1)
           if [[ -n "${head_tag}" ]]; then
             echo "version=${head_tag#v}" >> "$GITHUB_OUTPUT"
             echo "tag=${head_tag}" >> "$GITHUB_OUTPUT"
             echo "short_sha=${MERGE_SHA:0:12}" >> "$GITHUB_OUTPUT"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
           latest=${latest:-v0.0.0}
           IFS=. read -r major minor patch <<< "${latest#v}"
-          if grep -qiE '^[a-z]+(\([^)]+\))?!:' <<< "${PR_TITLE}"; then
-            major=$((major + 1)); minor=0; patch=0
-          elif grep -qiE '^feat(\([^)]+\))?:' <<< "${PR_TITLE}"; then
-            minor=$((minor + 1)); patch=0
-          else
-            patch=$((patch + 1))
-          fi
+          case "${bump}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
           echo "version=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
           echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${MERGE_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
 
-  build-release:
+  build-binary:
     name: Build release binary
     needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -78,32 +102,44 @@ jobs:
       - name: Build release binary
         run: make build
 
-      - name: Package release
+      - name: Package release binary
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           package="agentvault-${VERSION}-linux-amd64"
           mkdir -p "dist/${package}/etc"
-          install -m 0755 target/release/walletd "dist/${package}/walletd"
+          install -m 0755 target/release/agentvault "dist/${package}/agentvault"
           install -m 0644 etc/agentvault.yaml "dist/${package}/etc/agentvault.yaml"
           install -m 0644 README.md README_ZH.md LICENSE "dist/${package}/"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"
           sha256sum "dist/${package}.tar.gz" > "dist/${package}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
         with:
-          name: agentvault-release-${{ needs.prepare.outputs.version }}
+          name: agentvault-binary-${{ needs.prepare.outputs.version }}
           path: |
             dist/*.tar.gz
             dist/*.sha256
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
-  publish-image:
-    name: Publish multi-architecture image
+  build-runtime:
+    name: Build runtime (${{ matrix.arch }})
     needs: prepare
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -111,8 +147,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -123,47 +157,306 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push immutable and latest tags
+      - name: Build and publish runtime digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            BUILDER_IMAGE=docker.io/library/rust:1.91.1-bookworm
+            RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
-          tags: |
-            ${{ env.IMAGE }}:${{ needs.prepare.outputs.version }}
-            ${{ env.IMAGE }}:sha-${{ needs.prepare.outputs.short_sha }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha,scope=agentvault-runtime
-          cache-to: type=gha,mode=max,scope=agentvault-runtime,ignore-error=true
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/agentvault,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=agentvault-runtime-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=agentvault-runtime-${{ matrix.arch }},ignore-error=true
 
-  publish-release:
-    name: Publish GitHub release
-    needs: [prepare, build-release, publish-image]
+      - name: Export runtime digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "${DIGEST}"
+          mkdir -p /tmp/agentvault-digests
+          touch "/tmp/agentvault-digests/${DIGEST#sha256:}"
+
+      - name: Upload runtime digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentvault-runtime-digest-${{ matrix.arch }}
+          path: /tmp/agentvault-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-web:
+    name: Build web (${{ matrix.arch }})
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish web digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            NODE_IMAGE=docker.io/library/node:22-alpine
+            WEB_IMAGE=docker.io/nginxinc/nginx-unprivileged:1.27-alpine
+          labels: |
+            org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/agentvault-web,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=agentvault-web-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=agentvault-web-${{ matrix.arch }},ignore-error=true
+
+      - name: Export web digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "${DIGEST}"
+          mkdir -p /tmp/agentvault-web-digests
+          touch "/tmp/agentvault-web-digests/${DIGEST#sha256:}"
+
+      - name: Upload web digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentvault-web-digest-${{ matrix.arch }}
+          path: /tmp/agentvault-web-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  package-chart:
+    name: Package Helm chart
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Package and verify chart
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p dist
+          helm dependency list deploy/helm/agentvault
+          helm lint deploy/helm/agentvault
+          helm package deploy/helm/agentvault --destination dist --version "${VERSION}" --app-version "${VERSION}"
+          helm show chart "dist/agentvault-${VERSION}.tgz" >/dev/null
+
+      - name: Upload Helm chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentvault-chart-${{ needs.prepare.outputs.version }}
+          path: dist/agentvault-${{ needs.prepare.outputs.version }}.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish official artifacts
+    needs: [prepare, build-binary, build-runtime, build-web, package-chart]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          name: agentvault-release-${{ needs.prepare.outputs.version }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download runtime digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentvault-runtime-digest-*
+          path: /tmp/agentvault-runtime-digests
+          merge-multiple: true
+
+      - name: Download web digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentvault-web-digest-*
+          path: /tmp/agentvault-web-digests
+          merge-multiple: true
+
+      - name: Download Helm chart
+        uses: actions/download-artifact@v4
+        with:
+          name: agentvault-chart-${{ needs.prepare.outputs.version }}
           path: dist
 
-      - name: Create release and upload artifacts
+      - name: Download release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: agentvault-binary-${{ needs.prepare.outputs.version }}
+          path: dist
+
+      - name: Publish multi-architecture image indexes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        run: |
+          mapfile -t runtime_digests < <(find /tmp/agentvault-runtime-digests -maxdepth 1 -type f -printf "ghcr.io/${IMAGE_OWNER}/agentvault@sha256:%f\n" | sort)
+          mapfile -t web_digests < <(find /tmp/agentvault-web-digests -maxdepth 1 -type f -printf "ghcr.io/${IMAGE_OWNER}/agentvault-web@sha256:%f\n" | sort)
+          test "${#runtime_digests[@]}" -eq 2
+          test "${#web_digests[@]}" -eq 2
+          docker buildx imagetools create \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault:${VERSION}" \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault:sha-${SHORT_SHA}" \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault:latest" \
+            "${runtime_digests[@]}"
+          docker buildx imagetools create \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault-web:${VERSION}" \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault-web:sha-${SHORT_SHA}" \
+            --tag "ghcr.io/${IMAGE_OWNER}/agentvault-web:latest" \
+            "${web_digests[@]}"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Publish and pull-verify chart
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          mkdir -p verify
+          helm push "dist/agentvault-${VERSION}.tgz" "oci://ghcr.io/${IMAGE_OWNER}/charts"
+          helm pull "oci://ghcr.io/${IMAGE_OWNER}/charts/agentvault" --version "${VERSION}" --destination verify
+          helm show chart "verify/agentvault-${VERSION}.tgz" >/dev/null
+
+      - name: Tag release commit
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            test "$(git rev-parse "${TAG}^{commit}")" = "${RELEASE_SHA}"
+            echo "Release tag ${TAG} already points to ${RELEASE_SHA}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" "${RELEASE_SHA}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/agentvault-${{ needs.prepare.outputs.version }}.tgz
+            dist/agentvault-${{ needs.prepare.outputs.version }}-linux-amd64.tar.gz
+            dist/agentvault-${{ needs.prepare.outputs.version }}-linux-amd64.tar.gz.sha256
+
+  cleanup-dirty-images:
+    name: Clean merged PR dirty images
+    needs: publish
+    if: ${{ always() && needs.publish.result == 'success' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Delete all dirty images produced by this PR
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          .github/scripts/cleanup-ghcr-dirty-images.sh \
+            "${GITHUB_REPOSITORY}" \
+            "${{ github.event.pull_request.number }}" \
+            "${GITHUB_REPOSITORY_OWNER}" \
+            agentvault agentvault-web
+
+  comment-final:
+    name: Report release result
+    needs: [prepare, build-binary, build-runtime, build-web, package-chart, publish, cleanup-dirty-images]
+    if: always() && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Update release comment
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-          TARGET: ${{ github.event.pull_request.merge_commit_sha }}
+          AGENTVAULT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          AGENTVAULT_COMMENT_KIND: release
+          AGENTVAULT_COMMENT_PHASE: final
+          AGENTVAULT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENTVAULT_PREPARE_RESULT: ${{ needs.prepare.result }}
+          AGENTVAULT_RELEASE_RESULT: ${{ needs.publish.result }}
+          AGENTVAULT_SHOULD_RELEASE: ${{ needs.prepare.outputs.should_release }}
+          AGENTVAULT_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          AGENTVAULT_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release create "${TAG}" dist/* \
-            --target "${TARGET}" \
-            --generate-notes \
-            --title "AgentVault ${TAG}"
+          node .github/scripts/upsert-pr-status-comment.mjs || \
+            echo "::warning title=AgentVault Release comment::Could not publish the release status comment."

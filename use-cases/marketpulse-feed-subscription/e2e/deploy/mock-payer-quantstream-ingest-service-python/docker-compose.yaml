@@ -1,0 +1,31 @@
+services:
+  quantstream-python:
+    image: ${E2E_QUANTSTREAM_PYTHON_IMAGE:-quantstream-ingestor-python-e2e:local}
+    build:
+      context: ${E2E_QUANTSTREAM_REPOSITORY_ROOT:-../../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-python/Dockerfile
+      network: host
+      args:
+        HTTPS_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE: ${E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+    command: ["--once"]
+    environment:
+      MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+      QUANTSTREAM_YESTERDAY_CRON: "${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 2 * * *}"
+      QUANTSTREAM_REALTIME_CRON: "${E2E_QUANTSTREAM_REALTIME_CRON:-*/1 * * * *}"
+      AGENTVAULT_APPROVAL_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_APPROVAL_TIMEOUT_SECONDS:-45}"
+      AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-emqx}
+      AGENTVAULT_MQTT_PORT: "${E2E_QUANTSTREAM_MQTT_PORT:-1883}"
+      AGENTVAULT_MQTT_TLS: "${E2E_QUANTSTREAM_MQTT_TLS:-false}"
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_MQTT_USERNAME:-quantstream-workload}
+      AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
+      AGENTVAULT_MQTT_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}"
+    volumes: ["quantstream-python-data:/var/lib/quantstream"]
+    restart: "no"
+volumes:
+  quantstream-python-data: {}

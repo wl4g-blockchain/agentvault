@@ -1,4 +1,10 @@
-/target
+**/target
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/build
 /data
 /run
 /secrets

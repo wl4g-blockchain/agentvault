@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package authguard.access.v1;
+
+import "google/protobuf/wrappers.proto";
+
+// AuthGuard's workload-facing resolver for short-lived opaque scope tokens.
+service AccessContextService {
+  rpc ResolveScope(google.protobuf.StringValue) returns (google.protobuf.StringValue);
+}

@@ -1,0 +1,21 @@
+{{- if .Values.management.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentvault.fullname" . }}
+  labels:
+    {{- include "agentvault.labels" . | nindent 4 }}
+    {{- with .Values.management.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentvault.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: management
+  endpoints:
+    - port: management
+      path: /metrics
+      interval: {{ .Values.management.serviceMonitor.interval }}
+{{- end }}

@@ -1,0 +1,11 @@
+services:
+  anvil:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/foundry_anvil:1.7.1
+    command: ["--host=0.0.0.0", "--port=8545", "--accounts=10", "--balance=10000", "--chain-id=31337"]
+    ports: ["127.0.0.1:${E2E_ANVIL_PORT:-28545}:8545"]
+    healthcheck:
+      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped

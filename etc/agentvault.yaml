@@ -3,25 +3,31 @@
 #
 # Canonical keys use snake_case. Environment overrides use double underscores:
 # AGENTVAULT__SERVER__PORT=8080
-# AGENTVAULT__MGMT__OTEL__ENABLED=true
+# AGENTVAULT__AGENTVAULT__PAYER__ENABLED=true
 # =============================================================================
 
 server:
-  enabled: true
+  enabled: false
   service_name: agentvault
   host: 127.0.0.1
   port: 8080
   context_path: /api/v1
-  # Required whenever host is non-loopback. The owner-only file contains the
-  # raw bearer token; do not put the token itself in this YAML file.
-  api_token_file: ""
+  # AuthGuard/Envoy is the default HTTP edge. Disabling it intentionally opens
+  # HTTP administration/payment routes on the configured network boundary.
+  authguard:
+    enabled: true
+    direct_context_hmac_key:
+      file: ""
+      env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY
+    scope_resolver:
+      enabled: true
+      target: http://127.0.0.1:8081
+      timeout: 2s
   shutdown_timeout: 15s
   request:
     max_body_bytes: 16384
     timeout: 5s
 
-# Management traffic belongs on a private listener and follows the same shape
-# used by AuthGuard services.
 mgmt:
   enabled: true
   host: 127.0.0.1
@@ -30,6 +36,7 @@ mgmt:
   health:
     liveness_path: /healthz
     readiness_path: /readyz
+    probe_timeout: 1s
   metrics:
     enabled: true
     path: /metrics
@@ -44,45 +51,225 @@ logging:
   mode: HUMAN # HUMAN | JSON
   level: "info"
 
-store:
-  directory: /var/lib/agentvault
-  master_key_file: /run/secrets/agentvault/master.key
-  # Relative paths resolve below store.directory. History excludes digest and
-  # signature material and remains mode 0600.
-  sign_history_file: sign-history.jsonl
+# Shared durable authority. Intents, Ledger entries, encrypted Wallet EOA key
+# versions, approvals, events, and Outbox records use this SQL provider.
+storage:
+  instance_key: primary
+  provider: sqlite # sqlite | postgres
+  sqlite:
+    database_file: /var/lib/agentvault/agentvault.sqlite3
+    max_connections: 1
+    busy_timeout: 5s
+  postgres:
+    dsn:
+      file: ""
+      env: AGENTVAULT_STORAGE_POSTGRES_URL
+    max_connections: 16
+    connect_timeout: 5s
 
-security:
-  max_request_bytes: 16384
-  max_request_ttl_seconds: 30
-  clock_skew_seconds: 5
-  dedup_ttl_seconds: 300
-  max_dedup_entries: 10000
-  max_history_entries: 10000
-  client_policies:
-    - client_id_prefix: flowgent-
-      wallet_ids: [payer]
-      purposes: [x402.payment]
-    - client_id_prefix: sigbot-
-      wallet_ids: [payer]
-      purposes: [x402.payment]
+# Shared best-effort acceleration. Financial correctness never depends on it.
+cache:
+  instance_key: primary
+  provider: memory # memory | redis
+  memory:
+    max_entries: 10000
+    max_value_bytes: 1048576
+    default_ttl: 5m
+  redis:
+    mode: standalone # standalone | cluster
+    urls:
+      - file: ""
+        env: AGENTVAULT_CACHE_REDIS_URL
+    key_prefix: agentvault
+    max_value_bytes: 1048576
+    connect_timeout: 3s
+    operation_timeout: 2s
+    default_ttl: 5m
+    retry_attempts: 5
+    min_retry_wait: 100ms
+    max_retry_wait: 2s
 
-signers:
-  local:
-    enabled: true
-    socket_path: /run/agentvault/agentvault.sock
-    max_connections: 64
-    request_timeout: 5s
-  mqtt:
+# The only AgentVault-specific root. Policy, Offer, Wallet and asset limits
+# remain authoritative SQL data rather than process configuration.
+agentvault:
+  # OUTBOUND: consume a merchant challenge, authorize a Scenario/Wallet, sign,
+  # retry the protected request, then reconcile trusted settlement evidence.
+  payer:
     enabled: false
-    host: 127.0.0.1
-    port: 1883
-    client_id: agentvault-01
-    consumer_group: agentvault-pool
-    request_topic_prefix: wallet/v1/sign/requests
-    response_topic_prefix: wallet/v1/sign/responses
-    qos: 1
-    tls: false
-    username: ""
-    password_file: ""
-    request_timeout: 10s
-    reconnect_delay: 1s
+    x402:
+      enabled: false
+      max_challenge_ttl: 5m
+      assets:
+        - network: eip155:8453
+          contract: "0x0000000000000000000000000000000000001001"
+          symbol: USDC
+          decimals: 6
+    mpp:
+      # Challenge parsing exists, but AgentVault intentionally rejects this
+      # switch until the Tempo payer signing plan is fully implemented.
+      enabled: false
+      max_challenge_ttl: 5m
+      assets:
+        - network: eip155:42431
+          currency: "0x0000000000000000000000000000000000001002"
+          symbol: USDC
+          token_contract: "0x0000000000000000000000000000000000001002"
+          decimals: 6
+
+  # INBOUND: issue server-owned challenges and call only the provider colocated
+  # with that payee adapter. Request payloads can never choose these endpoints.
+  payee:
+    enabled: false
+    x402:
+      enabled: false
+      max_challenge_ttl: 5m
+      assets:
+        - network: eip155:8453
+          contract: "0x0000000000000000000000000000000000001001"
+          symbol: USDC
+          decimals: 6
+      facilitator:
+        id: x402-primary
+        base_url: https://facilitator.example/x402/
+        verify_path: verify
+        settle_path: settle
+        timeout: 10s
+        max_response_bytes: 262144
+        allow_insecure_loopback: false
+        secret_headers:
+          Authorization:
+            source:
+              file: ""
+              env: AGENTVAULT_X402_PROVIDER_TOKEN
+            prefix: "Bearer "
+    mpp:
+      enabled: false
+      max_challenge_ttl: 5m
+      realm: agentvault
+      challenge_secret:
+        file: ""
+        env: AGENTVAULT_MPP_CHALLENGE_SECRET
+      assets:
+        - network: eip155:42431
+          currency: "0x0000000000000000000000000000000000001002"
+          symbol: USDC
+          token_contract: "0x0000000000000000000000000000000000001002"
+          decimals: 6
+      provider:
+        id: mpp-primary
+        base_url: https://provider.example/mpp/
+        verify_path: verify
+        settle_path: settle
+        timeout: 10s
+        max_response_bytes: 262144
+        allow_insecure_loopback: false
+        secret_headers:
+          Authorization:
+            source:
+              file: ""
+              env: AGENTVAULT_MPP_PROVIDER_TOKEN
+            prefix: "Bearer "
+
+  # Shared payer/payee chain registry. `family` selects the concrete chain
+  # adapter; current x402 exact and MPP Tempo implementations require EVM.
+  chains:
+    "eip155:8453":
+      family: evm
+      rpc:
+        endpoint: https://base-rpc.example/
+        timeout: 5s
+        max_response_bytes: 262144
+        allow_insecure_loopback: false
+        secret_headers: {}
+      minimum_native_balance: "1000000000000000"
+      confirmation_depth: 1
+    "eip155:42431":
+      family: evm
+      rpc:
+        endpoint: https://tempo-rpc.example/
+        timeout: 5s
+        max_response_bytes: 262144
+        allow_insecure_loopback: false
+        secret_headers: {}
+      minimum_native_balance: "1000000000000000"
+      confirmation_depth: 1
+    "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ":
+      family: solana
+      rpc:
+        endpoint: https://api.mainnet-beta.solana.com/
+        timeout: 5s
+        max_response_bytes: 262144
+        allow_insecure_loopback: false
+        secret_headers: {}
+      minimum_native_balance: "0"
+      confirmation_depth: 32
+
+  # Only Wallet KEKs belong to key_management. Encrypted EOA material is stored
+  # as immutable wallet_key_version rows owned by pay_wallet.
+  key_management:
+    active_key_id: wallet-kek-v1
+    keys:
+      wallet-kek-v1:
+        file: ""
+        env: AGENTVAULT_WALLET_KEK_V1
+
+  # Separate AEAD keys protect durable retry/approval envelopes. They are not
+  # Wallet KEKs and never contain an EOA private key.
+  recovery_encryption:
+    active_key_id: recovery-v1
+    keys:
+      recovery-v1:
+        file: ""
+        env: AGENTVAULT_RECOVERY_KEY_V1
+
+  approval:
+    request_ttl: 15m
+    grant_ttl: 5m
+    expiry_interval: 15s
+    expiry_batch_size: 100
+    jwt:
+      issuer: agentvault
+      audience: agentvault:approval-grant
+      active_key_id: approval-hs256-v1
+      signing_keys:
+        approval-hs256-v1:
+          file: ""
+          env: AGENTVAULT_APPROVAL_JWT_KEY_V1
+
+  reconciliation:
+    enabled: true
+    interval: 15s
+    lease_ttl: 45s
+    batch_size: 100
+    initial_backoff: 5s
+    max_backoff: 5m
+
+  # HTTP, gRPC, Unix-socket and MQTT adapters invoke the same handlers. No
+  # transport accepts a caller-supplied digest.
+  transport:
+    grpc:
+      enabled: false
+      host: 127.0.0.1
+      port: 50051
+      max_message_bytes: 2097152
+      request_timeout: 30s
+    local:
+      enabled: false
+      socket_path: /run/agentvault/agentvault.sock
+      max_connections: 64
+      request_timeout: 5s
+    mqtt:
+      enabled: false
+      host: 127.0.0.1
+      port: 1883
+      client_id: agentvault-01
+      consumer_group: agentvault-pool
+      topic_prefix: agentvault/v1/clients
+      qos: 1
+      tls: false
+      username: ""
+      password:
+        file: ""
+        env: AGENTVAULT_MQTT_PASSWORD
+      request_timeout: 10s
+      reconnect_delay: 1s

@@ -1,0 +1,44 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/foundry_anvil"
+  tag: "1.7.1"
+  pullPolicy: IfNotPresent
+command: []
+args:
+  - "--host=0.0.0.0"
+  - "--port=8545"
+  - "--accounts=10"
+  - "--balance=10000"
+  - "--chain-id=31337"
+env: {}
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: rpc, containerPort: 8545, servicePort: 8545 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 8545
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

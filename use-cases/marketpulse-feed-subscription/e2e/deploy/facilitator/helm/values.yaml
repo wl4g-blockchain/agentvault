@@ -1,0 +1,55 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/x402_facilitator"
+  tag: "1.4.9"
+  pullPolicy: IfNotPresent
+command: []
+args: []
+env: {}
+secret:
+  name: marketpulse-e2e-secrets
+  env:
+    FACILITATOR_PRIVATE_KEY: "facilitator-private-key"
+ports:
+  - { name: http, containerPort: 8085, servicePort: 8085 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: http
+  path: "/health"
+  port: 8085
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: true
+  key: config.json
+  mountPath: "/app/config.json"
+  content: |
+    {
+      "port": 8085,
+      "host": "0.0.0.0",
+      "chains": {
+        "eip155:31337": {
+          "eip1559": false,
+          "flashblocks": false,
+          "signers": ["0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"],
+          "rpc": [{"http": "http://anvil:8545", "rate_limit": 1000}]
+        }
+      },
+      "schemes": [
+        {"id": "v1-eip155-exact", "chains": "eip155:31337"},
+        {"id": "v2-eip155-exact", "chains": "eip155:31337"}
+      ]
+    }
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

@@ -1,0 +1,81 @@
+replicaCount: 1
+
+web:
+  enabled: false
+
+routes:
+  enabled: false
+
+authguard-middleware:
+  enabled: false
+
+runtime:
+  server:
+    serviceName: agentvault-e2e
+    maxBodyBytes: 262144
+    requestTimeout: 15s
+  postgres:
+    maxConnections: 16
+    connectTimeout: 10s
+  redis:
+    enabled: false
+  mqtt:
+    enabled: true
+    host: 127.0.0.1
+    port: 1883
+    tls: false
+    username: agentvault-vault
+    clientId: agentvault-e2e
+    consumerGroup: agentvault-e2e
+    requestTimeout: 15s
+  payer:
+    enabled: true
+    x402:
+      enabled: true
+      maxChallengeTtl: 5m
+      assets:
+        - network: eip155:31337
+          contract: "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+          symbol: USDC
+          decimals: 6
+  payee:
+    enabled: true
+    x402:
+      enabled: true
+      maxChallengeTtl: 5m
+      assets:
+        - network: eip155:31337
+          contract: "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+          symbol: USDC
+          decimals: 6
+      facilitator:
+        id: x402-e2e
+        baseUrl: http://127.0.0.1:8085/
+        verifyPath: verify
+        settlePath: settle
+        timeout: 15s
+        maxResponseBytes: 262144
+        allowInsecureLoopback: true
+  chains:
+    - network: eip155:31337
+      family: evm
+      rpc:
+        endpoint: http://127.0.0.1:8545
+        timeout: 10s
+        maxResponseBytes: 262144
+        allowInsecureLoopback: true
+      minimumNativeBalance: "1"
+      confirmationDepth: 1
+  approval:
+    expiryInterval: 2s
+    issuer: agentvault-e2e
+  reconciliation:
+    interval: 2s
+    leaseTtl: 10s
+    initialBackoff: 1s
+    maxBackoff: 10s
+
+management:
+  otel:
+    enabled: true
+    endpoint: http://127.0.0.1:4317
