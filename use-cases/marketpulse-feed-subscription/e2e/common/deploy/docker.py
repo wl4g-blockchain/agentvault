@@ -176,6 +176,26 @@ def _inherit_build_proxy_environment(environment: dict[str, str]) -> None:
             environment.setdefault(f"{prefix}_NO_PROXY", no_proxy)
 
 
+def _agentvault_build_targets(environment: dict[str, str]) -> tuple[str, ...]:
+    """Resolve the runtime image build boundary shared by single and matrix runs."""
+    if environment.get("E2E_RUNNER_PREBUILT_AGENTVAULT") != "1":
+        return ("agentvault",)
+    if not environment.get("E2E_AGENTVAULT_IMAGE"):
+        raise RuntimeError("prebuilt AgentVault requires E2E_AGENTVAULT_IMAGE")
+    return ()
+
+
+def _matrix_build_profiles(languages: tuple[str, ...]) -> tuple[str, ...]:
+    """Activate every profile referenced by the selected matrix build targets."""
+    return (
+        "infra",
+        "payee",
+        "apps",
+        *(f"payee-{language}" for language in languages),
+        *(f"ingestor-{language}" for language in languages),
+    )
+
+
 class DockerE2EDeployer(E2EDeployer):
     """Python-owned Docker Compose lifecycle for the isolated E2E project."""
 
@@ -502,11 +522,12 @@ class DockerE2EDeployer(E2EDeployer):
         if self.context.skip_build:
             return
         self._target_budget()
-        targets = [f"marketpulse-{payee}", "admin-ui", f"quantstream-{payer}"]
-        if self.environment.get("E2E_RUNNER_PREBUILT_AGENTVAULT") != "1":
-            targets.insert(0, "agentvault")
-        elif not self.environment.get("E2E_AGENTVAULT_IMAGE"):
-            raise RuntimeError("prebuilt AgentVault requires E2E_AGENTVAULT_IMAGE")
+        targets = [
+            *_agentvault_build_targets(self.environment),
+            f"marketpulse-{payee}",
+            "admin-ui",
+            f"quantstream-{payer}",
+        ]
         arguments = ["build"]
         if not self.context.reuse_build:
             arguments.append("--pull")
@@ -517,14 +538,15 @@ class DockerE2EDeployer(E2EDeployer):
             return
         self._target_budget()
         targets = [
-            "agentvault", "admin-ui",
+            *_agentvault_build_targets(self.environment),
+            "admin-ui",
             *(f"marketpulse-{language}" for language in languages),
             *(f"quantstream-{language}" for language in languages),
         ]
         arguments = ["build"]
         if not self.context.reuse_build:
             arguments.append("--pull")
-        self._compose((), *arguments, *targets)
+        self._compose(_matrix_build_profiles(languages), *arguments, *targets)
 
     def _preflight_mcp(self) -> str:
         endpoint = self._url("E2E_MARKETPULSE_PORT", "/mcp")

@@ -199,6 +199,11 @@ jobs:
 
       - name: Verify E2E source and deployment contracts
         run: |
+          PYTHONPATH=use-cases/marketpulse-feed-subscription/e2e \
+            python3 -m unittest discover \
+              -s use-cases/marketpulse-feed-subscription/e2e/tests \
+              -t use-cases/marketpulse-feed-subscription/e2e \
+              -p '*_test.py' -v
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
             --scenario structure --scenario infrastructure --cleanup-after-run
 

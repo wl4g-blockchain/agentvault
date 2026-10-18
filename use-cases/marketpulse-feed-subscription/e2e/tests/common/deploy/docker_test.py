@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import unittest
 from json import dumps
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from common.deploy.docker import (
     AGENTVAULT_CHART,
     AGENTVAULT_CONFIG_TEMPLATE,
     BUILD_PROXY_PREFIXES,
+    DockerE2EDeployer,
+    _agentvault_build_targets,
     _clean_compose_stdout,
     _ensure_matrix_plan,
     _inherit_build_proxy_environment,
     _load_matrix_checkpoint,
+    _matrix_build_profiles,
     _parse_cast_address,
     _parse_cast_uint,
 )
@@ -61,6 +66,54 @@ class BuildProxyEnvironmentTest(unittest.TestCase):
             "1|approval-id:pending\n"
         )
         self.assertEqual(_clean_compose_stdout(output), "1|approval-id:pending")
+
+
+class BuildBoundaryTest(unittest.TestCase):
+    def test_source_runtime_is_built_by_default(self) -> None:
+        self.assertEqual(_agentvault_build_targets({}), ("agentvault",))
+
+    def test_prebuilt_runtime_is_not_rebuilt(self) -> None:
+        environment = {
+            "E2E_RUNNER_PREBUILT_AGENTVAULT": "1",
+            "E2E_AGENTVAULT_IMAGE": "ghcr.io/example/agentvault:immutable",
+        }
+        self.assertEqual(_agentvault_build_targets(environment), ())
+
+    def test_prebuilt_runtime_requires_an_explicit_image(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires E2E_AGENTVAULT_IMAGE"):
+            _agentvault_build_targets({"E2E_RUNNER_PREBUILT_AGENTVAULT": "1"})
+
+    def test_matrix_build_activates_shared_and_language_profiles(self) -> None:
+        self.assertEqual(
+            _matrix_build_profiles(("rust", "go")),
+            (
+                "infra", "payee", "apps",
+                "payee-rust", "payee-go",
+                "ingestor-rust", "ingestor-go",
+            ),
+        )
+
+    def test_ci_matrix_build_uses_profiles_and_keeps_the_pulled_runtime(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.context = SimpleNamespace(skip_build=False, reuse_build=True)
+        deployer.environment = {
+            "E2E_RUNNER_PREBUILT_AGENTVAULT": "1",
+            "E2E_AGENTVAULT_IMAGE": "ghcr.io/example/agentvault:immutable",
+        }
+        deployer._target_budget = Mock()
+        deployer._compose = Mock()
+
+        deployer._build_matrix_images(("rust", "go"))
+
+        deployer._compose.assert_called_once_with(
+            _matrix_build_profiles(("rust", "go")),
+            "build",
+            "admin-ui",
+            "marketpulse-rust",
+            "marketpulse-go",
+            "quantstream-rust",
+            "quantstream-go",
+        )
 
 
 class MatrixCheckpointTest(unittest.TestCase):
