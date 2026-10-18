@@ -180,7 +180,7 @@ mod catalog {
         use async_trait::async_trait;
 
         use crate::{
-            model::{wallet::Wallet, Amount, BudgetUnit},
+            model::{wallet::Wallet, Amount, AssetIdentity, BudgetUnit},
             Result,
         };
 
@@ -254,6 +254,36 @@ mod catalog {
             pub max_per_payment: Option<Amount>,
             pub max_per_day: Option<Amount>,
             pub updated_at: i64,
+        }
+
+        /// Last successful chain observation for one managed wallet and asset.
+        /// This record is operational inventory, never authorization input.
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct WalletBalanceRecord {
+            pub wallet_id: String,
+            pub asset: AssetIdentity,
+            pub asset_available: Amount,
+            pub native_available: Amount,
+            pub observed_at: i64,
+            pub updated_at: i64,
+        }
+
+        impl WalletBalanceRecord {
+            /// Validates the persisted observation identity and timestamps.
+            ///
+            /// # Errors
+            ///
+            /// Returns the invalid field name.
+            pub fn validate(&self) -> std::result::Result<(), &'static str> {
+                if self.wallet_id.trim().is_empty() {
+                    return Err("wallet_id");
+                }
+                self.asset.validate()?;
+                if self.observed_at < 0 || self.updated_at < self.observed_at {
+                    return Err("observed_at");
+                }
+                Ok(())
+            }
         }
 
         impl PaymentWallet {
@@ -458,6 +488,14 @@ mod catalog {
 
             async fn set_enabled(&self, wallet_id: &str, enabled: bool, updated_at: i64) -> Result<()>;
         }
+
+        /// Persistence port for periodic wallet-balance observations.
+        #[async_trait]
+        pub trait WalletBalanceStorage: Send + Sync {
+            async fn upsert_balance(&self, balance: &WalletBalanceRecord) -> Result<WalletBalanceRecord>;
+
+            async fn get_balance(&self, wallet_id: &str, asset: &AssetIdentity) -> Result<Option<WalletBalanceRecord>>;
+        }
     }
 
     // Lifecycle repositories for Client, Scenario, Policy, Offer, Approver,
@@ -471,8 +509,8 @@ mod catalog {
     pub use policy::PolicyStorage;
     pub use scenario::ScenarioStorage;
     pub use wallet::{
-        EncryptedWalletKeyVersion, PaymentWallet, WalletCustody, WalletKeyStatus, WalletProvisioningConfig,
-        WalletStorage,
+        EncryptedWalletKeyVersion, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage, WalletCustody,
+        WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
     };
 }
 
@@ -1317,7 +1355,6 @@ mod transaction {
             pub aggregate_id: String,
             pub event_type: String,
             pub destination: String,
-            pub correlation_id: String,
             /// Business run that produced this event. Together with
             /// `destination` and `event_type` this is the durable delivery
             /// identity; retries increment `attempt_count` without inventing
@@ -1381,7 +1418,8 @@ mod transaction {
 
 pub use catalog::{
     ApproverStorage, ClientStorage, EncryptedWalletKeyVersion, OfferStorage, PaymentWallet, PolicyStorage,
-    ScenarioStorage, WalletCustody, WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
+    ScenarioStorage, WalletBalanceRecord, WalletBalanceStorage, WalletCustody, WalletKeyStatus,
+    WalletProvisioningConfig, WalletStorage,
 };
 pub use signing::{
     IntentBoundPaymentSignatureRequest, OutboundSigningAuthorization, OutboundSigningIdentity, OutboundSigningRead,
@@ -1408,6 +1446,7 @@ pub struct StoragePorts {
     pub policies: Arc<dyn PolicyStorage>,
     pub offers: Arc<dyn OfferStorage>,
     pub wallets: Arc<dyn WalletStorage>,
+    pub wallet_balances: Arc<dyn WalletBalanceStorage>,
     pub payments: Arc<dyn PaymentStorage>,
     pub approvals: Arc<dyn ApprovalStorage>,
     pub events: Arc<dyn EventStorage>,
@@ -1628,10 +1667,10 @@ pub struct Page<T> {
     pub total: u64,
 }
 
-/// Outcome of an insert guarded by a domain idempotency key.
+/// Outcome of an insert guarded by a durable domain replay identity.
 ///
 /// Implementations must return `Replay` only when the stored request hash and
-/// material fields match. Reusing the key for different content is an error.
+/// material fields match. Reusing the identity for different content is an error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdempotentWrite<T> {
     Inserted(T),

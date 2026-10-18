@@ -7,27 +7,46 @@ x-agentvault-environment: &agentvault-environment
   AGENTVAULT_RECOVERY_KEY_V1: ${E2E_AGENTVAULT_RECOVERY_KEY:-AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI}
   AGENTVAULT_APPROVAL_JWT_KEY_V1: ${E2E_AGENTVAULT_APPROVAL_KEY:-AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM}
   AGENTVAULT_MQTT_PASSWORD: ${E2E_AGENTVAULT_MQTT_PASSWORD:-agentvault-e2e-vault}
-  AGENTVAULT_QUANTSTREAM_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
-  AGENTVAULT_QUANTSTREAM_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+  AGENTVAULT_QUANTSTREAM_RUST_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+  AGENTVAULT_QUANTSTREAM_RUST_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+  AGENTVAULT_QUANTSTREAM_GO_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
+  AGENTVAULT_QUANTSTREAM_GO_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
+  AGENTVAULT_QUANTSTREAM_PYTHON_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
+  AGENTVAULT_QUANTSTREAM_PYTHON_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
+  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
+  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
+  AGENTVAULT_QUANTSTREAM_JAVA_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
+  AGENTVAULT_QUANTSTREAM_JAVA_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
   RUST_LOG: ${E2E_AGENTVAULT_LOG:-info}
 
 x-quantstream-environment: &quantstream-environment
   MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://127.0.0.1:8081/mcp}
-  QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
-  QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
   QUANTSTREAM_YESTERDAY_CRON: ${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 0 2 * * *}
   QUANTSTREAM_REALTIME_CRON: ${E2E_QUANTSTREAM_REALTIME_CRON:-0 */1 * * * *}
   AGENTVAULT_APPROVAL_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_APPROVAL_TIMEOUT_SECONDS:-45}
+  AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
+  AGENTVAULT_GRPC_ENDPOINT: ${E2E_QUANTSTREAM_GRPC_ENDPOINT:-127.0.0.1:50051}
+  AGENTVAULT_GRPC_TLS: ${E2E_QUANTSTREAM_GRPC_TLS:-false}
+  AGENTVAULT_GRPC_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_GRPC_TIMEOUT_SECONDS:-15}
   AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-127.0.0.1}
   AGENTVAULT_MQTT_PORT: ${E2E_QUANTSTREAM_MQTT_PORT:-1883}
   AGENTVAULT_MQTT_TLS: ${E2E_QUANTSTREAM_MQTT_TLS:-false}
-  AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_MQTT_USERNAME:-quantstream-workload}
   AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
   AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}
 
 x-marketpulse-environment: &marketpulse-environment
   MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
-  AGENTVAULT_URL: ${E2E_MARKETPULSE_AGENTVAULT_URL:-http://127.0.0.1:8080/api/v1}
+  AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
+  AGENTVAULT_GRPC_ENDPOINT: ${E2E_MARKETPULSE_GRPC_ENDPOINT:-127.0.0.1:50051}
+  AGENTVAULT_GRPC_TLS: ${E2E_MARKETPULSE_GRPC_TLS:-false}
+  AGENTVAULT_GRPC_TIMEOUT_SECONDS: ${E2E_MARKETPULSE_GRPC_TIMEOUT_SECONDS:-15}
+  AGENTVAULT_MQTT_HOST: ${E2E_MARKETPULSE_MQTT_HOST:-127.0.0.1}
+  AGENTVAULT_MQTT_PORT: ${E2E_MARKETPULSE_MQTT_PORT:-1883}
+  AGENTVAULT_MQTT_TLS: ${E2E_MARKETPULSE_MQTT_TLS:-false}
+  AGENTVAULT_MQTT_USERNAME: ${E2E_MARKETPULSE_MQTT_USERNAME:-marketpulse-payee}
+  AGENTVAULT_MQTT_PASSWORD: ${E2E_MARKETPULSE_MQTT_PASSWORD:-agentvault-e2e-payee}
+  AGENTVAULT_MQTT_CLIENT_ID: ${E2E_MARKETPULSE_MQTT_CLIENT_ID:-client-marketpulse}
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_MARKETPULSE_MQTT_TIMEOUT_SECONDS:-15}
   MARKETPULSE_SCENARIO_ID: ${E2E_MARKETPULSE_SCENARIO_ID:-scenario-marketpulse-feed}
   MARKETPULSE_OFFER_ID: ${E2E_MARKETPULSE_OFFER_ID:-offer-realtime-news}
   MARKETPULSE_RESOURCE_URL: ${E2E_MARKETPULSE_RESOURCE_URL:-http://127.0.0.1:8081/mcp}
@@ -91,7 +110,7 @@ services:
       - "127.0.0.1:${E2E_FACILITATOR_PORT:-38085}:8085"
     healthcheck:
       test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
-      interval: 2s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -108,7 +127,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agentvault -d agentvault"]
-      interval: 2s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -126,6 +145,10 @@ services:
     volumes:
       - ./deploy/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
       - emqx-data:/opt/emqx/data
+    # Two isolated matrix workers may run concurrently on a four-core host.
+    # EMQX is control-plane infrastructure here; cap it so broker probes cannot
+    # starve the payer/payee processes during simultaneous stack startup.
+    cpus: "0.35"
     healthcheck:
       test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
       interval: 15s
@@ -142,7 +165,7 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:14269/"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
       start_period: 5s
@@ -156,8 +179,16 @@ services:
     environment:
       E2E_EVM_RPC_URL: ${E2E_EVM_RPC_URL:-http://127.0.0.1:8545}
       E2E_EVM_DEPLOYER_PRIVATE_KEY: ${E2E_EVM_DEPLOYER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
-      E2E_EVM_PAYER_ADDRESS: ${E2E_EVM_PAYER_ADDRESS:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}
-      E2E_EVM_SECONDARY_PAYER_PRIVATE_KEY: ${E2E_QUANTSTREAM_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+      E2E_EVM_RUST_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+      E2E_EVM_RUST_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+      E2E_EVM_GO_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
+      E2E_EVM_GO_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
+      E2E_EVM_PYTHON_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
+      E2E_EVM_PYTHON_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
+      E2E_EVM_TYPESCRIPT_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
+      E2E_EVM_TYPESCRIPT_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
+      E2E_EVM_JAVA_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
+      E2E_EVM_JAVA_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
       E2E_EVM_USDC_ADDRESS: ${E2E_EVM_USDC_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}
       E2E_EVM_PAYER_INITIAL_USDC: "${E2E_EVM_PAYER_INITIAL_USDC:-1000000000000}"
     volumes:
@@ -188,10 +219,10 @@ services:
     # Agave's proof-of-history loop otherwise consumes an entire host core
     # while this E2E is validating the EVM/x402 path. Keep the real node
     # available without starving AgentVault, EMQX, or language builds.
-    cpus: "0.75"
+    cpus: "0.45"
     healthcheck:
       test: ["CMD", "solana", "cluster-version", "--url", "http://127.0.0.1:8899"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 30
       start_period: 20s
@@ -220,7 +251,7 @@ services:
           exec 3<>/dev/tcp/127.0.0.1/8085;
           printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
           head -n 1 <&3 | grep -q ' 200 '
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
       start_period: 5s
@@ -234,7 +265,7 @@ services:
     command: ["--config", "/etc/agentvault/e2e.yaml", "provision", "--manifest", "/etc/agentvault/provision.json"]
     environment: *agentvault-environment
     volumes:
-      - ./reports/.runtime/agentvault.yaml:/etc/agentvault/e2e.yaml:ro
+      - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
       - ./common/contract/scenario.json:/etc/agentvault/provision.json:ro
     depends_on:
       postgres:
@@ -251,7 +282,7 @@ services:
     command: ["--config", "/etc/agentvault/e2e.yaml", "serve"]
     environment: *agentvault-environment
     volumes:
-      - ./reports/.runtime/agentvault.yaml:/etc/agentvault/e2e.yaml:ro
+      - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
     depends_on:
       agentvault-provision:
         condition: service_completed_successfully
@@ -263,7 +294,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9091/readyz"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 40
       start_period: 5s
@@ -288,7 +319,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -313,7 +344,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -337,7 +368,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -361,7 +392,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -386,7 +417,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -405,13 +436,13 @@ services:
     environment:
       QUANTSTREAM_UI_HOST: ${E2E_QUANTSTREAM_UI_BIND_HOST:-0.0.0.0}
       QUANTSTREAM_UI_PORT: ${E2E_QUANTSTREAM_UI_BIND_PORT:-8086}
-      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
-      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
-      QUANTSTREAM_APPROVER_PRINCIPAL: ${E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL:-principal-quantstream-admin}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream-rust}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-rust-market-ingestion}
+      QUANTSTREAM_APPROVER_PRINCIPAL: ${E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL:-principal-quantstream-rust-admin}
       QUANTSTREAM_ADMIN_UI_TOKEN: ${E2E_QUANTSTREAM_UI_TOKEN:-quantstream-e2e-ui-token-0000000000000000001}
       AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_UI_MQTT_TIMEOUT_SECONDS:-15}
       AGENTVAULT_MQTT_URL: ${E2E_QUANTSTREAM_UI_MQTT_URL:-mqtt://127.0.0.1:1883}
-      AGENTVAULT_MQTT_APPROVER_USERNAME: ${E2E_QUANTSTREAM_UI_MQTT_USERNAME:-quantstream-approver}
+      AGENTVAULT_MQTT_APPROVER_USERNAME: ${E2E_QUANTSTREAM_UI_MQTT_USERNAME:-quantstream-rust-approver}
       AGENTVAULT_MQTT_APPROVER_PASSWORD: ${E2E_QUANTSTREAM_UI_MQTT_PASSWORD:-agentvault-e2e-approver}
       AGENTVAULT_URL: ${E2E_QUANTSTREAM_UI_AGENTVAULT_URL:-http://127.0.0.1:8080/api/v1}
     depends_on:
@@ -423,7 +454,7 @@ services:
         - node
         - -e
         - fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
-      interval: 3s
+      interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
@@ -441,6 +472,9 @@ services:
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_RUST_CLIENT_ID:-client-quantstream-rust}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_RUST_SCENARIO_ID:-scenario-quantstream-rust-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_RUST_MQTT_USERNAME:-quantstream-rust-workload}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
     volumes:
       - quantstream-rust-data:/var/lib/quantstream
@@ -461,6 +495,9 @@ services:
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_GO_CLIENT_ID:-client-quantstream-go}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_GO_SCENARIO_ID:-scenario-quantstream-go-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_GO_MQTT_USERNAME:-quantstream-go-workload}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
     volumes:
       - quantstream-go-data:/var/lib/quantstream
@@ -480,6 +517,9 @@ services:
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_PYTHON_CLIENT_ID:-client-quantstream-python}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_PYTHON_SCENARIO_ID:-scenario-quantstream-python-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_PYTHON_MQTT_USERNAME:-quantstream-python-workload}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
     volumes:
       - quantstream-python-data:/var/lib/quantstream
@@ -499,6 +539,9 @@ services:
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_TYPESCRIPT_CLIENT_ID:-client-quantstream-typescript}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_TYPESCRIPT_SCENARIO_ID:-scenario-quantstream-typescript-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_TYPESCRIPT_MQTT_USERNAME:-quantstream-typescript-workload}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
     volumes:
       - quantstream-typescript-data:/var/lib/quantstream
@@ -519,6 +562,9 @@ services:
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_JAVA_CLIENT_ID:-client-quantstream-java}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_JAVA_SCENARIO_ID:-scenario-quantstream-java-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_JAVA_MQTT_USERNAME:-quantstream-java-workload}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
     volumes:
       - quantstream-java-data:/var/lib/quantstream

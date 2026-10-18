@@ -5,10 +5,12 @@ use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::{
+    apm::AgentVaultMetrics,
     model::{
-        canonicalize_payment_recipient, wallet::is_evm_payment_network, wallet::is_evm_wallet_algorithm, Amount,
-        ApprovalRequest, ApprovalStatus, PaymentAuthorizationResult, PaymentChallenge, PaymentDirection, PaymentEvent,
-        PaymentEventType, PaymentIntent, PaymentPolicy, PaymentStatus, ReservationStatus,
+        canonicalize_payment_recipient, wallet::is_evm_payment_network, wallet::is_evm_wallet_algorithm,
+        wallet::WalletSelectionStrategy, Amount, ApprovalRequest, ApprovalStatus, PaymentAuthorizationResult,
+        PaymentChallenge, PaymentDirection, PaymentEvent, PaymentEventType, PaymentIntent, PaymentPolicy,
+        PaymentStatus, ReservationStatus,
     },
     storage::{
         AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
@@ -42,6 +44,8 @@ pub struct PaymentHandler {
     payments: Arc<dyn PaymentStorage>,
     protocols: Arc<ProtocolRegistry>,
     approval_ttl_seconds: i64,
+    wallet_selection_strategy: WalletSelectionStrategy,
+    metrics: AgentVaultMetrics,
 }
 
 impl PaymentHandler {
@@ -56,6 +60,8 @@ impl PaymentHandler {
         payments: Arc<dyn PaymentStorage>,
         protocols: Arc<ProtocolRegistry>,
         approval_ttl_seconds: i64,
+        wallet_selection_strategy: WalletSelectionStrategy,
+        metrics: AgentVaultMetrics,
     ) -> Result<Self> {
         if approval_ttl_seconds <= 0 {
             return Err(Error::Config("approval TTL must be positive".to_owned()));
@@ -66,6 +72,8 @@ impl PaymentHandler {
             payments,
             protocols,
             approval_ttl_seconds,
+            wallet_selection_strategy,
+            metrics,
         })
     }
 
@@ -91,6 +99,17 @@ impl PaymentHandler {
         }
 
         let selected = self.policy_decision(command, &request_hash, now).await?;
+        tracing::info!(
+            event.name = "agentvault.wallet.selected",
+            run.id = %command.run_id,
+            scenario.id = %command.scenario_id,
+            policy.id = %selected.policy.id,
+            wallet.id = %selected.wallet_id,
+            wallet.selection_strategy = ?self.wallet_selection_strategy,
+            "selected outbound wallet from the scenario policy pool"
+        );
+        self.metrics
+            .record_wallet_selection(self.wallet_selection_strategy.as_str());
         let (intent, action) = build_payment_intent(
             command,
             &selected.policy.id,
@@ -255,7 +274,7 @@ impl PaymentHandler {
                 });
             }
         }
-        candidates.sort_by(compare_candidates);
+        candidates.sort_by(|left, right| compare_candidates(self.wallet_selection_strategy, left, right));
         candidates
             .into_iter()
             .next()
@@ -277,15 +296,29 @@ struct PolicyWalletCandidate {
     decision: PolicyDecision,
 }
 
-fn compare_candidates(left: &PolicyWalletCandidate, right: &PolicyWalletCandidate) -> std::cmp::Ordering {
-    decision_rank(&left.decision)
-        .cmp(&decision_rank(&right.decision))
-        .then_with(|| {
-            left.budget
-                .wallet_spent_and_reserved
-                .cmp(&right.budget.wallet_spent_and_reserved)
-        })
-        .then_with(|| left.selection_key.cmp(&right.selection_key))
+fn compare_candidates(
+    strategy: WalletSelectionStrategy,
+    left: &PolicyWalletCandidate,
+    right: &PolicyWalletCandidate,
+) -> std::cmp::Ordering {
+    let ranked = decision_rank(&left.decision).cmp(&decision_rank(&right.decision));
+    let ranked = match strategy {
+        WalletSelectionStrategy::LeastSpent => ranked
+            .then_with(|| {
+                left.budget
+                    .wallet_spent_and_reserved
+                    .cmp(&right.budget.wallet_spent_and_reserved)
+            })
+            .then_with(|| left.selection_key.cmp(&right.selection_key)),
+        WalletSelectionStrategy::StableRandom => ranked
+            .then_with(|| left.selection_key.cmp(&right.selection_key))
+            .then_with(|| {
+                left.budget
+                    .wallet_spent_and_reserved
+                    .cmp(&right.budget.wallet_spent_and_reserved)
+            }),
+    };
+    ranked
         .then_with(|| left.policy.id.cmp(&right.policy.id))
         .then_with(|| left.wallet_id.cmp(&right.wallet_id))
 }
@@ -473,7 +506,6 @@ fn approval_required_message(
         aggregate_id: intent.id.clone(),
         event_type: "approval_required".to_owned(),
         destination: format!("client:{}.approvals", access.client.id),
-        correlation_id: intent.id.clone(),
         run_id: intent.run_id.clone(),
         payload: json!({
             "approval_id": approval.id,

@@ -1,6 +1,9 @@
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, time::Duration};
 
-use agentvault_sdk::{AgentVault, AxumPayeeMiddleware, AxumPayeeRoute, HttpVaultTransport, PayeeConfig};
+use agentvault_sdk::{
+    AgentVault, AxumPayeeMiddleware, AxumPayeeRoute, GrpcConfig, GrpcVaultTransport, MqttConfig, MqttVaultTransport,
+    PayeeConfig, TransportError, TransportRequest, TransportResponse, VaultTransport,
+};
 use axum::{routing::post, Router};
 
 use crate::{
@@ -25,13 +28,7 @@ impl MarketPulseServer {
     /// address is invalid, or the durable `SQLite` store cannot be opened.
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let bind = parse_bind(&required_env("MARKETPULSE_BIND")?)?;
-        let vault_url = required_env("AGENTVAULT_URL")?;
-        let transport = match env::var("MARKETPULSE_AUTHGUARD_BEARER") {
-            Ok(value) if !value.trim().is_empty() => {
-                HttpVaultTransport::new(&vault_url)?.with_authguard_bearer(value)?
-            }
-            _ => HttpVaultTransport::new(&vault_url)?,
-        };
+        let transport = payee_transport()?;
         let payee: AxumPayeeMiddleware<_> =
             AgentVault::new(transport)
                 .payee(PayeeConfig::default())?
@@ -75,6 +72,57 @@ impl MarketPulseServer {
 
 fn parse_bind(value: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
     Ok(value.parse()?)
+}
+
+#[derive(Clone)]
+enum PayeeTransport {
+    Mqtt(MqttVaultTransport),
+    Grpc(GrpcVaultTransport),
+}
+
+impl VaultTransport for PayeeTransport {
+    async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+        match self {
+            Self::Mqtt(transport) => transport.send(request).await,
+            Self::Grpc(transport) => transport.send(request).await,
+        }
+    }
+}
+
+fn payee_transport() -> Result<PayeeTransport, Box<dyn std::error::Error>> {
+    match env::var("AGENTVAULT_TRANSPORT")
+        .unwrap_or_else(|_| "mqtt".to_owned())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mqtt" => Ok(PayeeTransport::Mqtt(MqttVaultTransport::new(MqttConfig {
+            host: required_env("AGENTVAULT_MQTT_HOST")?,
+            port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
+            tls: boolean_env("AGENTVAULT_MQTT_TLS")?,
+            username: required_env("AGENTVAULT_MQTT_USERNAME")?,
+            password: required_env("AGENTVAULT_MQTT_PASSWORD")?,
+            connection_prefix: "marketpulse-rust".to_owned(),
+            vault_client_id: required_env("AGENTVAULT_MQTT_CLIENT_ID")?,
+            request_timeout: Duration::from_secs(required_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?.parse()?),
+            max_response_bytes: 2 * 1024 * 1024,
+        })?)),
+        "grpc" => {
+            let mut config = GrpcConfig::new(required_env("AGENTVAULT_GRPC_ENDPOINT")?)
+                .with_tls(boolean_env("AGENTVAULT_GRPC_TLS")?);
+            config.request_timeout = Duration::from_secs(required_env("AGENTVAULT_GRPC_TIMEOUT_SECONDS")?.parse()?);
+            Ok(PayeeTransport::Grpc(GrpcVaultTransport::new(config)?))
+        }
+        _ => Err("AGENTVAULT_TRANSPORT must be mqtt or grpc".into()),
+    }
+}
+
+fn boolean_env(name: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    match env::var(name).unwrap_or_else(|_| "false".to_owned()).trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("{name} must be true or false").into()),
+    }
 }
 
 #[cfg(test)]

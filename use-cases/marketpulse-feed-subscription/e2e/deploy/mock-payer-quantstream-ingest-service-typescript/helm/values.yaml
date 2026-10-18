@@ -12,12 +12,12 @@ args:
   - "--once"
 env:
   MARKETPULSE_URL: "http://marketpulse:8081/mcp"
-  QUANTSTREAM_CLIENT_ID: "client-quantstream"
-  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-market-ingestion"
+  QUANTSTREAM_CLIENT_ID: "client-quantstream-typescript"
+  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-typescript-market-ingestion"
   AGENTVAULT_MQTT_HOST: "emqx"
   AGENTVAULT_MQTT_PORT: "1883"
   AGENTVAULT_MQTT_TLS: "false"
-  AGENTVAULT_MQTT_USERNAME: "quantstream-workload"
+  AGENTVAULT_MQTT_USERNAME: "quantstream-typescript-workload"
   QUANTSTREAM_DATABASE: "/var/lib/quantstream/ingestion.sqlite3"
 secret:
   name: marketpulse-e2e-secrets

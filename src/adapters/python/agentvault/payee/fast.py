@@ -9,11 +9,10 @@ from typing import Any, Awaitable, Callable, Mapping, MutableMapping
 
 from ..model import PayeeOperation, PaymentChallenge, SettledIncomingPayment
 from ..transport import APIError
-from .payee import PayeeMiddleware
+from .payee import PayeeMiddleware, _event
 
 ASGIApp = Callable[[MutableMapping[str, Any], Callable[[], Awaitable[Mapping[str, Any]]],
                     Callable[[Mapping[str, Any]], Awaitable[None]]], Awaitable[None]]
-
 
 @dataclass(frozen=True)
 class FastPayeeRoute:
@@ -110,6 +109,11 @@ class FastPayeeMiddleware:
                 await send(message)
 
         await self.app(scope, _body_receiver(body), paid_send)
+        _event(
+            "agentvault.sdk.payee.resource_released",
+            run_id=run_id,
+            intent_id=payment.intent.id,
+        )
 
 
 def settled_payment(scope: Mapping[str, Any]) -> SettledIncomingPayment | None:

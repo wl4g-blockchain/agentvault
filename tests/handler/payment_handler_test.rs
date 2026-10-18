@@ -160,7 +160,7 @@ fn wallet_selection_prefers_authorizable_then_least_used_candidates() {
     let busy = candidate("wallet-c", 10, PolicyDecision::Allowed);
     let idle = candidate("wallet-d", 1, PolicyDecision::Allowed);
     let mut candidates = [denied, approval, busy, idle];
-    candidates.sort_by(compare_candidates);
+    candidates.sort_by(|left, right| compare_candidates(WalletSelectionStrategy::LeastSpent, left, right));
     assert_eq!(candidates[0].wallet_id, "wallet-d");
     assert_eq!(candidates[1].wallet_id, "wallet-c");
     assert!(matches!(candidates[2].decision, PolicyDecision::RequiresApproval));
@@ -177,8 +177,8 @@ fn wallet_selection_tie_breaker_is_stable_per_request() {
         candidate("wallet-b", 0, PolicyDecision::Allowed),
         candidate("wallet-a", 0, PolicyDecision::Allowed),
     ];
-    first.sort_by(compare_candidates);
-    second.sort_by(compare_candidates);
+    first.sort_by(|left, right| compare_candidates(WalletSelectionStrategy::StableRandom, left, right));
+    second.sort_by(|left, right| compare_candidates(WalletSelectionStrategy::StableRandom, left, right));
     assert_eq!(first[0].wallet_id, second[0].wallet_id);
 }
 

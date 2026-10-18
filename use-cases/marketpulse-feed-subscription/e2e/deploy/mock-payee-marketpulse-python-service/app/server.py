@@ -4,7 +4,10 @@ import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from agentvault import AgentVault, FastPayeeMiddleware, FastPayeeRoute, HttpVaultTransport
+from agentvault import (
+    AgentVault, FastPayeeMiddleware, FastPayeeRoute, GrpcConfig,
+    GrpcVaultTransport, MqttConfig, MqttVaultTransport, VaultTransport,
+)
 from fastapi import FastAPI, Response
 
 from app.handler.feed import FeedHandler
@@ -24,10 +27,7 @@ class MarketPulseServer:
     @classmethod
     def from_environment(cls) -> "MarketPulseServer":
         host, port = _parse_bind(_required("MARKETPULSE_BIND"))
-        transport = HttpVaultTransport(
-            _required("AGENTVAULT_URL"),
-            authguard_bearer=os.environ.get("MARKETPULSE_AUTHGUARD_BEARER") or None,
-        )
+        transport = _payee_transport()
         payee = AgentVault(transport).payee()
         storage = FeedSQLiteStorage(_required("MARKETPULSE_DATABASE"))
         handler = FeedHandler(storage, os.environ.get("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION") == "true")
@@ -37,6 +37,9 @@ class MarketPulseServer:
             try:
                 yield
             finally:
+                close = getattr(transport, "close", None)
+                if callable(close):
+                    close()
                 storage.close()
 
         application = FastAPI(title="MarketPulse Python Payee", version="0.1.0", lifespan=lifespan)
@@ -79,3 +82,32 @@ def _parse_bind(bind: str) -> tuple[str, int]:
     if not 0 < parsed <= 65535:
         raise RuntimeError("MARKETPULSE_BIND port is out of range")
     return host, parsed
+
+
+def _payee_transport() -> VaultTransport:
+    transport = os.environ.get("AGENTVAULT_TRANSPORT", "mqtt").strip().lower()
+    if transport == "mqtt":
+        return MqttVaultTransport(MqttConfig(
+            host=_required("AGENTVAULT_MQTT_HOST"),
+            port=int(_required("AGENTVAULT_MQTT_PORT")),
+            tls=_boolean("AGENTVAULT_MQTT_TLS"),
+            username=_required("AGENTVAULT_MQTT_USERNAME"),
+            password=_required("AGENTVAULT_MQTT_PASSWORD"),
+            connection_prefix="marketpulse-python",
+            vault_client_id=_required("AGENTVAULT_MQTT_CLIENT_ID"),
+            timeout=float(_required("AGENTVAULT_MQTT_TIMEOUT_SECONDS")),
+        ))
+    if transport == "grpc":
+        return GrpcVaultTransport(GrpcConfig(
+            endpoint=_required("AGENTVAULT_GRPC_ENDPOINT"),
+            tls=_boolean("AGENTVAULT_GRPC_TLS"),
+            timeout=float(_required("AGENTVAULT_GRPC_TIMEOUT_SECONDS")),
+        ))
+    raise RuntimeError("AGENTVAULT_TRANSPORT must be mqtt or grpc")
+
+
+def _boolean(name: str) -> bool:
+    value = os.environ.get(name, "false").strip().lower()
+    if value not in {"true", "false"}:
+        raise RuntimeError(f"{name} must be true or false")
+    return value == "true"

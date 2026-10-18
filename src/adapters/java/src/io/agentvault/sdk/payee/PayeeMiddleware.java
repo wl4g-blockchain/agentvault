@@ -5,7 +5,7 @@ import io.agentvault.sdk.model.Base;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
 import io.agentvault.sdk.model.Base.PaymentCredential;
 import io.agentvault.sdk.model.Base.PaymentReceipt;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.agentvault.sdk.model.Payee.Authorized;
 import io.agentvault.sdk.model.Payee.CreateChallengeRequest;
 import io.agentvault.sdk.model.Payee.PayeeOperation;
@@ -20,6 +20,7 @@ import io.agentvault.sdk.model.Payee.VerifyPaymentRequest;
 
 /** Transport-neutral inbound challenge, verification, and settlement state machine. */
 public final class PayeeMiddleware {
+    private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
     private final VaultTransport transport;
     private final PayeeConfig config;
 
@@ -45,7 +46,9 @@ public final class PayeeMiddleware {
     }
 
     public ProtectionOutcome protect(PayeeOperation operation) {
+        event("agentvault.sdk.payee.intercepted", operation.runId(), null);
         PaymentChallenge challenge = challenge(operation);
+        event("agentvault.sdk.payee.challenge_created", operation.runId(), challenge.challengeHash());
         if (operation.credentialPayload() == null) return new PaymentRequired(challenge);
         String challengeHash = challenge.challengeHash();
         Base.required("challenge_hash", challengeHash);
@@ -62,13 +65,20 @@ public final class PayeeMiddleware {
             throw new IllegalStateException("valid AgentVault verification omitted verification_ref");
         }
         validateVerificationBinding(operation, challenge, verification);
+        event("agentvault.sdk.payee.verified", operation.runId(), verification.intent().id());
         var settlement = operation.settlementContext();
         SettledIncomingPayment payment = transport.post(
                 "/api/v1/payee/settle",
                 new SettlePaymentRequest(settlement, verification.intent().id(), verification.verificationRef()),
                 SettledIncomingPayment.class);
         validateSettlementBinding(operation, verification, payment);
+        event("agentvault.sdk.payee.settled", operation.runId(), payment.intent().id());
         return new Authorized(payment);
+    }
+
+    private static void event(String event, String runId, String evidence) {
+        LOG.log(System.Logger.Level.INFO, "{0} run_id={1} evidence={2}",
+                event, runId, evidence == null ? "" : evidence);
     }
 
     public PaymentOffer resolveOffer(ResolveOfferRequest request) {

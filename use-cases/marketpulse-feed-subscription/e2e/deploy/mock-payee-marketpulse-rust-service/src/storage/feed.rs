@@ -73,7 +73,11 @@ pub enum DeliveryState {
 }
 
 impl StoredSettlement {
-    #[must_use]
+    /// Projects a verified settlement into the durable delivery record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settled intent belongs to a different run.
     pub fn from_payment(run_id: &str, payment: &SettledIncomingPayment) -> Result<Self, String> {
         if payment.intent.run_id != run_id {
             return Err("settlement is not bound to the workflow run".to_owned());

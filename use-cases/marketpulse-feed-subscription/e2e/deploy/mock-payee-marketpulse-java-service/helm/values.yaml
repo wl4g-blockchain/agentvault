@@ -11,7 +11,16 @@ command: []
 args: []
 env:
   MARKETPULSE_BIND: "0.0.0.0:8081"
-  AGENTVAULT_URL: "http://agentvault-e2e:8080/api/v1"
+  AGENTVAULT_TRANSPORT: "mqtt"
+  AGENTVAULT_GRPC_ENDPOINT: "agentvault.example:443"
+  AGENTVAULT_GRPC_TLS: "true"
+  AGENTVAULT_GRPC_TIMEOUT_SECONDS: "15"
+  AGENTVAULT_MQTT_HOST: "emqx.example"
+  AGENTVAULT_MQTT_PORT: "8883"
+  AGENTVAULT_MQTT_TLS: "true"
+  AGENTVAULT_MQTT_USERNAME: "marketpulse-payee"
+  AGENTVAULT_MQTT_CLIENT_ID: "client-marketpulse"
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: "15"
   MARKETPULSE_SCENARIO_ID: "scenario-marketpulse-feed"
   MARKETPULSE_OFFER_ID: "offer-realtime-news"
   MARKETPULSE_RESOURCE_URL: "http://marketpulse-java:8081/mcp"
@@ -20,7 +29,8 @@ env:
   MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION: "true"
 secret:
   name: marketpulse-java-e2e-secrets
-  env: {}
+  env:
+    AGENTVAULT_MQTT_PASSWORD: agentvault-mqtt-password
 ports:
   - { name: http, containerPort: 8081, servicePort: 8081 }
 service:

@@ -12,16 +12,30 @@ import time
 HOST = os.environ.get("MQTT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MQTT_PORT", "28883"))
 WORKLOAD_PASSWORD = os.environ["MQTT_WORKLOAD_PASSWORD"]
+WORKLOAD_USERNAME = os.environ["MQTT_WORKLOAD_USERNAME"]
 APPROVER_PASSWORD = os.environ["MQTT_APPROVER_PASSWORD"]
+APPROVER_USERNAME = os.environ["MQTT_APPROVER_USERNAME"]
 VAULT_PASSWORD = os.environ["MQTT_VAULT_PASSWORD"]
+PAYEE_PASSWORD = os.environ["MQTT_PAYEE_PASSWORD"]
+CLIENT_ID = os.environ["MQTT_CLIENT_ID"]
+APPROVER_PRINCIPAL = os.environ["MQTT_APPROVER_PRINCIPAL"]
 PREFIX = "agentvault/v1/clients"
 CONSUMER_GROUP = os.environ.get("MQTT_CONSUMER_GROUP", "agentvault-e2e")
-OWN = f"{PREFIX}/client-quantstream/commands/authorize"
-CROSS = f"{PREFIX}/client-forbidden/commands/authorize"
-DECISION = f"{PREFIX}/client-quantstream/approvers/principal-quantstream-admin/decisions"
-RESULT = f"{PREFIX}/client-quantstream/results/acl-roundtrip"
-APPROVAL = f"{PREFIX}/client-quantstream/approvals/required"
-PAYMENT_EVENT = f"{PREFIX}/client-quantstream/payments/events/+"
+OTHER_CLIENT_ID = next(
+    value for value in (
+        "client-quantstream-rust", "client-quantstream-go", "client-quantstream-python",
+        "client-quantstream-typescript", "client-quantstream-java",
+    ) if value != CLIENT_ID
+)
+OWN = f"{PREFIX}/{CLIENT_ID}/commands/authorize"
+CROSS = f"{PREFIX}/{OTHER_CLIENT_ID}/commands/authorize"
+DECISION = f"{PREFIX}/{CLIENT_ID}/approvers/{APPROVER_PRINCIPAL}/decisions"
+CROSS_DECISION = f"{PREFIX}/{OTHER_CLIENT_ID}/approvers/principal-forbidden/decisions"
+RESULT = f"{PREFIX}/{CLIENT_ID}/results/acl-roundtrip"
+PAYEE_COMMAND = f"{PREFIX}/client-marketpulse/commands/create-challenge"
+PAYEE_RESULT = f"{PREFIX}/client-marketpulse/results/acl-roundtrip"
+APPROVAL = f"{PREFIX}/{CLIENT_ID}/approvals/required"
+PAYMENT_EVENT = f"{PREFIX}/{CLIENT_ID}/payments/events/+"
 COMMAND_FILTERS = [
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/authorize",
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/outbound-response",
@@ -126,13 +140,13 @@ def receive_publish(connection: socket.socket, expected: bytes, timeout: float) 
     return False
 
 
-connect("bad-password-probe", "quantstream-workload", "definitely-wrong", accepted=False)
+connect("bad-password-probe", WORKLOAD_USERNAME, "definitely-wrong", accepted=False)
 vault = connect("vault-acl-probe", "agentvault-vault", VAULT_PASSWORD)
 for packet_id, topic in enumerate(COMMAND_FILTERS, start=1):
     subscribe(vault, topic, packet_id)
 subscribe(vault, f"$share/{CONSUMER_GROUP}/{PREFIX}/+/approvers/+/decisions", 20)
-workload = connect("workload-acl-probe", "quantstream-workload", WORKLOAD_PASSWORD)
-subscribe(workload, f"{PREFIX}/client-quantstream/results/+", 1)
+workload = connect("workload-acl-probe", WORKLOAD_USERNAME, WORKLOAD_PASSWORD)
+subscribe(workload, f"{PREFIX}/{CLIENT_ID}/results/+", 1)
 subscribe(workload, APPROVAL, 2, accepted=False)
 subscribe(workload, PAYMENT_EVENT, 3, accepted=False)
 own_marker = b"allowed-own-client"
@@ -147,17 +161,36 @@ forged_decision_marker = b"workload-must-not-approve"
 publish(workload, DECISION, forged_decision_marker, 5)
 if receive_publish(vault, forged_decision_marker, 1.0):
     raise RuntimeError("workload MQTT identity published an approval decision")
-approver = connect("approver-acl-probe", "quantstream-approver", APPROVER_PASSWORD)
+approver = connect("approver-acl-probe", APPROVER_USERNAME, APPROVER_PASSWORD)
 subscribe(approver, APPROVAL, 7)
 decision_marker = b"allowed-registered-approver"
 publish(approver, DECISION, decision_marker, 6)
 if not receive_publish(vault, decision_marker, 2.0):
     raise RuntimeError("registered approver decision was not delivered")
+cross_decision_marker = b"approver-must-not-cross-client"
+publish(approver, CROSS_DECISION, cross_decision_marker, 8)
+if receive_publish(vault, cross_decision_marker, 1.0):
+    raise RuntimeError("approver MQTT identity crossed its client boundary")
 result_marker = b"allowed-vault-result"
 publish(vault, RESULT, result_marker, 30)
 if not receive_publish(workload, result_marker, 2.0):
     raise RuntimeError("AgentVault result was not delivered to its client workload")
+payee = connect("payee-acl-probe", "marketpulse-payee", PAYEE_PASSWORD)
+subscribe(payee, f"{PREFIX}/client-marketpulse/results/+", 40)
+payee_marker = b"allowed-marketpulse-payee"
+publish(payee, PAYEE_COMMAND, payee_marker, 41)
+if not receive_publish(vault, payee_marker, 2.0):
+    raise RuntimeError("MarketPulse Payee command was not delivered to AgentVault")
+payee_cross_marker = b"payee-must-not-cross-client"
+publish(payee, OWN, payee_cross_marker, 42)
+if receive_publish(vault, payee_cross_marker, 1.0):
+    raise RuntimeError("MarketPulse Payee crossed its client boundary")
+payee_result_marker = b"allowed-marketpulse-result"
+publish(vault, PAYEE_RESULT, payee_result_marker, 43)
+if not receive_publish(payee, payee_result_marker, 2.0):
+    raise RuntimeError("AgentVault result was not delivered to MarketPulse Payee")
 workload.close()
 approver.close()
+payee.close()
 vault.close()
-print("MQTT password authentication, client isolation, and approver ACL checks passed")
+print(f"MQTT password authentication and isolated ACL checks passed for {CLIENT_ID}")

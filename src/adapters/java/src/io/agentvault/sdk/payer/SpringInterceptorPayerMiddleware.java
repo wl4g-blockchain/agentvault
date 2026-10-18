@@ -22,7 +22,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /** Spring RestClient/RestTemplate payer adapter with transparent paid retry. */
-public final class StandardPayerMiddleware implements ClientHttpRequestInterceptor {
+public final class SpringInterceptorPayerMiddleware implements ClientHttpRequestInterceptor {
+    private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
     @FunctionalInterface public interface ContextResolver {
         Optional<PayerRequestContext> resolve(HttpRequest request, byte[] body);
     }
@@ -30,11 +31,11 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
     private final PayerMiddleware core;
     private final ContextResolver resolver;
 
-    public StandardPayerMiddleware(PayerMiddleware core) {
-        this(core, StandardPayerMiddleware::contextFromHeaders);
+    public SpringInterceptorPayerMiddleware(PayerMiddleware core) {
+        this(core, SpringInterceptorPayerMiddleware::contextFromHeaders);
     }
 
-    public StandardPayerMiddleware(PayerMiddleware core, ContextResolver resolver) {
+    public SpringInterceptorPayerMiddleware(PayerMiddleware core, ContextResolver resolver) {
         this.core = java.util.Objects.requireNonNull(core, "core");
         this.resolver = java.util.Objects.requireNonNull(resolver, "resolver");
     }
@@ -74,10 +75,12 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
         }
         return next.exchange(request).flatMap(first -> {
             if (first.statusCode().value() != 402) return Mono.just(first);
+            event("agentvault.sdk.payer.x402_detected", context.orElseThrow().runId(), null, null);
             return first.bodyToMono(byte[].class).defaultIfEmpty(new byte[0]).flatMap(challenge -> {
                 if (challenge.length > core.config().maxChallengeBytes()) {
                     return Mono.error(new IOException("payment challenge exceeds configured limit"));
                 }
+                event("agentvault.sdk.payer.signing_requested", context.orElseThrow().runId(), null, null);
                 return Mono.fromCallable(() -> core.authorize(
                                 new PayerHttpRequest(
                                         request.method().name(), target.toString(), PayerMiddleware.origin(target),
@@ -87,6 +90,8 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
                                 context.orElseThrow()))
                         .subscribeOn(Schedulers.boundedElastic())
                         .flatMap(authorized -> {
+                            event("agentvault.sdk.payer.signed", context.orElseThrow().runId(),
+                                    authorized.intent().id(), null);
                             var delivery = core.credentialHeader(
                                     authorized, PayerMiddleware.origin(target),
                                     PayerMiddleware.copyHeaders(request.headers()));
@@ -105,6 +110,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
             PayerRequestContext context,
             io.agentvault.sdk.model.Payer.AuthorizedPayment authorized,
             int attempt) {
+        event("agentvault.sdk.payer.retrying", context.runId(), authorized.intent().id(), attempt + 1);
         return next.exchange(request).flatMap(response -> Mono.fromRunnable(() -> core.report(
                         context,
                         authorized,
@@ -132,6 +138,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
         URI target = PayerMiddleware.safeUri(request.getURI().toString());
         ClientHttpResponse first = execution.execute(request, body);
         if (first.getStatusCode().value() != 402) return first;
+        event("agentvault.sdk.payer.x402_detected", context.get().runId(), null, null);
         byte[] challenge;
         try (first) {
             challenge = first.getBody().readNBytes(core.config().maxChallengeBytes() + 1);
@@ -139,6 +146,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
         if (challenge.length > core.config().maxChallengeBytes()) {
             throw new IOException("payment challenge exceeds configured limit");
         }
+        event("agentvault.sdk.payer.signing_requested", context.get().runId(), null, null);
         var authorized = core.authorize(
                 new PayerHttpRequest(
                         request.getMethod().name(), target.toString(), PayerMiddleware.origin(target),
@@ -146,6 +154,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
                 new PayerHttpResponse(
                         402, PayerMiddleware.copyHeaders(first.getHeaders()), challenge),
                 context.get());
+        event("agentvault.sdk.payer.signed", context.get().runId(), authorized.intent().id(), null);
         var delivery = core.credentialHeader(
                 authorized, PayerMiddleware.origin(target), PayerMiddleware.copyHeaders(request.getHeaders()));
         HttpHeaders headers = new HttpHeaders();
@@ -153,6 +162,7 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
         headers.add(delivery.getKey(), delivery.getValue());
         HttpRequest paid = new HeaderRequest(request, headers);
         for (int attempt = 0; attempt <= core.config().deliveryRetries(); attempt++) {
+            event("agentvault.sdk.payer.retrying", context.get().runId(), authorized.intent().id(), attempt + 1);
             ClientHttpResponse response = execution.execute(paid, body);
             core.report(context.get(), authorized, new PayerHttpResponse(
                     response.getStatusCode().value(), PayerMiddleware.copyHeaders(response.getHeaders()), new byte[0]));
@@ -162,6 +172,11 @@ public final class StandardPayerMiddleware implements ClientHttpRequestIntercept
             response.close();
         }
         throw new IOException("payer retry loop ended unexpectedly");
+    }
+
+    private static void event(String event, String runId, String intentId, Integer attemptNo) {
+        LOG.log(System.Logger.Level.INFO, "{0} run_id={1} intent_id={2} attempt_no={3}",
+                event, runId, intentId == null ? "" : intentId, attemptNo == null ? "" : attemptNo);
     }
 
     private static Optional<PayerRequestContext> contextFromHeaders(HttpRequest request, byte[] ignored) {

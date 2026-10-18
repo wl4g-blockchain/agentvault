@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -43,7 +44,7 @@ func NewMCPToolRoute(path, tool, scenarioID, offerID, resource, origin string) G
 // GinPayeeMiddleware is registered with router.Use(middleware.Handler()).
 // Only exact configured routes are buffered and protected.
 type GinPayeeMiddleware struct {
-	core         *PayeeMiddleware
+	*PayeeMiddleware
 	routes       map[string]GinPayeeRoute
 	maxBodyBytes int64
 }
@@ -53,7 +54,7 @@ func NewGinPayeeMiddleware(core *PayeeMiddleware, routes ...GinPayeeRoute) *GinP
 	for _, route := range routes {
 		indexed[route.Method+" "+route.Path] = route
 	}
-	return &GinPayeeMiddleware{core: core, routes: indexed, maxBodyBytes: defaultMaxBodyBytes}
+	return &GinPayeeMiddleware{PayeeMiddleware: core, routes: indexed, maxBodyBytes: defaultMaxBodyBytes}
 }
 
 func (middleware *GinPayeeMiddleware) WithMaxBodyBytes(limit int64) *GinPayeeMiddleware {
@@ -70,7 +71,7 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			ginContext.Next()
 			return
 		}
-		if middleware.core == nil || middleware.maxBodyBytes <= 0 {
+		if middleware.PayeeMiddleware == nil || middleware.maxBodyBytes <= 0 {
 			abort(ginContext, http.StatusInternalServerError, "PAYEE_CONFIG_INVALID", "payee middleware is not configured")
 			return
 		}
@@ -93,7 +94,7 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
 			return
 		}
-		outcome, err := middleware.core.Protect(ginContext.Request.Context(), model.PayeeOperation{
+		outcome, err := middleware.Protect(ginContext.Request.Context(), model.PayeeOperation{
 			ScenarioID: route.ScenarioID, RunID: runID,
 			OfferID: route.OfferID, Resource: route.Resource, Origin: route.Origin,
 			Protocol: route.Protocol, RequestHash: hashRequest(ginContext.Request, body),
@@ -126,6 +127,9 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 		ginContext.Header("Payment-Response", paymentResponse)
 		ginContext.Set(settlementContextKey, outcome.Payment)
 		ginContext.Next()
+		slog.Info("payee middleware released protected resource",
+			"event.name", "agentvault.sdk.payee.resource_released", "run.id", runID,
+			"payment.intent_id", outcome.Payment.Intent.ID)
 	}
 }
 

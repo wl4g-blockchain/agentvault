@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.config.Config.PayeeConfig;
 import io.agentvault.sdk.model.Base.AssetIdentity;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.agentvault.sdk.model.Payee.PayeeOperation;
 import io.agentvault.sdk.model.Payee.PaymentRequired;
 import java.util.ArrayList;

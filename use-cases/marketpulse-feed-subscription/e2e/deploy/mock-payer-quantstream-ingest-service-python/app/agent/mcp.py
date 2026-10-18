@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from mcp.client.streamable_http import streamable_http_client
 
 from agentvault import (
     AgentVault,
+    GrpcConfig,
+    GrpcVaultTransport,
     MqttConfig,
     MqttVaultTransport,
     PayerConfig,
@@ -20,6 +23,7 @@ from agentvault import (
 
 YESTERDAY_TOOL = "marketpulse.yesterday_news"
 REALTIME_TOOL = "marketpulse.realtime_news"
+LOG = logging.getLogger("quantstream.agent")
 
 
 @dataclass(frozen=True)
@@ -33,28 +37,38 @@ class MCPHelper:
 
     def __init__(self, stack: AsyncExitStack, session: ClientSession,
                  payer_transport: _PayerMCPTransport,
-                 mqtt: MqttVaultTransport, tools: set[str]) -> None:
+                 vault_transport: Any, tools: set[str]) -> None:
         self._stack = stack
         self._session = session
         self._payer_transport = payer_transport
-        self._mqtt = mqtt
+        self._vault_transport = vault_transport
         self.tools = frozenset(tools)
 
     @classmethod
     async def from_environment(cls) -> "MCPHelper":
         timeout = float(_positive("AGENTVAULT_MQTT_TIMEOUT_SECONDS"))
-        mqtt = MqttVaultTransport(MqttConfig(
-            host=_required("AGENTVAULT_MQTT_HOST"),
-            port=_positive("AGENTVAULT_MQTT_PORT"),
-            tls=_boolean("AGENTVAULT_MQTT_TLS"),
-            username=_required("AGENTVAULT_MQTT_USERNAME"),
-            password=_required("AGENTVAULT_MQTT_PASSWORD"),
-            connection_prefix="quantstream-python",
-            vault_client_id=_required("QUANTSTREAM_CLIENT_ID"),
-            timeout=timeout,
-        ))
-        mqtt.connect()
-        core = AgentVault(mqtt).payer(PayerConfig(
+        transport_name = os.environ.get("AGENTVAULT_TRANSPORT", "mqtt").strip().lower()
+        if transport_name == "mqtt":
+            vault_transport = MqttVaultTransport(MqttConfig(
+                host=_required("AGENTVAULT_MQTT_HOST"),
+                port=_positive("AGENTVAULT_MQTT_PORT"),
+                tls=_boolean("AGENTVAULT_MQTT_TLS"),
+                username=_required("AGENTVAULT_MQTT_USERNAME"),
+                password=_required("AGENTVAULT_MQTT_PASSWORD"),
+                connection_prefix="quantstream-python",
+                vault_client_id=_required("QUANTSTREAM_CLIENT_ID"),
+                timeout=timeout,
+            ))
+            vault_transport.connect()
+        elif transport_name == "grpc":
+            vault_transport = GrpcVaultTransport(GrpcConfig(
+                endpoint=_required("AGENTVAULT_GRPC_ENDPOINT"),
+                tls=_boolean("AGENTVAULT_GRPC_TLS"), timeout=timeout,
+            ))
+        else:
+            raise RuntimeError("AGENTVAULT_TRANSPORT must be mqtt or grpc")
+        LOG.info("agentvault.sdk.payer.transport_selected transport=%s", transport_name)
+        core = AgentVault(vault_transport).payer(PayerConfig(
             scenario_id=_required("QUANTSTREAM_SCENARIO_ID"),
             approval_timeout=float(_positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")),
             delivery_retries=1,
@@ -78,17 +92,17 @@ class MCPHelper:
             for required_tool in (YESTERDAY_TOOL, REALTIME_TOOL):
                 if required_tool not in tools:
                     raise RuntimeError(f"MarketPulse MCP server did not expose {required_tool}")
-            return cls(stack, session, payer_transport, mqtt, tools)
+            return cls(stack, session, payer_transport, vault_transport, tools)
         except BaseException:
             await stack.aclose()
             await payer.close()
-            mqtt.close()
+            vault_transport.close()
             raise
 
     async def close(self) -> None:
         await self._stack.aclose()
         await self._payer_transport.close()
-        self._mqtt.close()
+        self._vault_transport.close()
 
     async def yesterday_news(self, run_id: str) -> ToolResult:
         return await self._call(YESTERDAY_TOOL, run_id, False)

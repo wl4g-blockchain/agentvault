@@ -2,7 +2,7 @@ package io.agentvault.sdk.payee;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import io.agentvault.sdk.config.Config.PayeeConfig;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import org.junit.jupiter.api.Test;
 
 final class StandardPayeeMiddlewareTest {

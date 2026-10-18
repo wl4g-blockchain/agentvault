@@ -70,6 +70,25 @@ CREATE UNIQUE INDEX uq_pay_wallet_evm_address
     ON pay_wallet(lower(address))
     WHERE address ~* '^0x[0-9a-f]{40}$';
 
+-- Periodic, non-authoritative chain observations used by management,
+-- alerting, and capacity planning. Signing still performs a fresh trusted
+-- balance check immediately before using a key.
+CREATE TABLE pay_wallet_balance (
+    wallet_id           TEXT NOT NULL REFERENCES pay_wallet(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    network             TEXT NOT NULL CHECK (length(trim(network)) > 0),
+    asset               TEXT NOT NULL CHECK (length(trim(asset)) > 0),
+    token_contract      TEXT NOT NULL DEFAULT '',
+    asset_decimals      SMALLINT NOT NULL CHECK (asset_decimals BETWEEN 0 AND 255),
+    asset_available     pay_uint128 NOT NULL,
+    native_available    pay_uint128 NOT NULL,
+    observed_at         BIGINT NOT NULL CHECK (observed_at >= 0),
+    updated_at          BIGINT NOT NULL CHECK (updated_at >= observed_at),
+    PRIMARY KEY (wallet_id, network, asset, token_contract, asset_decimals)
+);
+
+CREATE INDEX ix_pay_wallet_balance_observed
+    ON pay_wallet_balance(observed_at, wallet_id);
+
 -- Key material uses AES-256-GCM envelope encryption with full UUID v4 nonces.
 -- XChaCha20-Poly1305 was the pre-release design and is intentionally unsupported.
 -- Rotation appends a version and retires the old row; encrypted material is immutable.
@@ -196,84 +215,9 @@ CREATE TABLE pay_policy (
     UNIQUE (id, scenario_id)
 );
 
-CREATE OR REPLACE FUNCTION pay_validate_policy_budget_unit()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF jsonb_typeof(NEW.assets) IS DISTINCT FROM 'array' OR EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements(NEW.assets) AS asset(value)
-        WHERE jsonb_typeof(value) IS DISTINCT FROM 'object'
-           OR jsonb_typeof(value->'asset') IS DISTINCT FROM 'string'
-           OR value->>'asset' IS DISTINCT FROM NEW.budget_asset
-           OR CASE
-                WHEN jsonb_typeof(value->'decimals') IS DISTINCT FROM 'number' THEN TRUE
-                WHEN value->>'decimals' !~ '^(0|[1-9][0-9]{0,2})$' THEN TRUE
-                ELSE (value->>'decimals')::INTEGER IS DISTINCT FROM NEW.budget_decimals
-              END
-    ) THEN
-        RAISE EXCEPTION 'policy assets must share the declared budget unit'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_policy_budget_unit
-    BEFORE INSERT OR UPDATE ON pay_policy
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_policy_budget_unit();
-
-CREATE OR REPLACE FUNCTION pay_protect_policy_identity()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF OLD.scenario_id IS DISTINCT FROM NEW.scenario_id
-       OR OLD.budget_asset IS DISTINCT FROM NEW.budget_asset
-       OR OLD.budget_decimals IS DISTINCT FROM NEW.budget_decimals THEN
-        RAISE EXCEPTION 'policy scenario and budget unit are immutable'
-            USING ERRCODE = '55000';
-    END IF;
-    IF NEW.enabled AND EXISTS (
-        SELECT 1
-          FROM pay_policy_wallet membership
-          JOIN pay_policy_wallet existing ON existing.wallet_id = membership.wallet_id
-          JOIN pay_policy other ON other.id = existing.policy_id
-         WHERE membership.policy_id = NEW.id
-           AND other.enabled
-           AND other.id <> NEW.id
-           AND other.scenario_id = NEW.scenario_id
-    ) THEN
-        RAISE EXCEPTION 'scenario wallet already has an enabled payment policy'
-            USING ERRCODE = '23505';
-    END IF;
-    IF NEW.enabled AND EXISTS (
-        SELECT 1
-          FROM pay_policy_wallet membership
-          JOIN pay_wallet wallet ON wallet.id = membership.wallet_id
-         WHERE membership.policy_id = NEW.id
-           AND (wallet.max_per_payment IS NULL OR wallet.max_per_day IS NULL)
-           AND EXISTS (
-                SELECT 1
-                  FROM pay_policy_wallet existing
-                  JOIN pay_policy other ON other.id = existing.policy_id
-                 WHERE existing.wallet_id = membership.wallet_id
-                   AND other.enabled
-                   AND other.id <> NEW.id
-                   AND other.scenario_id <> NEW.scenario_id
-           )
-    ) THEN
-        RAISE EXCEPTION 'wallet shared across scenarios requires aggregate hard limits'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_policy_identity_immutable
-    BEFORE UPDATE ON pay_policy
-    FOR EACH ROW EXECUTE FUNCTION pay_protect_policy_identity();
+-- Policy value and transition invariants are validated by the model and the
+-- explicit policy -> wallet storage transaction. The canonical schema keeps
+-- only declarative constraints; it contains no hidden business procedures.
 
 -- Explicit association: one policy authorizes one or more wallets. This table
 -- is relational membership, not a ninth financial aggregate.
@@ -283,77 +227,6 @@ CREATE TABLE pay_policy_wallet (
     created_at          BIGINT NOT NULL CHECK (created_at >= 0),
     PRIMARY KEY (policy_id, wallet_id)
 );
-
-CREATE OR REPLACE FUNCTION pay_validate_policy_wallet()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    policy_row pay_policy%ROWTYPE;
-    wallet_row pay_wallet%ROWTYPE;
-BEGIN
-    SELECT * INTO policy_row FROM pay_policy WHERE id = NEW.policy_id FOR SHARE;
-    SELECT * INTO wallet_row FROM pay_wallet WHERE id = NEW.wallet_id FOR UPDATE;
-
-    IF wallet_row.budget_asset IS NULL AND wallet_row.budget_decimals IS NULL THEN
-        UPDATE pay_wallet
-           SET budget_asset = policy_row.budget_asset,
-               budget_decimals = policy_row.budget_decimals,
-               updated_at = GREATEST(updated_at + 1, NEW.created_at)
-         WHERE id = NEW.wallet_id;
-    ELSIF wallet_row.budget_asset IS DISTINCT FROM policy_row.budget_asset
-       OR wallet_row.budget_decimals IS DISTINCT FROM policy_row.budget_decimals THEN
-        RAISE EXCEPTION 'policy budget unit does not match its wallet'
-            USING ERRCODE = '23514';
-    END IF;
-
-    IF policy_row.enabled AND EXISTS (
-        SELECT 1
-          FROM pay_policy_wallet existing
-          JOIN pay_policy other ON other.id = existing.policy_id
-         WHERE existing.wallet_id = NEW.wallet_id
-           AND other.enabled
-           AND other.scenario_id = policy_row.scenario_id
-           AND other.id <> policy_row.id
-    ) THEN
-        RAISE EXCEPTION 'scenario wallet already has an enabled payment policy'
-            USING ERRCODE = '23505';
-    END IF;
-
-    IF policy_row.enabled
-       AND (wallet_row.max_per_payment IS NULL OR wallet_row.max_per_day IS NULL)
-       AND EXISTS (
-            SELECT 1
-              FROM pay_policy_wallet existing
-              JOIN pay_policy other ON other.id = existing.policy_id
-             WHERE existing.wallet_id = NEW.wallet_id
-               AND other.enabled
-               AND other.scenario_id <> policy_row.scenario_id
-       ) THEN
-        RAISE EXCEPTION 'wallet shared across scenarios requires aggregate hard limits'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_policy_wallet_validate
-    BEFORE INSERT ON pay_policy_wallet
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_policy_wallet();
-
-CREATE OR REPLACE FUNCTION pay_policy_wallet_immutable()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    RAISE EXCEPTION 'policy wallet membership is immutable; replace the policy'
-        USING ERRCODE = '55000';
-END;
-$$;
-
-CREATE TRIGGER trg_pay_policy_wallet_immutable
-    BEFORE UPDATE OR DELETE ON pay_policy_wallet
-    FOR EACH ROW EXECUTE FUNCTION pay_policy_wallet_immutable();
 
 CREATE INDEX ix_pay_policy_wallet_wallet
     ON pay_policy_wallet(wallet_id, policy_id);
@@ -382,48 +255,6 @@ CREATE TABLE pay_offer (
     FOREIGN KEY (policy_id, wallet_id)
         REFERENCES pay_policy_wallet(policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT
 );
-
-CREATE OR REPLACE FUNCTION pay_validate_offer_policy()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    policy_row pay_policy%ROWTYPE;
-BEGIN
-    SELECT * INTO policy_row FROM pay_policy WHERE id = NEW.policy_id;
-    IF policy_row.inbound_max_per_payment IS NULL THEN
-        RAISE EXCEPTION 'offer policy does not authorize inbound payments'
-            USING ERRCODE = '23514';
-    END IF;
-    IF NEW.asset IS DISTINCT FROM policy_row.budget_asset
-       OR NEW.asset_decimals IS DISTINCT FROM policy_row.budget_decimals THEN
-        RAISE EXCEPTION 'offer asset does not match policy budget unit'
-            USING ERRCODE = '23514';
-    END IF;
-    IF NEW.amount > policy_row.inbound_max_per_payment
-       OR NOT EXISTS (
-            SELECT 1
-              FROM jsonb_array_elements(policy_row.assets) AS allowed(value)
-             WHERE allowed.value->>'network' = NEW.network
-               AND allowed.value->>'asset' = NEW.asset
-               AND (allowed.value->>'decimals')::INTEGER = NEW.asset_decimals
-               AND allowed.value->>'token_contract' IS NOT DISTINCT FROM NEW.token_contract
-       )
-       OR EXISTS (
-            SELECT 1
-              FROM jsonb_array_elements_text(NEW.protocols) AS offered(protocol)
-             WHERE NOT (policy_row.protocols ? offered.protocol)
-       ) THEN
-        RAISE EXCEPTION 'offer exceeds or falls outside its inbound policy scope'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_offer_policy
-    BEFORE INSERT OR UPDATE ON pay_offer
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_offer_policy();
 
 -- One active fixed-price offer owns one scenario resource. Its protocols array
 -- lists alternate wire adapters for that same price and recipient; allowing a
@@ -512,90 +343,9 @@ CREATE TABLE pay_intent (
     CHECK (settlement_ref IS NULL OR length(trim(settlement_ref)) > 0)
 );
 
-CREATE OR REPLACE FUNCTION pay_validate_intent_policy()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    policy_row pay_policy%ROWTYPE;
-BEGIN
-    -- A denied authorization is retained as an immutable audit record. Its
-    -- relational scenario/policy/wallet identity is still enforced by foreign
-    -- keys, but rejected amount/protocol facts need not pass the policy that
-    -- caused the denial.
-    IF NEW.status = 'failed' THEN
-        RETURN NEW;
-    END IF;
-
-    SELECT * INTO policy_row FROM pay_policy WHERE id = NEW.policy_id;
-    IF NEW.asset IS DISTINCT FROM policy_row.budget_asset
-       OR NEW.asset_decimals IS DISTINCT FROM policy_row.budget_decimals THEN
-        RAISE EXCEPTION 'intent asset does not match policy budget unit'
-            USING ERRCODE = '23514';
-    END IF;
-    IF (NEW.direction = 'inbound' AND policy_row.inbound_max_per_payment IS NULL)
-       OR (NEW.direction = 'outbound' AND policy_row.outbound_max_per_payment IS NULL) THEN
-        RAISE EXCEPTION 'policy does not authorize intent direction'
-            USING ERRCODE = '23514';
-    END IF;
-    IF NOT (policy_row.protocols ? NEW.protocol)
-       OR NOT EXISTS (
-            SELECT 1
-              FROM jsonb_array_elements(policy_row.assets) AS allowed(value)
-             WHERE allowed.value->>'network' = NEW.network
-               AND allowed.value->>'asset' = NEW.asset
-               AND (allowed.value->>'decimals')::INTEGER = NEW.asset_decimals
-               AND allowed.value->>'token_contract' IS NOT DISTINCT FROM NEW.token_contract
-       )
-       OR (NEW.direction = 'inbound' AND NEW.amount > policy_row.inbound_max_per_payment)
-       OR (NEW.direction = 'outbound' AND NEW.amount > policy_row.outbound_max_per_payment) THEN
-        RAISE EXCEPTION 'intent exceeds or falls outside its directional policy scope'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_intent_policy
-    BEFORE INSERT ON pay_intent
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_intent_policy();
-
 -- State transitions may change lifecycle, reservation, settlement, and lease
--- fields only. The authorized business identity is immutable after creation.
-CREATE OR REPLACE FUNCTION pay_protect_intent_identity()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF OLD.credential_hash IS NOT NULL
-       AND OLD.credential_hash IS DISTINCT FROM NEW.credential_hash THEN
-        RAISE EXCEPTION 'payment credential binding is immutable once set'
-            USING ERRCODE = '55000';
-    END IF;
-
-    IF ROW(
-        OLD.scenario_id, OLD.run_id, OLD.wallet_id, OLD.policy_id, OLD.offer_id,
-        OLD.direction, OLD.protocol, OLD.network, OLD.asset, OLD.token_contract,
-        OLD.asset_decimals, OLD.recipient, OLD.amount, OLD.resource,
-        OLD.challenge_hash, OLD.request_hash,
-        OLD.created_at, OLD.expires_at
-    ) IS DISTINCT FROM ROW(
-        NEW.scenario_id, NEW.run_id, NEW.wallet_id, NEW.policy_id, NEW.offer_id,
-        NEW.direction, NEW.protocol, NEW.network, NEW.asset, NEW.token_contract,
-        NEW.asset_decimals, NEW.recipient, NEW.amount, NEW.resource,
-        NEW.challenge_hash, NEW.request_hash,
-        NEW.created_at, NEW.expires_at
-    ) THEN
-        RAISE EXCEPTION 'payment intent identity is immutable'
-            USING ERRCODE = '55000';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_intent_identity_immutable
-    BEFORE UPDATE ON pay_intent
-    FOR EACH ROW EXECUTE FUNCTION pay_protect_intent_identity();
+-- fields only. Storage compares the full immutable identity and applies every
+-- lifecycle transition with an optimistic revision predicate.
 
 CREATE UNIQUE INDEX uq_pay_intent_credential
     ON pay_intent(protocol, direction, credential_hash)
@@ -767,46 +517,6 @@ CREATE UNIQUE INDEX uq_pay_ledger_reversal_once
     ON pay_ledger(reversal_of)
     WHERE reversal_of IS NOT NULL;
 
-CREATE OR REPLACE FUNCTION pay_validate_ledger_reversal()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    original pay_ledger%ROWTYPE;
-BEGIN
-    IF NEW.reversal_of IS NULL THEN
-        RETURN NEW;
-    END IF;
-
-    SELECT * INTO original
-      FROM pay_ledger
-     WHERE id = NEW.reversal_of
-     FOR KEY SHARE;
-
-    IF NOT FOUND
-       OR original.entry_type = 'reversal'
-       OR NEW.wallet_id <> original.wallet_id
-       OR NEW.intent_id IS DISTINCT FROM original.intent_id
-       OR NEW.scenario_id IS DISTINCT FROM original.scenario_id
-       OR NEW.network <> original.network
-       OR NEW.asset <> original.asset
-       OR NEW.token_contract IS DISTINCT FROM original.token_contract
-       OR NEW.asset_decimals <> original.asset_decimals
-       OR NEW.amount <> original.amount
-       OR NEW.direction = original.direction
-       OR NEW.effect_ref IS DISTINCT FROM original.effect_ref
-       OR NEW.transfer_ref IS DISTINCT FROM original.transfer_ref THEN
-        RAISE EXCEPTION 'ledger reversal must exactly negate one unreversed wallet fact'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_ledger_validate_reversal
-    BEFORE INSERT ON pay_ledger
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_ledger_reversal();
-
 CREATE INDEX ix_pay_ledger_scenario_direction_time
     ON pay_ledger(scenario_id, direction, effective_at DESC);
 CREATE INDEX ix_pay_ledger_wallet_direction_time
@@ -836,7 +546,6 @@ CREATE TABLE pay_outbox (
     aggregate_id        TEXT NOT NULL CHECK (length(trim(aggregate_id)) > 0),
     event_type          TEXT NOT NULL CHECK (length(trim(event_type)) > 0),
     destination         TEXT NOT NULL CHECK (length(trim(destination)) > 0),
-    correlation_id      TEXT NOT NULL CHECK (length(trim(correlation_id)) > 0),
     run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     payload             JSONB NOT NULL,
     status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'dead_letter')),
@@ -863,173 +572,9 @@ CREATE TABLE pay_outbox (
 CREATE INDEX ix_pay_outbox_claim
     ON pay_outbox(available_at, lease_expires_at, created_at)
     WHERE status = 'pending';
-CREATE INDEX ix_pay_outbox_correlation
-    ON pay_outbox(correlation_id, created_at);
-
-CREATE OR REPLACE FUNCTION pay_reject_append_only_mutation()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    RAISE EXCEPTION '% is append-only; % is forbidden', TG_TABLE_NAME, TG_OP
-        USING ERRCODE = '55000';
-END;
-$$;
-
-CREATE TRIGGER trg_pay_event_append_only
-    BEFORE UPDATE OR DELETE ON pay_event
-    FOR EACH ROW EXECUTE FUNCTION pay_reject_append_only_mutation();
-
-CREATE TRIGGER trg_pay_ledger_append_only
-    BEFORE UPDATE OR DELETE ON pay_ledger
-    FOR EACH ROW EXECUTE FUNCTION pay_reject_append_only_mutation();
-
-CREATE OR REPLACE FUNCTION pay_protect_wallet_key_version()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        RAISE EXCEPTION 'wallet key versions cannot be deleted'
-            USING ERRCODE = '55000';
-    END IF;
-
-    IF OLD.wallet_id IS DISTINCT FROM NEW.wallet_id
-        OR OLD.version IS DISTINCT FROM NEW.version
-        OR OLD.algorithm IS DISTINCT FROM NEW.algorithm
-        OR OLD.address IS DISTINCT FROM NEW.address
-        OR OLD.public_key IS DISTINCT FROM NEW.public_key
-        OR OLD.encryption_scheme IS DISTINCT FROM NEW.encryption_scheme
-        OR OLD.kek_id IS DISTINCT FROM NEW.kek_id
-        OR OLD.wrapped_data_key IS DISTINCT FROM NEW.wrapped_data_key
-        OR OLD.wrap_nonce IS DISTINCT FROM NEW.wrap_nonce
-        OR OLD.key_ciphertext IS DISTINCT FROM NEW.key_ciphertext
-        OR OLD.key_nonce IS DISTINCT FROM NEW.key_nonce
-        OR OLD.aad IS DISTINCT FROM NEW.aad
-        OR OLD.activated_at IS DISTINCT FROM NEW.activated_at
-        OR OLD.created_at IS DISTINCT FROM NEW.created_at
-    THEN
-        RAISE EXCEPTION 'wallet key version identity and encrypted material are immutable'
-            USING ERRCODE = '55000';
-    END IF;
-
-    IF NOT (
-        (
-            OLD.status = 'active'
-            AND (
-                (NEW.status = 'active' AND NEW.retired_at IS NULL)
-                OR (NEW.status IN ('retired', 'compromised') AND NEW.retired_at IS NOT NULL)
-            )
-        )
-        OR (
-            OLD.status = 'retired'
-            AND NEW.status IN ('retired', 'compromised')
-            AND OLD.retired_at IS NOT DISTINCT FROM NEW.retired_at
-        )
-        OR (
-            OLD.status = 'compromised'
-            AND NEW.status = 'compromised'
-            AND OLD.retired_at IS NOT DISTINCT FROM NEW.retired_at
-        )
-    ) THEN
-        RAISE EXCEPTION 'wallet key version lifecycle transitions are forward-only'
-            USING ERRCODE = '55000';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_wallet_key_version_protect
-    BEFORE UPDATE OR DELETE ON wallet_key_version
-    FOR EACH ROW EXECUTE FUNCTION pay_protect_wallet_key_version();
-
-CREATE OR REPLACE FUNCTION pay_validate_wallet_key_version_insert()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pay_wallet
-        WHERE id = NEW.wallet_id AND custody_type = 'local'
-    ) THEN
-        RAISE EXCEPTION 'encrypted key versions require a local-custody wallet'
-            USING ERRCODE = '23514';
-    END IF;
-
-    IF NEW.status = 'active' AND NOT EXISTS (
-        SELECT 1
-        FROM pay_wallet
-        WHERE id = NEW.wallet_id
-          AND algorithm = NEW.algorithm
-          AND address = NEW.address
-          AND public_key = NEW.public_key
-    ) THEN
-        RAISE EXCEPTION 'active key version must match current wallet metadata'
-            USING ERRCODE = '23514';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_wallet_key_version_validate_insert
-    BEFORE INSERT ON wallet_key_version
-    FOR EACH ROW EXECUTE FUNCTION pay_validate_wallet_key_version_insert();
-
-CREATE OR REPLACE FUNCTION pay_protect_wallet_metadata()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF OLD.custody_type IS DISTINCT FROM NEW.custody_type THEN
-        RAISE EXCEPTION 'wallet custody type is immutable'
-            USING ERRCODE = '55000';
-    END IF;
-
-    IF (
-        OLD.budget_asset IS DISTINCT FROM NEW.budget_asset
-        OR OLD.budget_decimals IS DISTINCT FROM NEW.budget_decimals
-    ) AND EXISTS (
-        SELECT 1 FROM pay_policy_wallet WHERE wallet_id = OLD.id
-    ) THEN
-        RAISE EXCEPTION 'wallet budget unit is immutable after policy binding'
-            USING ERRCODE = '55000';
-    END IF;
-
-    IF (NEW.max_per_payment IS NULL OR NEW.max_per_day IS NULL)
-       AND (
-            SELECT COUNT(DISTINCT policy.scenario_id)
-              FROM pay_policy_wallet membership
-              JOIN pay_policy policy ON policy.id = membership.policy_id
-             WHERE membership.wallet_id = OLD.id
-               AND policy.enabled
-       ) > 1 THEN
-        RAISE EXCEPTION 'wallet shared across scenarios requires aggregate hard limits'
-            USING ERRCODE = '23514';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1
-        FROM wallet_key_version
-        WHERE wallet_id = NEW.id
-          AND status = 'active'
-          AND (
-              algorithm IS DISTINCT FROM NEW.algorithm
-              OR address IS DISTINCT FROM NEW.address
-              OR public_key IS DISTINCT FROM NEW.public_key
-          )
-    ) THEN
-        RAISE EXCEPTION 'wallet metadata must match its active key version'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_pay_wallet_metadata_protect
-    BEFORE UPDATE ON pay_wallet
-    FOR EACH ROW EXECUTE FUNCTION pay_protect_wallet_metadata();
+-- Events, ledger facts, and encrypted key material are exposed only through
+-- append/forward-transition storage ports. Production PostgreSQL deployments
+-- use a migration owner and a least-privilege runtime role so these tables do
+-- not need procedural mutation guards in the canonical schema.
 
 COMMIT;

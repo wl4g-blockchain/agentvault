@@ -56,3 +56,11 @@ class PayeeMiddlewareTest(unittest.TestCase):
             transport.paths,
             ["/api/v1/payee/challenges", "/api/v1/payee/verify"],
         )
+
+    def test_observability_message_keeps_run_and_intent_identity(self):
+        from agentvault.payee.payee import _event
+
+        with self.assertLogs("agentvault.sdk", level="INFO") as captured:
+            _event("agentvault.sdk.payee.settled", run_id="run-1", intent_id="intent-1")
+        self.assertIn("run.id=run-1", captured.output[0])
+        self.assertIn("intent.id=intent-1", captured.output[0])

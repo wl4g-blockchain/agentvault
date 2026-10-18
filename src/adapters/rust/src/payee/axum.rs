@@ -186,6 +186,7 @@ where
         Ok(operation) => operation,
         Err(error) => return Ok(error_response(error.status, error.code, &error.message)),
     };
+    let run_id = operation.run_id.clone();
     match core.protect(&operation).await {
         Ok(ProtectionOutcome::PaymentRequired { challenge }) => Ok(challenge_response(&challenge)),
         Ok(ProtectionOutcome::Authorized { payment }) => {
@@ -200,6 +201,7 @@ where
                     ))
                 }
             };
+            let intent_id = settlement.intent.id.clone();
             let mut request = Request::from_parts(parts, Body::from(body));
             request.extensions_mut().insert(settlement);
             let mut response = inner.call(request).await?;
@@ -208,6 +210,11 @@ where
                     .headers_mut()
                     .insert(HeaderName::from_static("payment-response"), value);
             }
+            tracing::info!(
+                event.name = "agentvault.sdk.payee.resource_released",
+                run.id = %run_id,
+                payment.intent_id = %intent_id
+            );
             Ok(response)
         }
         Err(error) => Ok(sdk_error_response(error)),

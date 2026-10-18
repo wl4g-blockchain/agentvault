@@ -39,9 +39,13 @@ func TestStandardPayerMiddlewareRetriesPaidRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	standard := core.Standard(nil)
+	if standard.PayerMiddleware != core || standard.Config().ScenarioID != "scenario" {
+		t.Fatal("standard adapter does not embed the shared payer middleware")
+	}
 	request, _ := http.NewRequest(http.MethodPost, merchant.URL+"/mcp", strings.NewReader(`{}`))
 	operation, _ := model.NewPayerRequestContext("run-1")
-	response, err := core.Standard(nil).Client().Do(WithPayment(request, operation))
+	response, err := standard.Client().Do(WithPayment(request, operation))
 	if err != nil {
 		t.Fatal(err)
 	}

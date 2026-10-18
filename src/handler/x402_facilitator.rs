@@ -192,6 +192,15 @@ impl X402FacilitatorProvider {
             payment_requirements: payment.payment_requirements.clone(),
         };
         let response = self.transport.post_json(endpoint, &request.run_id, &wire).await?;
+        tracing::info!(
+            event.name = match operation {
+                SettlementOperation::Verify => "agentvault.facilitator.verify.completed",
+                SettlementOperation::Settle => "agentvault.facilitator.settle.completed",
+            },
+            run.id = %request.run_id,
+            http.response.status_code = response.status.as_u16(),
+            "completed the configured x402 facilitator operation"
+        );
         if !accepted_facilitator_status(response.status) {
             let reason = safe_facilitator_reason(&response.body)
                 .map(|reason| format!(": {reason}"))

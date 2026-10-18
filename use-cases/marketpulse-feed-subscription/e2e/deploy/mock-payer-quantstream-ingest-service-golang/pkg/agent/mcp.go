@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -30,35 +31,60 @@ type ToolResult struct {
 // MCPHelper owns one real mark3labs MCP client and injects the two remote
 // MarketPulse tools discovered during initialization.
 type MCPHelper struct {
-	client   *client.Client
-	payments *paymentRoundTripper
-	tools    map[string]struct{}
+	client         *client.Client
+	payments       *paymentRoundTripper
+	tools          map[string]struct{}
+	closeTransport func() error
 }
 
 func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 	values := &environment{}
-	mqttPort := values.positiveUint("AGENTVAULT_MQTT_PORT", 16)
-	mqttTLS := values.boolean("AGENTVAULT_MQTT_TLS")
 	mqttTimeout := values.positiveDuration("AGENTVAULT_MQTT_TIMEOUT_SECONDS")
 	approvalTimeout := values.positiveDuration("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")
-	mqttHost := values.required("AGENTVAULT_MQTT_HOST")
-	mqttUsername := values.required("AGENTVAULT_MQTT_USERNAME")
-	mqttPassword := values.required("AGENTVAULT_MQTT_PASSWORD")
-	clientID := values.required("QUANTSTREAM_CLIENT_ID")
 	scenarioID := values.required("QUANTSTREAM_SCENARIO_ID")
 	marketPulseURL := values.required("MARKETPULSE_URL")
 	if values.err != nil {
 		return nil, values.err
 	}
-	wire, err := agentvault.NewMqttVaultTransport(agentvault.MqttConfig{
-		Host: mqttHost, Port: uint16(mqttPort), TLS: mqttTLS,
-		Username: mqttUsername, Password: mqttPassword,
-		ConnectionPrefix: "quantstream-go", VaultClientID: clientID,
-		RequestTimeout: mqttTimeout,
-	})
+	transportName := os.Getenv("AGENTVAULT_TRANSPORT")
+	if transportName == "" {
+		transportName = "mqtt"
+	}
+	var wire agentvault.Transport
+	var closeTransport func() error
+	var err error
+	switch transportName {
+	case "mqtt":
+		wire, err = agentvault.NewMqttVaultTransport(agentvault.MqttConfig{
+			Host:             values.required("AGENTVAULT_MQTT_HOST"),
+			Port:             uint16(values.positiveUint("AGENTVAULT_MQTT_PORT", 16)),
+			TLS:              values.boolean("AGENTVAULT_MQTT_TLS"),
+			Username:         values.required("AGENTVAULT_MQTT_USERNAME"),
+			Password:         values.required("AGENTVAULT_MQTT_PASSWORD"),
+			ConnectionPrefix: "quantstream-go", VaultClientID: values.required("QUANTSTREAM_CLIENT_ID"),
+			RequestTimeout: mqttTimeout,
+		})
+	case "grpc":
+		var grpc *agentvault.GrpcVaultTransport
+		grpc, err = agentvault.NewGrpcVaultTransport(agentvault.GrpcConfig{
+			Endpoint: values.required("AGENTVAULT_GRPC_ENDPOINT"),
+			TLS:      values.boolean("AGENTVAULT_GRPC_TLS"), RequestTimeout: mqttTimeout,
+		})
+		wire = grpc
+		if grpc != nil {
+			closeTransport = grpc.Close
+		}
+	default:
+		return nil, errors.New("AGENTVAULT_TRANSPORT must be mqtt or grpc")
+	}
+	if values.err != nil {
+		return nil, values.err
+	}
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("selected AgentVault Payer transport",
+		"event.name", "agentvault.sdk.payer.transport_selected", "agentvault.transport", transportName)
 	core, err := agentvault.New(wire).Payer(agentvault.PayerConfig{
 		ScenarioID: scenarioID, ApprovalTimeout: approvalTimeout,
 		ApprovalPollInterval: time.Second, DeliveryRetries: 1,
@@ -107,10 +133,18 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 		}
 	}
 	initialized = true
-	return &MCPHelper{client: mcpClient, payments: capture, tools: tools}, nil
+	return &MCPHelper{client: mcpClient, payments: capture, tools: tools, closeTransport: closeTransport}, nil
 }
 
-func (helper *MCPHelper) Close() error { return helper.client.Close() }
+func (helper *MCPHelper) Close() error {
+	clientErr := helper.client.Close()
+	if helper.closeTransport != nil {
+		if err := helper.closeTransport(); clientErr == nil {
+			clientErr = err
+		}
+	}
+	return clientErr
+}
 
 func (helper *MCPHelper) YesterdayNews(ctx context.Context, runID string) (ToolResult, error) {
 	return helper.call(ctx, yesterdayTool, runID, false)

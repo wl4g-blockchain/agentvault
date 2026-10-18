@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -35,7 +36,7 @@ type standardPaymentKey struct{}
 
 // StandardPayeeMiddleware protects exact routes in the standard net/http stack.
 type StandardPayeeMiddleware struct {
-	core         *PayeeMiddleware
+	*PayeeMiddleware
 	routes       map[string]StandardPayeeRoute
 	maxBodyBytes int64
 }
@@ -45,8 +46,12 @@ func NewStandardPayeeMiddleware(core *PayeeMiddleware, routes ...StandardPayeeRo
 	for _, route := range routes {
 		indexed[route.Method+" "+route.Path] = route
 	}
-	return &StandardPayeeMiddleware{core: core, routes: indexed, maxBodyBytes: 1024 * 1024}
+	return &StandardPayeeMiddleware{PayeeMiddleware: core, routes: indexed, maxBodyBytes: 1024 * 1024}
 }
+
+var _ interface {
+	Handler(http.Handler) http.Handler
+} = (*StandardPayeeMiddleware)(nil)
 
 func (middleware *StandardPayeeMiddleware) WithMaxBodyBytes(limit int64) *StandardPayeeMiddleware {
 	if limit > 0 {
@@ -62,7 +67,7 @@ func (middleware *StandardPayeeMiddleware) Handler(next http.Handler) http.Handl
 			next.ServeHTTP(writer, request)
 			return
 		}
-		if middleware.core == nil || middleware.maxBodyBytes <= 0 {
+		if middleware.PayeeMiddleware == nil || middleware.maxBodyBytes <= 0 {
 			writeStandardError(writer, http.StatusInternalServerError, "PAYEE_CONFIG_INVALID", "payee middleware is not configured")
 			return
 		}
@@ -85,7 +90,7 @@ func (middleware *StandardPayeeMiddleware) Handler(next http.Handler) http.Handl
 			writeStandardError(writer, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
 			return
 		}
-		outcome, err := middleware.core.Protect(request.Context(), model.PayeeOperation{
+		outcome, err := middleware.Protect(request.Context(), model.PayeeOperation{
 			ScenarioID: route.ScenarioID, RunID: runID,
 			OfferID: route.OfferID, Resource: route.Resource, Origin: route.Origin,
 			Protocol: route.Protocol, RequestHash: hashRequest(request, body), CredentialPayload: payload,
@@ -117,6 +122,9 @@ func (middleware *StandardPayeeMiddleware) Handler(next http.Handler) http.Handl
 		writer.Header().Set("Payment-Response", paymentResponse)
 		request = request.WithContext(context.WithValue(request.Context(), standardPaymentKey{}, outcome.Payment))
 		next.ServeHTTP(writer, request)
+		slog.Info("payee middleware released protected resource",
+			"event.name", "agentvault.sdk.payee.resource_released", "run.id", runID,
+			"payment.intent_id", outcome.Payment.Intent.ID)
 	})
 }
 

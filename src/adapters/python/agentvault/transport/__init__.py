@@ -1,5 +1,5 @@
 from .grpc import GrpcVaultTransport
-from .http import APIError, HttpVaultTransport, VaultTransport
 from .mqtt import MqttVaultTransport
+from .transport import APIError, VaultTransport
 
-__all__ = ["APIError", "GrpcVaultTransport", "HttpVaultTransport", "MqttVaultTransport", "VaultTransport"]
+__all__ = ["APIError", "GrpcVaultTransport", "MqttVaultTransport", "VaultTransport"]

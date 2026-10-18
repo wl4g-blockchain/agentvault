@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import secrets
 from typing import Any, Mapping
 
 import grpc
 from google.protobuf.wrappers_pb2 import BytesValue
 
 from ..config import GrpcConfig
-from .http import APIError
-
+from .transport import APIError
 _EXECUTE = "/agentvault.transport.v1.PaymentTransport/Execute"
+_LOG = logging.getLogger("agentvault.sdk.transport.grpc")
 
 
 class GrpcVaultTransport:
@@ -49,9 +51,23 @@ class GrpcVaultTransport:
         }, separators=(",", ":")).encode()
         if len(envelope) > self.config.max_message_bytes:
             raise ValueError("AgentVault gRPC request exceeds configured limit")
-        metadata = ()
+        trace_id, span_id = secrets.token_hex(16), secrets.token_hex(8)
+        while int(trace_id, 16) == 0:
+            trace_id = secrets.token_hex(16)
+        while int(span_id, 16) == 0:
+            span_id = secrets.token_hex(8)
+        parent_span_id = None
+        traceparent = f"00-{trace_id}-{span_id}-01"
+        metadata: tuple[tuple[str, str], ...] = (("traceparent", traceparent),)
         if self.config.authguard_bearer:
-            metadata = (("authorization", f"Bearer {self.config.authguard_bearer}"),)
+            metadata += (("authorization", f"Bearer {self.config.authguard_bearer}"),)
+        _LOG.info(
+            "agentvault.sdk.transport.grpc.produced trace_id=%s span_id=%s parent_id=%s",
+            trace_id, span_id, parent_span_id or "",
+            extra={"event_name": "agentvault.sdk.transport.grpc.produced",
+                   "trace_id": trace_id, "span_id": span_id,
+                   "parent_id": parent_span_id or ""},
+        )
         try:
             response: BytesValue = self._execute(BytesValue(value=envelope), timeout=self.config.timeout,
                                                  metadata=metadata)
@@ -75,8 +91,8 @@ class GrpcVaultTransport:
             detail = value.get("error", {})
             if not isinstance(detail, dict):
                 detail = {}
-            raise APIError(status, str(detail.get("code", "HTTP_ERROR")),
-                           str(detail.get("message", f"AgentVault returned HTTP {status}")))
+            raise APIError(status, str(detail.get("code", "TRANSPORT_ERROR")),
+                           str(detail.get("message", f"AgentVault returned status {status}")))
         return value
 
     def close(self) -> None:

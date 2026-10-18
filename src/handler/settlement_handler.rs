@@ -1074,7 +1074,7 @@ impl SettlementHandler {
         let ledger = confirmed_ledger(intent, authority, result, effective_at, confirmed_at)?;
         let event = confirmed_event(intent, result, &receipt, confirmed_at);
         let outbox = confirmed_outbox(intent, confirmed_at);
-        let stored = self
+        let stored = match self
             .payments
             .commit_settlement(SettlementWrite {
                 intent: &settled,
@@ -1083,7 +1083,29 @@ impl SettlementHandler {
                 ledger_entries: std::slice::from_ref(&ledger),
                 outbox: std::slice::from_ref(&outbox),
             })
-            .await?;
+            .await
+        {
+            Ok(stored) => stored,
+            Err(Error::PaymentConflict(reason)) => {
+                let current = self
+                    .payments
+                    .get(&intent.id)
+                    .await?
+                    .ok_or_else(|| Error::Storage("concurrently settled payment intent disappeared".to_owned()))?;
+                if !is_concurrent_settlement_winner(intent, &current) {
+                    return Err(Error::PaymentConflict(reason));
+                }
+                let receipt = self.load_receipt(&current).await?;
+                tracing::info!(
+                    event_name = "agentvault.payee.settlement_race_recovered",
+                    intent_id = %current.id,
+                    run_id = %current.run_id,
+                    "returned the durable receipt committed by a concurrent reconciliation worker"
+                );
+                return Ok(settled_response(current, receipt));
+            }
+            Err(error) => return Err(error),
+        };
         Ok(settled_response(stored, receipt))
     }
 
@@ -1253,6 +1275,10 @@ fn durable_receipt(settled: Option<&PaymentEvent>, reconciled: Option<&PaymentEv
         .map(serde_json::from_value)
         .transpose()?
         .ok_or_else(|| Error::Storage("settled intent has no durable receipt".to_owned()))
+}
+
+fn is_concurrent_settlement_winner(expected: &PaymentIntent, current: &PaymentIntent) -> bool {
+    current.status == PaymentStatus::Settled && current.same_immutable_identity_as(expected)
 }
 
 fn authorization_query(
@@ -1631,7 +1657,6 @@ fn confirmed_outbox(intent: &PaymentIntent, confirmed_at: i64) -> OutboxMessage 
         aggregate_id: intent.id.clone(),
         event_type: "payment_settled".to_owned(),
         destination: format!("scenario:{}.payments", intent.scenario_id),
-        correlation_id: intent.id.clone(),
         run_id: intent.run_id.clone(),
         payload: json!({"intent_id": intent.id, "scenario_id": intent.scenario_id, "run_id": intent.run_id}),
         status: OutboxStatus::Pending,

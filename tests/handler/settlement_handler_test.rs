@@ -131,3 +131,53 @@ fn durable_receipt_falls_back_to_reconciliation_event() {
     assert_eq!(recovered.intent_id, "intent-1");
     assert_eq!(recovered.status, PaymentStatus::Settled);
 }
+
+#[test]
+fn concurrent_settlement_replay_requires_same_terminal_payment_identity() {
+    let expected = PaymentIntent {
+        id: "intent-1".to_owned(),
+        scenario_id: "scenario-1".to_owned(),
+        run_id: "run-1".to_owned(),
+        wallet_id: Some("wallet-1".to_owned()),
+        policy_id: Some("policy-1".to_owned()),
+        offer_id: Some("offer-1".to_owned()),
+        direction: PaymentDirection::Inbound,
+        protocol: "x402".to_owned(),
+        asset: AssetIdentity {
+            network: "eip155:31337".to_owned(),
+            asset: "USDC".to_owned(),
+            token_contract: Some("0x1111111111111111111111111111111111111111".to_owned()),
+            decimals: 6,
+        },
+        recipient: "0x2222222222222222222222222222222222222222".to_owned(),
+        amount: Amount::new(1_000_000),
+        settled_amount: Amount::ZERO,
+        resource: "https://merchant.example/mcp".to_owned(),
+        challenge_hash: Some("challenge".to_owned()),
+        request_hash: "request".to_owned(),
+        status: PaymentStatus::PendingSettlement,
+        reservation_status: ReservationStatus::Reserved,
+        reserved_amount: Amount::new(1_000_000),
+        tx_hash: None,
+        settlement_ref: None,
+        next_reconcile_at: Some(100),
+        created_at: 90,
+        updated_at: 95,
+        expires_at: Some(1_000),
+        settled_at: None,
+    };
+    let mut winner = expected.clone();
+    winner.status = PaymentStatus::Settled;
+    winner.updated_at += 1;
+    winner.settled_at = Some(winner.updated_at);
+
+    assert!(is_concurrent_settlement_winner(&expected, &winner));
+
+    let mut foreign = winner.clone();
+    foreign.wallet_id = Some("wallet-other".to_owned());
+    assert!(!is_concurrent_settlement_winner(&expected, &foreign));
+
+    winner.status = PaymentStatus::Unknown;
+    winner.settled_at = None;
+    assert!(!is_concurrent_settlement_winner(&expected, &winner));
+}

@@ -1,7 +1,7 @@
 # AgentVault Python adapter
 
-Create one `AgentVault` with `GrpcVaultTransport`, `MqttVaultTransport`, or
-`HttpVaultTransport`. `vault.payer(config).standard()` returns an
+Create one `AgentVault` with `GrpcVaultTransport` or `MqttVaultTransport`.
+`vault.payer(config).standard()` returns an
 `HttpxPayerMiddleware` and performs
 the complete 402/approval/retry flow only when a `PayerRequestContext` is
 supplied. `FastPayeeMiddleware` is pure ASGI middleware and can be installed on

@@ -17,6 +17,7 @@ use std::{
 
 use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
+use axum::http::{HeaderMap, HeaderValue};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish, QoS, SubAck, SubscribeReasonCode, Transport};
 use serde::{Deserialize, Serialize};
@@ -26,9 +27,11 @@ use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
 };
+use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
 use crate::{
+    apm::set_span_parent_from_headers,
     cache::ICache,
     cmd::{RuntimeComponent, Shutdown},
     config::MqttTransportConfig,
@@ -243,14 +246,22 @@ impl MqttController {
         let approver_principal = command.approver_principal().map(str::to_owned);
         let kind = command.kind();
         let cache_scope = command.cache_scope();
-        let Some(correlation_id) = probe_correlation_id(&message.payload) else {
-            tracing::warn!(mqtt.topic = %message.topic, "rejected MQTT command without a valid correlation id");
+        let Some((request_span_id, traceparent, trace_id)) = probe_trace_context(&message.payload) else {
+            tracing::warn!(mqtt.topic = %message.topic, "rejected MQTT command without a bound W3C producer span");
             return;
         };
-        let response_topic = command.response_topic(&self.settings.topic_prefix, &correlation_id);
+        let response_topic = command.response_topic(&self.settings.topic_prefix, &request_span_id);
+        tracing::info!(
+            event.name = "agentvault.transport.mqtt.request",
+            mqtt.client_id = %client_id,
+            mqtt.command = ?kind,
+            trace.id = %trace_id,
+            trace.producer_span_id = %request_span_id,
+            "received AgentVault MQTT payment request"
+        );
         match self
             .responses
-            .begin(&cache_scope, &correlation_id, digest(&message.payload))
+            .begin(&cache_scope, &request_span_id, digest(&message.payload))
             .await
         {
             CacheDisposition::Cached(response) => {
@@ -263,14 +274,14 @@ impl MqttController {
                 );
             }
             CacheDisposition::InFlight => {
-                tracing::debug!(mqtt.client_id = %client_id, mqtt.correlation_id = %correlation_id, "coalesced duplicate MQTT command");
+                tracing::debug!(mqtt.client_id = %client_id, mqtt.request_span_id = %request_span_id, "coalesced duplicate MQTT command");
             }
             CacheDisposition::Conflict => {
                 let response = error_response(
-                    &correlation_id,
+                    &request_span_id,
                     409,
                     "PAYMENT_CONFLICT",
-                    "correlation id was reused with different content",
+                    "request span id was reused with different content",
                 );
                 spawn_publish(
                     workers,
@@ -286,7 +297,8 @@ impl MqttController {
                     cache_scope,
                     client_id,
                     approver_principal,
-                    correlation_id,
+                    request_span_id,
+                    traceparent,
                     payload: message.payload.to_vec(),
                     response_topic,
                 };
@@ -298,13 +310,13 @@ impl MqttController {
     async fn spawn_new_command(&self, client: &AsyncClient, workers: &mut JoinSet<()>, work: CommandWork) {
         let Some(permits) = self.limiter.try_acquire(&work.client_id).await else {
             let response = error_response(
-                &work.correlation_id,
+                &work.request_span_id,
                 429,
                 "RATE_LIMITED",
                 "too many concurrent MQTT payment requests",
             );
             self.responses
-                .complete(&work.cache_scope, &work.correlation_id, response.clone())
+                .complete(&work.cache_scope, &work.request_span_id, response.clone())
                 .await;
             spawn_publish(
                 workers,
@@ -323,10 +335,14 @@ impl MqttController {
             responses: Arc::clone(&self.responses),
             timeout: self.settings.request_timeout,
         };
-        workers.spawn(async move {
-            let _permits = permits;
-            process_command(work, dependencies).await;
-        });
+        let span = mqtt_consumer_span(&work);
+        workers.spawn(
+            async move {
+                let _permits = permits;
+                process_command(work, dependencies).await;
+            }
+            .instrument(span),
+        );
     }
 }
 
@@ -400,7 +416,8 @@ struct CommandWork {
     cache_scope: String,
     client_id: String,
     approver_principal: Option<String>,
-    correlation_id: String,
+    request_span_id: String,
+    traceparent: String,
     payload: Vec<u8>,
     response_topic: String,
 }
@@ -412,6 +429,22 @@ struct CommandDependencies {
     scenarios: Arc<dyn ScenarioStorage>,
     responses: Arc<ResponseCache>,
     timeout: Duration,
+}
+
+fn mqtt_consumer_span(work: &CommandWork) -> tracing::Span {
+    let span = tracing::info_span!(
+        "mqtt.server.request",
+        otel.kind = "consumer",
+        mqtt.client_id = %work.client_id,
+        mqtt.command = ?work.kind,
+        trace.producer_span_id = %work.request_span_id,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(&work.traceparent) {
+        headers.insert("traceparent", value);
+        set_span_parent_from_headers(&span, &headers);
+    }
+    span
 }
 
 async fn process_command(work: CommandWork, dependencies: CommandDependencies) {
@@ -426,7 +459,7 @@ async fn process_command(work: CommandWork, dependencies: CommandDependencies) {
     };
     dependencies
         .responses
-        .complete(&work.cache_scope, &work.correlation_id, response.clone())
+        .complete(&work.cache_scope, &work.request_span_id, response.clone())
         .await;
     if let Err(error) = publish_response(
         &dependencies.client,
@@ -439,7 +472,7 @@ async fn process_command(work: CommandWork, dependencies: CommandDependencies) {
         tracing::warn!(
             error = %error,
             mqtt.client_id = %work.client_id,
-            mqtt.correlation_id = %work.correlation_id,
+            mqtt.request_span_id = %work.request_span_id,
             "failed to publish MQTT authorization response"
         );
     }
@@ -448,7 +481,7 @@ async fn process_command(work: CommandWork, dependencies: CommandDependencies) {
 async fn process_authorize_command(work: &CommandWork, dependencies: &CommandDependencies) -> ResponseEnvelope {
     let command = match parse_authorize_command(&work.payload) {
         Ok(command) => command,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
     };
     match tokio::time::timeout(
         dependencies.timeout,
@@ -461,10 +494,10 @@ async fn process_authorize_command(work: &CommandWork, dependencies: &CommandDep
     )
     .await
     {
-        Ok(Ok(value)) => success_response("payment.authorization_result", &work.correlation_id, &value),
-        Ok(Err(error)) => response_for_error(&work.correlation_id, error),
+        Ok(Ok(value)) => success_response("payment.authorization_result", &work.request_span_id, &value),
+        Ok(Err(error)) => response_for_error(&work.request_span_id, error),
         Err(_) => error_response(
-            &work.correlation_id,
+            &work.request_span_id,
             408,
             "REQUEST_TIMEOUT",
             "payment authorization timed out",
@@ -475,7 +508,7 @@ async fn process_authorize_command(work: &CommandWork, dependencies: &CommandDep
 async fn process_outbound_response(work: &CommandWork, dependencies: &CommandDependencies) -> ResponseEnvelope {
     let command = match parse_outbound_response_command(&work.payload) {
         Ok(command) => command,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
     };
     match tokio::time::timeout(
         dependencies.timeout,
@@ -488,10 +521,10 @@ async fn process_outbound_response(work: &CommandWork, dependencies: &CommandDep
     )
     .await
     {
-        Ok(Ok(value)) => success_response("payment.outbound_response_result", &work.correlation_id, &value),
-        Ok(Err(error)) => response_for_error(&work.correlation_id, error),
+        Ok(Ok(value)) => success_response("payment.outbound_response_result", &work.request_span_id, &value),
+        Ok(Err(error)) => response_for_error(&work.request_span_id, error),
         Err(_) => error_response(
-            &work.correlation_id,
+            &work.request_span_id,
             408,
             "REQUEST_TIMEOUT",
             "outbound payment evidence reporting timed out",
@@ -506,7 +539,7 @@ async fn process_resolve_offer(work: &CommandWork, dependencies: &CommandDepende
         "/api/v1/offers/resolve",
     ) {
         Ok(request) => request,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
     };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
@@ -516,7 +549,7 @@ async fn process_resolve_offer(work: &CommandWork, dependencies: &CommandDepende
         dependencies.timeout,
         result,
         "payment.offer_resolved",
-        &work.correlation_id,
+        &work.request_span_id,
         "offer resolution timed out",
     )
     .await
@@ -529,7 +562,7 @@ async fn process_create_challenge(work: &CommandWork, dependencies: &CommandDepe
         "/api/v1/payee/challenges",
     ) {
         Ok(request) => request,
-        Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+        Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
     };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
@@ -542,7 +575,7 @@ async fn process_create_challenge(work: &CommandWork, dependencies: &CommandDepe
         dependencies.timeout,
         result,
         "payment.challenge_created",
-        &work.correlation_id,
+        &work.request_span_id,
         "challenge creation timed out",
     )
     .await
@@ -552,7 +585,7 @@ async fn process_verify_payment(work: &CommandWork, dependencies: &CommandDepend
     let request =
         match parse_payee_command::<VerifyPaymentRequest>(&work.payload, "payment.verify", "/api/v1/payee/verify") {
             Ok(request) => request,
-            Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+            Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
         };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
@@ -565,7 +598,7 @@ async fn process_verify_payment(work: &CommandWork, dependencies: &CommandDepend
         dependencies.timeout,
         result,
         "payment.verification_result",
-        &work.correlation_id,
+        &work.request_span_id,
         "payment verification timed out",
     )
     .await
@@ -575,7 +608,7 @@ async fn process_settle_payment(work: &CommandWork, dependencies: &CommandDepend
     let request =
         match parse_payee_command::<SettlePaymentRequest>(&work.payload, "payment.settle", "/api/v1/payee/settle") {
             Ok(request) => request,
-            Err(error) => return error_response(&work.correlation_id, 400, "INVALID_REQUEST", error),
+            Err(error) => return error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
         };
     let result = async {
         let principal = principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
@@ -588,7 +621,7 @@ async fn process_settle_payment(work: &CommandWork, dependencies: &CommandDepend
         dependencies.timeout,
         result,
         "payment.settlement_result",
-        &work.correlation_id,
+        &work.request_span_id,
         "payment settlement timed out",
     )
     .await
@@ -598,7 +631,7 @@ async fn timed_payment_response<T, F>(
     timeout: Duration,
     operation: F,
     response_type: &'static str,
-    correlation_id: &str,
+    request_span_id: &str,
     timeout_message: &'static str,
 ) -> ResponseEnvelope
 where
@@ -606,9 +639,9 @@ where
     F: std::future::Future<Output = crate::Result<T>>,
 {
     match tokio::time::timeout(timeout, operation).await {
-        Ok(Ok(value)) => success_response(response_type, correlation_id, &value),
-        Ok(Err(error)) => response_for_error(correlation_id, error),
-        Err(_) => error_response(correlation_id, 408, "REQUEST_TIMEOUT", timeout_message),
+        Ok(Ok(value)) => success_response(response_type, request_span_id, &value),
+        Ok(Err(error)) => response_for_error(request_span_id, error),
+        Err(_) => error_response(request_span_id, 408, "REQUEST_TIMEOUT", timeout_message),
     }
 }
 
@@ -627,7 +660,7 @@ async fn principal_for_topic_client(clients: &dyn ClientStorage, client_id: &str
 async fn process_approval_decision(work: &CommandWork, dependencies: &CommandDependencies) -> ResponseEnvelope {
     let command = match parse_decision_command(&work.payload) {
         Ok(command) => command,
-        Err(error) => return error_response(&work.correlation_id, error.status, error.code, error.message),
+        Err(error) => return error_response(&work.request_span_id, error.status, error.code, error.message),
     };
     match tokio::time::timeout(
         dependencies.timeout,
@@ -642,10 +675,10 @@ async fn process_approval_decision(work: &CommandWork, dependencies: &CommandDep
     )
     .await
     {
-        Ok(Ok(value)) => success_response("payment.approval_decision_result", &work.correlation_id, &value),
-        Ok(Err(error)) => response_for_error(&work.correlation_id, error),
+        Ok(Ok(value)) => success_response("payment.approval_decision_result", &work.request_span_id, &value),
+        Ok(Err(error)) => response_for_error(&work.request_span_id, error),
         Err(_) => error_response(
-            &work.correlation_id,
+            &work.request_span_id,
             408,
             "REQUEST_TIMEOUT",
             "approval decision timed out",
@@ -768,7 +801,7 @@ struct RequestEnvelope {
     #[serde(rename = "type")]
     message_type: String,
     version: u8,
-    correlation_id: String,
+    request_span_id: String,
     request: WireRequest,
 }
 
@@ -789,13 +822,13 @@ fn parse_authorize_command(payload: &[u8]) -> Result<AuthorizePaymentRequest, &'
         serde_json::from_slice(payload).map_err(|_| "invalid MQTT authorization envelope")?;
     if envelope.message_type != "payment.authorize"
         || envelope.version != 1
-        || !valid_correlation_id(&envelope.correlation_id)
+        || !valid_request_span_id(&envelope.request_span_id)
         || envelope.request.method != "POST"
         || envelope.request.path != AUTHORIZE_PATH
     {
         return Err("invalid MQTT authorization envelope contract");
     }
-    validate_authorize_headers(&envelope.request.headers)?;
+    validate_authorize_headers(&envelope.request.headers, &envelope.request_span_id)?;
     let body = decode_canonical_body(&envelope.request.body)?;
     let request: AuthorizePaymentRequest =
         serde_json::from_slice(&body).map_err(|_| "invalid MQTT authorization request body")?;
@@ -813,12 +846,12 @@ fn parse_outbound_response_command(payload: &[u8]) -> Result<OutboundResponseCom
         .to_owned();
     if envelope.message_type != "payment.outbound_response"
         || envelope.version != 1
-        || !valid_correlation_id(&envelope.correlation_id)
+        || !valid_request_span_id(&envelope.request_span_id)
         || envelope.request.method != "POST"
     {
         return Err("invalid MQTT outbound response envelope contract");
     }
-    validate_authorize_headers(&envelope.request.headers)?;
+    validate_authorize_headers(&envelope.request.headers, &envelope.request_span_id)?;
     let body = decode_canonical_body(&envelope.request.body)?;
     let request: ReportOutboundResponseRequest =
         serde_json::from_slice(&body).map_err(|_| "invalid MQTT outbound response body")?;
@@ -835,13 +868,13 @@ where
     let envelope: RequestEnvelope = serde_json::from_slice(payload).map_err(|_| "invalid MQTT payee envelope")?;
     if envelope.message_type != message_type
         || envelope.version != 1
-        || !valid_correlation_id(&envelope.correlation_id)
+        || !valid_request_span_id(&envelope.request_span_id)
         || envelope.request.method != "POST"
         || envelope.request.path != path
     {
         return Err("invalid MQTT payee envelope contract");
     }
-    validate_wire_headers(&envelope.request.headers)?;
+    validate_wire_headers(&envelope.request.headers, &envelope.request_span_id)?;
     let body = decode_canonical_body(&envelope.request.body)?;
     serde_json::from_slice(&body).map_err(|_| "invalid MQTT payee request body")
 }
@@ -878,14 +911,15 @@ fn parse_decision_command(payload: &[u8]) -> std::result::Result<ApprovalDecisio
         serde_json::from_slice(payload).map_err(|_| DecisionParseError::invalid("invalid MQTT approval envelope"))?;
     if envelope.message_type != "payment.approval_decision"
         || envelope.version != 1
-        || !valid_correlation_id(&envelope.correlation_id)
+        || !valid_request_span_id(&envelope.request_span_id)
         || envelope.request.method != "POST"
     {
         return Err(DecisionParseError::invalid("invalid MQTT approval envelope contract"));
     }
     let path_approval_id = approval_id_from_decision_path(&envelope.request.path)
         .ok_or_else(|| DecisionParseError::invalid("invalid MQTT approval decision path"))?;
-    validate_decision_headers(&envelope.request.headers).map_err(DecisionParseError::invalid)?;
+    validate_decision_headers(&envelope.request.headers, &envelope.request_span_id)
+        .map_err(DecisionParseError::invalid)?;
     let body = decode_canonical_body(&envelope.request.body).map_err(DecisionParseError::invalid)?;
     let request: SubmitApprovalDecisionRequest = serde_json::from_slice(&body)
         .map_err(|_| DecisionParseError::invalid("invalid MQTT approval decision body"))?;
@@ -906,15 +940,15 @@ fn approval_id_from_decision_path(path: &str) -> Option<&str> {
     .then_some(value)
 }
 
-fn validate_authorize_headers(headers: &BTreeMap<String, String>) -> Result<(), &'static str> {
-    validate_wire_headers(headers)
+fn validate_authorize_headers(headers: &BTreeMap<String, String>, request_span_id: &str) -> Result<(), &'static str> {
+    validate_wire_headers(headers, request_span_id)
 }
 
-fn validate_decision_headers(headers: &BTreeMap<String, String>) -> Result<(), &'static str> {
-    validate_wire_headers(headers)
+fn validate_decision_headers(headers: &BTreeMap<String, String>, request_span_id: &str) -> Result<(), &'static str> {
+    validate_wire_headers(headers, request_span_id)
 }
 
-fn validate_wire_headers(headers: &BTreeMap<String, String>) -> Result<(), &'static str> {
+fn validate_wire_headers(headers: &BTreeMap<String, String>, request_span_id: &str) -> Result<(), &'static str> {
     if headers.is_empty() || headers.len() > MAX_HEADER_COUNT {
         return Err("invalid MQTT authorization headers");
     }
@@ -924,7 +958,7 @@ fn validate_wire_headers(headers: &BTreeMap<String, String>) -> Result<(), &'sta
             || value.len() > MAX_HEADER_VALUE_BYTES
             || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-')
             || value.bytes().any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
-            || !matches!(name.as_str(), "accept" | "content-type")
+            || !matches!(name.as_str(), "accept" | "content-type" | "traceparent")
         {
             return Err("invalid MQTT authorization headers");
         }
@@ -934,6 +968,9 @@ fn validate_wire_headers(headers: &BTreeMap<String, String>) -> Result<(), &'sta
     }
     if headers.get("accept").is_some_and(|value| value != "application/json") {
         return Err("accept must be application/json");
+    }
+    if traceparent_span_id(headers.get("traceparent").map_or("", String::as_str)) != Some(request_span_id) {
+        return Err("requestSpanId must equal the W3C producer span ID");
     }
     Ok(())
 }
@@ -956,14 +993,49 @@ const fn is_base64url_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
 }
 
-fn probe_correlation_id(payload: &[u8]) -> Option<String> {
+fn probe_trace_context(payload: &[u8]) -> Option<(String, String, String)> {
     let value: Value = serde_json::from_slice(payload).ok()?;
-    let correlation_id = value.get("correlationId")?.as_str()?;
-    valid_correlation_id(correlation_id).then(|| correlation_id.to_owned())
+    let request_span_id = value.get("requestSpanId")?.as_str()?;
+    let traceparent = value.get("request")?.get("headers")?.get("traceparent")?.as_str()?;
+    let trace_id = traceparent_trace_id(traceparent)?;
+    (valid_request_span_id(request_span_id) && traceparent_span_id(traceparent) == Some(request_span_id))
+        .then(|| (request_span_id.to_owned(), traceparent.to_owned(), trace_id.to_owned()))
 }
 
-fn valid_correlation_id(value: &str) -> bool {
-    value.len() == 32
+fn traceparent_trace_id(value: &str) -> Option<&str> {
+    valid_traceparent(value).map(|(_, trace_id, _, _)| trace_id)
+}
+
+fn traceparent_span_id(value: &str) -> Option<&str> {
+    valid_traceparent(value).map(|(_, _, span_id, _)| span_id)
+}
+
+fn valid_traceparent(value: &str) -> Option<(&str, &str, &str, &str)> {
+    let mut fields = value.split('-');
+    let result = (fields.next()?, fields.next()?, fields.next()?, fields.next()?);
+    if fields.next().is_some()
+        || result.0 != "00"
+        || !valid_lower_hex(result.1, 32)
+        || result.1.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(result.2, 16)
+        || result.2.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(result.3, 2)
+    {
+        return None;
+    }
+    Some(result)
+}
+
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn valid_request_span_id(value: &str) -> bool {
+    value != "0000000000000000"
+        && value.len() == 16
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
@@ -977,7 +1049,7 @@ fn valid_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum CommandKind {
     Authorize,
     OutboundResponse,
@@ -1082,7 +1154,7 @@ impl CommandTopic {
         }
     }
 
-    fn response_topic(&self, prefix: &str, correlation_id: &str) -> String {
+    fn response_topic(&self, prefix: &str, request_span_id: &str) -> String {
         match self {
             Self::Authorize(client_id)
             | Self::OutboundResponse(client_id)
@@ -1090,12 +1162,12 @@ impl CommandTopic {
             | Self::CreateChallenge(client_id)
             | Self::VerifyPayment(client_id)
             | Self::SettlePayment(client_id) => {
-                format!("{prefix}/{client_id}/results/{correlation_id}")
+                format!("{prefix}/{client_id}/results/{request_span_id}")
             }
             Self::ApprovalDecision {
                 client_id,
                 approver_principal,
-            } => format!("{prefix}/{client_id}/approvers/{approver_principal}/results/{correlation_id}"),
+            } => format!("{prefix}/{client_id}/approvers/{approver_principal}/results/{request_span_id}"),
         }
     }
 }
@@ -1148,17 +1220,17 @@ struct ResponseEnvelope {
     #[serde(rename = "type")]
     message_type: String,
     version: u8,
-    correlation_id: String,
+    request_span_id: String,
     status: u16,
     headers: BTreeMap<String, String>,
     body: String,
 }
 
-fn success_response(message_type: &'static str, correlation_id: &str, response: &impl Serialize) -> ResponseEnvelope {
+fn success_response(message_type: &'static str, request_span_id: &str, response: &impl Serialize) -> ResponseEnvelope {
     match serde_json::to_vec(response) {
-        Ok(body) => encoded_response(message_type, correlation_id, 200, body),
+        Ok(body) => encoded_response(message_type, request_span_id, 200, body),
         Err(_) => error_response(
-            correlation_id,
+            request_span_id,
             500,
             "INTERNAL_ERROR",
             "the operation could not be completed",
@@ -1166,7 +1238,7 @@ fn success_response(message_type: &'static str, correlation_id: &str, response: 
     }
 }
 
-fn response_for_error(correlation_id: &str, error: Error) -> ResponseEnvelope {
+fn response_for_error(request_span_id: &str, error: Error) -> ResponseEnvelope {
     let (status, code, message) = match error {
         Error::InvalidRequest(_) | Error::PaymentProtocol(_) => (400, "INVALID_REQUEST", error.to_string()),
         Error::Unauthenticated => (
@@ -1182,21 +1254,21 @@ fn response_for_error(correlation_id: &str, error: Error) -> ResponseEnvelope {
             (500, "INTERNAL_ERROR", "the operation could not be completed".to_owned())
         }
     };
-    error_response(correlation_id, status, code, &message)
+    error_response(request_span_id, status, code, &message)
 }
 
-fn error_response(correlation_id: &str, status: u16, code: &'static str, message: &str) -> ResponseEnvelope {
+fn error_response(request_span_id: &str, status: u16, code: &'static str, message: &str) -> ResponseEnvelope {
     let body = serde_json::to_vec(&json!({"error": {"code": code, "message": message}})).unwrap_or_else(|_| {
         br#"{"error":{"code":"INTERNAL_ERROR","message":"the operation could not be completed"}}"#.to_vec()
     });
-    encoded_response("payment.error", correlation_id, status, body)
+    encoded_response("payment.error", request_span_id, status, body)
 }
 
-fn encoded_response(message_type: &'static str, correlation_id: &str, status: u16, body: Vec<u8>) -> ResponseEnvelope {
+fn encoded_response(message_type: &'static str, request_span_id: &str, status: u16, body: Vec<u8>) -> ResponseEnvelope {
     ResponseEnvelope {
         message_type: message_type.to_owned(),
         version: 1,
-        correlation_id: correlation_id.to_owned(),
+        request_span_id: request_span_id.to_owned(),
         status,
         headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
         body: URL_SAFE_NO_PAD.encode(body),
@@ -1261,8 +1333,8 @@ impl ResponseCache {
         Self { cache }
     }
 
-    async fn begin(&self, scope: &str, correlation_id: &str, request_hash: [u8; 32]) -> CacheDisposition {
-        let key = response_cache_key(scope, correlation_id);
+    async fn begin(&self, scope: &str, request_span_id: &str, request_hash: [u8; 32]) -> CacheDisposition {
+        let key = response_cache_key(scope, request_span_id);
         let pending = CachedRequest {
             request_hash,
             response: None,
@@ -1305,8 +1377,8 @@ impl ResponseCache {
         }
     }
 
-    async fn complete(&self, scope: &str, correlation_id: &str, response: ResponseEnvelope) {
-        let key = response_cache_key(scope, correlation_id);
+    async fn complete(&self, scope: &str, request_span_id: &str, response: ResponseEnvelope) {
+        let key = response_cache_key(scope, request_span_id);
         let existing = match self.cache.get("mqtt_response", &key).await {
             Ok(Some(existing)) => existing,
             Ok(None) => return,
@@ -1329,11 +1401,11 @@ impl ResponseCache {
     }
 }
 
-fn response_cache_key(scope: &str, correlation_id: &str) -> String {
+fn response_cache_key(scope: &str, request_span_id: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(scope.as_bytes());
     digest.update([0]);
-    digest.update(correlation_id.as_bytes());
+    digest.update(request_span_id.as_bytes());
     hex::encode(digest.finalize())
 }
 
@@ -1366,7 +1438,6 @@ struct PaymentEventEnvelope<'a> {
     #[serde(rename = "type")]
     message_type: &'static str,
     version: u8,
-    correlation_id: &'a str,
     run_id: &'a str,
     aggregate_type: &'a str,
     aggregate_id: &'a str,
@@ -1467,7 +1538,6 @@ fn payment_event_destination(destination: &str) -> Result<PaymentEventDestinatio
 
 fn payment_event_envelope(message: &OutboxMessage) -> Result<PaymentEventEnvelope<'_>, &'static str> {
     for value in [
-        message.correlation_id.as_str(),
         message.run_id.as_str(),
         message.aggregate_type.as_str(),
         message.aggregate_id.as_str(),
@@ -1479,7 +1549,6 @@ fn payment_event_envelope(message: &OutboxMessage) -> Result<PaymentEventEnvelop
     Ok(PaymentEventEnvelope {
         message_type: "payment.event",
         version: 1,
-        correlation_id: &message.correlation_id,
         run_id: &message.run_id,
         aggregate_type: &message.aggregate_type,
         aggregate_id: &message.aggregate_id,
@@ -1617,7 +1686,6 @@ struct ApprovalRequiredEnvelope {
     #[serde(rename = "type")]
     message_type: &'static str,
     version: u8,
-    correlation_id: String,
     approval_id: String,
     intent_id: String,
     run_id: String,
@@ -1649,7 +1717,6 @@ fn approval_envelope(message: &OutboxMessage) -> Result<ApprovalRequiredEnvelope
     Ok(ApprovalRequiredEnvelope {
         message_type: "payment.approval_required",
         version: 1,
-        correlation_id: message.correlation_id.clone(),
         approval_id: approval_id.to_owned(),
         intent_id: intent_id.to_owned(),
         run_id: run_id.to_owned(),

@@ -137,10 +137,7 @@ fn paid_realtime(
         Ok(settlement) => settlement,
         Err(message) => return response(StatusCode::CONFLICT, &error(id, -32009, &message)),
     };
-    if let Err(message) = handler
-        .storage
-        .record_settled(run_id, &request_hash, &settlement)
-    {
+    if let Err(message) = handler.storage.record_settled(run_id, &request_hash, &settlement) {
         return response(StatusCode::CONFLICT, &error(id, -32009, &message));
     }
     if handler.allow_failure_injection && header_text(headers, "x-e2e-fail-after-settlement") == Some("once") {

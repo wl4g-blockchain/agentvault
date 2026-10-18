@@ -9,6 +9,7 @@ use quantstream_ingestor_rust::{
 
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
+    let _ = tracing_subscriber::fmt().json().with_target(false).try_init();
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     if run_once_requested(&arguments)? {
         return IngestionJob::from_env()

@@ -14,7 +14,7 @@ import {
   type ReportOutboundResponseResponse,
   validateBalanceQuery,
 } from '../model/payer.js';
-import type { VaultTransport } from '../transport/http.js';
+import type { VaultTransport } from '../transport/transport.js';
 import { FetchPayerMiddleware } from './standard.js';
 
 const SAFE_VALUE = /^[^\r\n]+$/;

@@ -68,6 +68,8 @@ data:
     agentvault:
       payer:
         enabled: {{ .Values.runtime.payer.enabled }}
+        wallet_selection:
+          strategy: {{ .Values.runtime.payer.walletSelection.strategy }}
         x402:
           enabled: {{ .Values.runtime.payer.x402.enabled }}
           max_challenge_ttl: {{ .Values.runtime.payer.x402.maxChallengeTtl }}
@@ -144,12 +146,16 @@ data:
         batch_size: {{ .Values.runtime.reconciliation.batchSize }}
         initial_backoff: {{ .Values.runtime.reconciliation.initialBackoff }}
         max_backoff: {{ .Values.runtime.reconciliation.maxBackoff }}
+      wallet_balance_sync:
+        enabled: {{ .Values.runtime.walletBalanceSync.enabled }}
+        interval: {{ .Values.runtime.walletBalanceSync.interval }}
+        batch_size: {{ .Values.runtime.walletBalanceSync.batchSize }}
       transport:
         grpc:
           enabled: {{ .Values.runtime.grpc.enabled }}
           host: 0.0.0.0
           port: {{ .Values.service.grpcPort }}
-          max_message_bytes: {{ .Values.runtime.grpc.maxMessageBytes }}
+          max_message_bytes: {{ printf "%.0f" .Values.runtime.grpc.maxMessageBytes }}
           request_timeout: {{ .Values.runtime.grpc.requestTimeout }}
         local: { enabled: false }
         mqtt:

@@ -9,7 +9,7 @@ import { validateApprovalDecision, validateApprovalQuery } from './model/approva
 import { required } from './model/base.js';
 import { PayeeMiddleware } from './payee/payee.js';
 import { PayerMiddleware } from './payer/payer.js';
-import type { VaultTransport } from './transport/http.js';
+import type { VaultTransport } from './transport/transport.js';
 
 /** The only SDK facade: construct role middleware from one configured transport. */
 export class AgentVault {
@@ -63,5 +63,5 @@ export * from './payee/standard.js';
 export * from './payer/payer.js';
 export * from './payer/standard.js';
 export * from './transport/grpc.js';
-export * from './transport/http.js';
 export * from './transport/mqtt.js';
+export * from './transport/transport.js';

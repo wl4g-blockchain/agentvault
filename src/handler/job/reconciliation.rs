@@ -626,7 +626,6 @@ impl ReconciliationJob {
             aggregate_id: intent.id.clone(),
             event_type: "payment_expired".to_owned(),
             destination: format!("scenario:{}.payments", intent.scenario_id),
-            correlation_id: intent.id.clone(),
             run_id: intent.run_id.clone(),
             payload: json!({
                 "intent_id": intent.id,
@@ -874,7 +873,6 @@ fn reconciled_outbox(
         aggregate_id: intent.id.clone(),
         event_type: "payment_settled".to_owned(),
         destination: format!("scenario:{}.payments", intent.scenario_id),
-        correlation_id: intent.id.clone(),
         run_id: intent.run_id.clone(),
         payload: json!({
             "intent_id": intent.id,

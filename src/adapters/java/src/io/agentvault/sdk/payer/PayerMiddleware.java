@@ -6,7 +6,7 @@ import io.agentvault.sdk.model.Base.OperationContext;
 import io.agentvault.sdk.model.Base.PaymentCredential;
 import io.agentvault.sdk.model.Base.PaymentIntent;
 import io.agentvault.sdk.model.Base.PaymentReceipt;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.agentvault.sdk.model.Payer.AuthorizationOutcome;
 import io.agentvault.sdk.model.Payer.AuthorizePaymentRequest;
 import io.agentvault.sdk.model.Payer.AuthorizePaymentResponse;
@@ -46,8 +46,8 @@ public final class PayerMiddleware {
 
     public PayerConfig config() { return config; }
 
-    public StandardPayerMiddleware standard() {
-        return new StandardPayerMiddleware(this);
+    public SpringInterceptorPayerMiddleware spring() {
+        return new SpringInterceptorPayerMiddleware(this);
     }
 
     public AuthorizedPayment authorize(

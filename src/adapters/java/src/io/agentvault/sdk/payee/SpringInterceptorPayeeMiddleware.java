@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
 import io.agentvault.sdk.model.Base.PaymentReceipt;
-import io.agentvault.sdk.model.Base.ApiException;
+import io.agentvault.sdk.transport.VaultTransport.ApiException;
 import io.agentvault.sdk.model.Payee.Authorized;
 import io.agentvault.sdk.model.Payee.PayeeOperation;
 import io.agentvault.sdk.model.Payee.PaymentRequired;
@@ -28,6 +28,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Spring Servlet payee adapter; register once as a Filter bean. */
 public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter {
+    private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
     public static final String PAYMENT_ATTRIBUTE =
             SpringInterceptorPayeeMiddleware.class.getName() + ".PAYMENT";
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -125,6 +126,9 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             response.setHeader("payment-response", evidence);
             replayable.setAttribute(PAYMENT_ATTRIBUTE, payment);
             chain.doFilter(replayable, response);
+            LOG.log(System.Logger.Level.INFO,
+                    "agentvault.sdk.payee.resource_released run_id={0} intent_id={1}",
+                    runId, payment.intent().id());
         } catch (SecurityException error) {
             error(response, 402, "PAYMENT_INVALID", error.getMessage());
         } catch (ApiException error) {

@@ -3,7 +3,7 @@ package io.agentvault.sdk.payee;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.agentvault.sdk.config.Config.PayeeConfig;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;

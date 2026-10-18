@@ -35,7 +35,7 @@ let layer = vault.payee(PayeeConfig::default())?.axum(vec![
 let app = Router::new().route("/mcp", post(mcp)).layer(layer);
 ```
 
-Available Vault transports are bounded HTTP, gRPC, and client-scoped MQTT.
+Available Vault transports are gRPC and client-scoped MQTT.
 Remote gRPC and MQTT require TLS; redirects are never followed with payment
 credentials. A stable `run_id` is created once per logical operation
 and reused across approval waits, process retries, and delivery retries.

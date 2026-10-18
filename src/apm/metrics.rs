@@ -43,6 +43,17 @@ struct HttpLabels {
     status: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct WalletSelectionLabels {
+    strategy: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct BalanceSyncLabels {
+    network: String,
+    outcome: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct AgentVaultMetrics {
     registry: Arc<Mutex<Registry>>,
@@ -50,6 +61,8 @@ pub struct AgentVaultMetrics {
     payment_duration: Family<PaymentDurationLabels, Histogram>,
     http_requests: Family<HttpLabels, Counter>,
     payments_in_flight: Gauge,
+    wallet_selections: Family<WalletSelectionLabels, Counter>,
+    wallet_balance_sync: Family<BalanceSyncLabels, Counter>,
 }
 
 /// Fail-safe timer for one transport-neutral payment operation. Unless the
@@ -90,6 +103,8 @@ impl Default for AgentVaultMetrics {
             Family::<PaymentDurationLabels, Histogram>::new_with_constructor(payment_duration_histogram);
         let http_requests = Family::default();
         let payments_in_flight = Gauge::default();
+        let wallet_selections = Family::default();
+        let wallet_balance_sync = Family::default();
 
         let mut registry = Registry::default();
         registry.register(
@@ -112,12 +127,24 @@ impl Default for AgentVaultMetrics {
             "Payment operations currently executing",
             payments_in_flight.clone(),
         );
+        registry.register(
+            "agentvault_wallet_selections",
+            "Outbound wallet selections by configured strategy",
+            wallet_selections.clone(),
+        );
+        registry.register(
+            "agentvault_wallet_balance_sync",
+            "Periodic managed-wallet balance observations by network and outcome",
+            wallet_balance_sync.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             payment_operations,
             payment_duration,
             http_requests,
             payments_in_flight,
+            wallet_selections,
+            wallet_balance_sync,
         }
     }
 }
@@ -163,6 +190,28 @@ impl AgentVaultMetrics {
                 route: bounded_route(route).to_owned(),
                 method: bounded_method(method).to_owned(),
                 status: status.to_string(),
+            })
+            .inc();
+    }
+
+    pub fn record_wallet_selection(&self, strategy: &str) {
+        let strategy = match strategy {
+            "least_spent" => "least_spent",
+            "stable_random" => "stable_random",
+            _ => "other",
+        };
+        self.wallet_selections
+            .get_or_create(&WalletSelectionLabels {
+                strategy: strategy.to_owned(),
+            })
+            .inc();
+    }
+
+    pub fn record_wallet_balance_sync(&self, network: &str, succeeded: bool) {
+        self.wallet_balance_sync
+            .get_or_create(&BalanceSyncLabels {
+                network: network.to_owned(),
+                outcome: if succeeded { "success" } else { "failure" }.to_owned(),
             })
             .inc();
     }

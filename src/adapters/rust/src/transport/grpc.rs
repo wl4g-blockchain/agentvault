@@ -11,6 +11,8 @@ use zeroize::Zeroizing;
 
 use crate::{GrpcConfig, HttpMethod, TransportError, TransportRequest, TransportResponse, VaultTransport};
 
+use crate::transport_mqtt::producer_trace_context;
+
 #[allow(clippy::default_trait_access, clippy::doc_markdown)]
 mod wire {
     tonic::include_proto!("agentvault.transport.v1");
@@ -82,13 +84,20 @@ impl GrpcVaultTransport {
 
 impl VaultTransport for GrpcVaultTransport {
     async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+        let trace = producer_trace_context(&request.headers);
+        let wire_headers = request
+            .headers
+            .iter()
+            .filter(|(name, _)| !matches!(name.to_ascii_lowercase().as_str(), "traceparent" | "tracestate"))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
         let encoded = serde_json::to_vec(&WireRequest {
             method: match request.method {
                 HttpMethod::Get => "GET",
                 HttpMethod::Post => "POST",
             },
             path: &request.path,
-            headers: &request.headers,
+            headers: &wire_headers,
             body: URL_SAFE_NO_PAD.encode(&request.body),
         })
         .map_err(|_| TransportError::new("encode AgentVault gRPC request"))?;
@@ -99,6 +108,32 @@ impl VaultTransport for GrpcVaultTransport {
         }
         let mut request = Request::new(wire::Envelope { value: encoded });
         request.set_timeout(self.request_timeout);
+        let traceparent = trace
+            .headers
+            .get("traceparent")
+            .ok_or_else(|| TransportError::new("create AgentVault gRPC trace context"))?
+            .parse()
+            .map_err(|_| TransportError::new("create AgentVault gRPC trace metadata"))?;
+        request.metadata_mut().insert("traceparent", traceparent);
+        if let Some(tracestate) = trace
+            .headers
+            .iter()
+            .find_map(|(name, value)| name.eq_ignore_ascii_case("tracestate").then_some(value))
+        {
+            request.metadata_mut().insert(
+                "tracestate",
+                tracestate
+                    .parse()
+                    .map_err(|_| TransportError::new("invalid AgentVault gRPC tracestate"))?,
+            );
+        }
+        tracing::info!(
+            event.name = "agentvault.sdk.transport.grpc.produced",
+            trace.id = %trace.trace_id,
+            span.id = %trace.span_id,
+            parent.id = %trace.parent_span_id.as_deref().unwrap_or(""),
+            "calling AgentVault gRPC with W3C Trace Context"
+        );
         if let Some(token) = &self.authguard_bearer {
             let value = MetadataValue::try_from(format!("Bearer {}", token.as_str()))
                 .map_err(|_| TransportError::new("invalid AuthGuard bearer credential"))?;

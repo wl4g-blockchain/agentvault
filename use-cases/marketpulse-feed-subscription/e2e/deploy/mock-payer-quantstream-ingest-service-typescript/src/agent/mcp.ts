@@ -2,6 +2,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   AgentVault,
+  GrpcConfig,
+  GrpcVaultTransport,
   MqttConfig,
   MqttVaultTransport,
   PayerRequestContext,
@@ -26,7 +28,7 @@ export class MCPHelper {
 
   private constructor(
     private readonly client: Client,
-    private readonly transport: MqttVaultTransport,
+    private readonly transport: { close(): void | Promise<void> },
     private readonly payments: Map<string, string>,
     tools: Iterable<string>,
   ) {
@@ -35,17 +37,26 @@ export class MCPHelper {
 
   static async fromEnvironment(): Promise<MCPHelper> {
     const timeout = positive('AGENTVAULT_MQTT_TIMEOUT_SECONDS') * 1000;
-    const vaultTransport = new MqttVaultTransport(new MqttConfig(
-      required('AGENTVAULT_MQTT_HOST'),
-      positive('AGENTVAULT_MQTT_PORT'),
-      boolean('AGENTVAULT_MQTT_TLS'),
-      required('AGENTVAULT_MQTT_USERNAME'),
-      required('AGENTVAULT_MQTT_PASSWORD'),
-      'quantstream-typescript',
-      required('QUANTSTREAM_CLIENT_ID'),
-      timeout,
-    ));
-    await vaultTransport.connect();
+    const transportName = (process.env.AGENTVAULT_TRANSPORT ?? 'mqtt').trim().toLowerCase();
+    let vaultTransport: MqttVaultTransport | GrpcVaultTransport;
+    if (transportName === 'mqtt') {
+      vaultTransport = new MqttVaultTransport(new MqttConfig(
+        required('AGENTVAULT_MQTT_HOST'), positive('AGENTVAULT_MQTT_PORT'),
+        boolean('AGENTVAULT_MQTT_TLS'), required('AGENTVAULT_MQTT_USERNAME'),
+        required('AGENTVAULT_MQTT_PASSWORD'), 'quantstream-typescript',
+        required('QUANTSTREAM_CLIENT_ID'), timeout,
+      ));
+      await vaultTransport.connect();
+    } else if (transportName === 'grpc') {
+      vaultTransport = new GrpcVaultTransport(new GrpcConfig(
+        required('AGENTVAULT_GRPC_ENDPOINT'), boolean('AGENTVAULT_GRPC_TLS'), undefined, timeout,
+      ));
+    } else {
+      throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
+    }
+    console.info(JSON.stringify({
+      event: 'agentvault.sdk.payer.transport_selected', transport: transportName,
+    }));
     const payer = new AgentVault(vaultTransport).payer({
       scenarioId: required('QUANTSTREAM_SCENARIO_ID'),
       approvalTimeoutMs: positive('AGENTVAULT_APPROVAL_TIMEOUT_SECONDS') * 1000,

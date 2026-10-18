@@ -608,7 +608,6 @@ impl ApprovalHandler {
             aggregate_id: intent.id.clone(),
             event_type: "payment_authorized".to_owned(),
             destination: format!("scenario:{}.payments", intent.scenario_id),
-            correlation_id: intent.id.clone(),
             run_id: intent.run_id.clone(),
             payload: json!({"approval_id": approval.id, "intent_id": intent.id, "run_id": intent.run_id}),
             status: OutboxStatus::Pending,
@@ -698,7 +697,6 @@ fn approval_decision_message(
             "approval_rejected".to_owned()
         },
         destination: format!("scenario:{}.payments", intent.scenario_id),
-        correlation_id: intent.id.clone(),
         run_id: intent.run_id.clone(),
         payload: json!({"approval_id": approval.id, "intent_id": intent.id, "run_id": intent.run_id}),
         status: OutboxStatus::Pending,

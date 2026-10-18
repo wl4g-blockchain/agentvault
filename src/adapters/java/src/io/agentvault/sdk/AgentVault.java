@@ -7,7 +7,7 @@ import io.agentvault.sdk.model.Approval.ApprovalPage;
 import io.agentvault.sdk.model.Approval.ApprovalRequest;
 import io.agentvault.sdk.model.Approval.SubmitApprovalDecisionRequest;
 import io.agentvault.sdk.model.Base;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.agentvault.sdk.payee.PayeeMiddleware;
 import io.agentvault.sdk.payer.PayerMiddleware;
 

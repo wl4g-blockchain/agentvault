@@ -11,25 +11,6 @@ import java.util.Map;
 public final class Base {
     private Base() {}
 
-    public interface VaultTransport {
-        <T> T get(String path, Class<T> type);
-        <T> T post(String path, Object body, Class<T> type);
-    }
-
-    public static final class ApiException extends RuntimeException {
-        private final int status;
-        private final String code;
-
-        public ApiException(int status, String code, String message) {
-            super("AgentVault API error " + status + " (" + code + "): " + message);
-            this.status = status;
-            this.code = code;
-        }
-
-        public int status() { return status; }
-        public String code() { return code; }
-    }
-
     public enum PaymentDirection {
         INBOUND("inbound"), OUTBOUND("outbound");
         private final String wire;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import urllib.parse
 from typing import Any, Mapping
 
@@ -8,6 +9,8 @@ import httpx
 
 from ..model import PayerHttpRequest, PayerHttpResponse, PayerRequestContext
 from .payer import PayerMiddleware
+
+_LOG = logging.getLogger("agentvault.sdk")
 
 class HttpxPayerMiddleware:
     """Async HTTPX payer entrypoint with bounded, redirect-free retries."""
@@ -49,11 +52,13 @@ class HttpxPayerMiddleware:
         if first.status_code != 402:
             await first.aread()
             return first
+        _event("agentvault.sdk.payer.x402_detected", run_id=operation.run_id)
         origin = _canonical_origin(url)
         try:
             challenge_body = await _read_bounded(first, self.core.config.max_challenge_bytes)
         finally:
             await first.aclose()
+        _event("agentvault.sdk.payer.signing_requested", run_id=operation.run_id)
         authorized = await asyncio.to_thread(
             self.core.authorize,
             PayerHttpRequest(method, url, origin, request_headers, _body_bytes(content), False),
@@ -62,10 +67,14 @@ class HttpxPayerMiddleware:
         )
         if authorized is None:
             raise RuntimeError("AgentVault did not authorize the 402 challenge")
+        _event("agentvault.sdk.payer.signed", run_id=operation.run_id,
+               intent_id=authorized.intent.id)
         name, value = self.core.credential_header(authorized, origin, request_headers)
         paid_headers = {**request_headers, name: value}
         response = first
         for attempt in range(self.core.config.delivery_retries + 1):
+            _event("agentvault.sdk.payer.retrying", run_id=operation.run_id,
+                   intent_id=authorized.intent.id, attempt_no=attempt + 1)
             response = await self._send(method, url, paid_headers, content, **kwargs)
             await asyncio.to_thread(
                 self.core.report, operation, authorized,
@@ -117,3 +126,11 @@ def _body_bytes(value: bytes | str | None) -> bytes:
     if value is None:
         return b""
     return value if isinstance(value, bytes) else value.encode()
+
+
+def _event(name: str, **fields: object) -> None:
+    rendered = " ".join(
+        f"{key.replace('_', '.')}={value}" for key, value in sorted(fields.items())
+    )
+    message = f"{name} {rendered}" if rendered else name
+    _LOG.info(message, extra={"event_name": name, **fields})

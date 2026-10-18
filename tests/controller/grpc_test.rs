@@ -1,6 +1,6 @@
 use axum::http::{HeaderName, Method};
 
-use super::{is_allowed_payment_route, is_allowed_request_header};
+use super::{is_allowed_payment_route, is_allowed_request_header, trace_identity};
 
 #[test]
 fn accepts_only_sdk_protocol_headers_from_grpc_envelopes() {
@@ -18,6 +18,30 @@ fn accepts_only_sdk_protocol_headers_from_grpc_envelopes() {
         "content-length",
     ] {
         assert!(!is_allowed_request_header(&HeaderName::from_static(name)));
+    }
+}
+
+#[test]
+fn requires_a_canonical_nonzero_w3c_traceparent() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "traceparent",
+        "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+            .parse()
+            .expect("traceparent"),
+    );
+    assert_eq!(
+        trace_identity(&headers),
+        Some(("0123456789abcdef0123456789abcdef", "0123456789abcdef"))
+    );
+    for invalid in [
+        "00-00000000000000000000000000000000-0123456789abcdef-01",
+        "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+        "00-0123456789ABCDEF0123456789ABCDEF-0123456789abcdef-01",
+        "ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    ] {
+        headers.insert("traceparent", invalid.parse().expect("ASCII traceparent"));
+        assert_eq!(trace_identity(&headers), None, "accepted {invalid}");
     }
 }
 

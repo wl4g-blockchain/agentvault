@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { inspect } from 'node:util';
 import * as grpc from '@grpc/grpc-js';
 import { GrpcConfig } from '../config/config.js';
-import { ApiError, type VaultTransport } from './http.js';
+import { ApiError, type VaultTransport } from './transport.js';
 
 const EXECUTE = '/agentvault.transport.v1.PaymentTransport/Execute';
 
@@ -41,7 +42,15 @@ export class GrpcVaultTransport implements VaultTransport {
       throw new Error('AgentVault gRPC request exceeds configured limit');
     }
     const metadata = new grpc.Metadata();
+    const trace = producerTraceContext();
+    metadata.set('traceparent', trace.traceparent);
     if (this.config.authguardBearer) metadata.set('authorization', `Bearer ${this.config.authguardBearer}`);
+    console.info(JSON.stringify({
+      event: 'agentvault.sdk.transport.grpc.produced',
+      traceId: trace.traceId,
+      spanId: trace.spanId,
+      parentId: '',
+    }));
     const deadline = Date.now() + this.config.timeoutMs;
     const raw = await new Promise<Buffer>((resolve, reject) => {
       this.client.makeUnaryRequest(
@@ -80,8 +89,8 @@ export class GrpcVaultTransport implements VaultTransport {
       const detail = (value as { error?: { code?: string; message?: string } }).error;
       throw new ApiError(
         wire.status,
-        detail?.code ?? 'HTTP_ERROR',
-        detail?.message ?? `AgentVault returned HTTP ${wire.status}`,
+        detail?.code ?? 'TRANSPORT_ERROR',
+        detail?.message ?? `AgentVault returned status ${wire.status}`,
       );
     }
     return value as T;
@@ -89,6 +98,19 @@ export class GrpcVaultTransport implements VaultTransport {
 
   close(): void {
     this.client.close();
+  }
+}
+
+function producerTraceContext(): { traceId: string; spanId: string; traceparent: string } {
+  const traceId = randomNonzeroHex(16);
+  const spanId = randomNonzeroHex(8);
+  return { traceId, spanId, traceparent: `00-${traceId}-${spanId}-01` };
+}
+
+function randomNonzeroHex(bytes: number): string {
+  for (;;) {
+    const value = randomBytes(bytes).toString('hex');
+    if (!/^0+$/.test(value)) return value;
   }
 }
 

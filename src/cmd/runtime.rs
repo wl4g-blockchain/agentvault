@@ -66,6 +66,9 @@ impl AgentVaultServer {
             if let Some(reconciliation) = payment.reconciliation {
                 server = server.with_component(reconciliation);
             }
+            if let Some(wallet_balance_sync) = payment.wallet_balance_sync {
+                server = server.with_component(wallet_balance_sync);
+            }
             server = server.with_component(payment.approval_expiration);
             server = server.with_resource(payment.resources);
         } else if config.server.enabled

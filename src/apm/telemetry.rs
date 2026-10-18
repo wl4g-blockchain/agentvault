@@ -196,6 +196,16 @@ pub async fn trace_http_request(request: Request<Body>, next: Next) -> Response 
         })
         .unwrap_or("")
         .to_owned();
+    if let Some((trace_id, producer_span_id)) = trace_identity(request.headers()) {
+        tracing::info!(
+            event.name = "agentvault.transport.http.request",
+            trace.id = trace_id,
+            trace.producer_span_id = producer_span_id,
+            http.request.method = %method,
+            http.route = %route,
+            "received AgentVault HTTP request with W3C Trace Context"
+        );
+    }
     let span = tracing::info_span!(
         "http.server.request",
         otel.kind = "server",
@@ -218,6 +228,33 @@ pub async fn trace_http_request(request: Request<Body>, next: Next) -> Response 
     .await;
     span.record("http.response.status_code", response.status().as_u16());
     response
+}
+
+fn trace_identity(headers: &axum::http::HeaderMap) -> Option<(&str, &str)> {
+    let value = headers.get("traceparent")?.to_str().ok()?;
+    let mut fields = value.split('-');
+    let version = fields.next()?;
+    let trace_id = fields.next()?;
+    let span_id = fields.next()?;
+    let flags = fields.next()?;
+    if fields.next().is_some()
+        || version != "00"
+        || !valid_lower_hex(trace_id, 32)
+        || trace_id.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(span_id, 16)
+        || span_id.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(flags, 2)
+    {
+        return None;
+    }
+    Some((trace_id, span_id))
+}
+
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn find_resource_attribute(attributes: &str, name: &str) -> Option<String> {

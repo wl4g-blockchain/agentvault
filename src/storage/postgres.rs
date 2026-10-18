@@ -434,7 +434,6 @@ mod approval {
             aggregate_id: intent.id.clone(),
             event_type: "approval_expired".to_owned(),
             destination: format!("scenario:{}.payments", intent.scenario_id),
-            correlation_id: intent.id.clone(),
             run_id: intent.run_id.clone(),
             payload: json!({
                 "intent_id": intent.id,
@@ -751,7 +750,7 @@ mod catalog {
                 let offer = offer.clone();
                 self.transaction(|connection| {
                     Box::pin(async move {
-                        lock_offer_authority(connection, &offer.policy_id, &offer.wallet_id).await?;
+                        lock_offer_authority(connection, &offer).await?;
                         insert_offer(connection, &offer).await?;
                         Ok(offer)
                     })
@@ -812,7 +811,7 @@ mod catalog {
                 let offer = offer.clone();
                 self.transaction(|connection| {
                     Box::pin(async move {
-                        lock_offer_authority(connection, &offer.policy_id, &offer.wallet_id).await?;
+                        lock_offer_authority(connection, &offer).await?;
                         let protocols = encode_json(&offer.protocols, "pay_offer.protocols")?;
                         let amount = encode_amount(offer.amount)?;
                         let result = postgres_update!(
@@ -881,22 +880,42 @@ mod catalog {
                 .map_err(|field| Error::InvalidRequest(format!("invalid payment offer {field}")))
         }
 
-        async fn lock_offer_authority(connection: &mut PgConnection, policy_id: &str, wallet_id: &str) -> Result<()> {
+        async fn lock_offer_authority(connection: &mut PgConnection, offer: &PaymentOffer) -> Result<()> {
             let policy: Option<String> = sqlx::query_scalar("SELECT id FROM pay_policy WHERE id = $1 FOR SHARE")
-                .bind(policy_id)
+                .bind(&offer.policy_id)
                 .fetch_optional(&mut *connection)
                 .await
                 .map_err(|error| storage_error("lock offer payment policy", error))?;
             if policy.is_none() {
-                return Err(Error::NotFound(format!("payment policy {policy_id}")));
+                return Err(Error::NotFound(format!("payment policy {}", offer.policy_id)));
             }
             let wallet: Option<String> = sqlx::query_scalar("SELECT id FROM pay_wallet WHERE id = $1 FOR UPDATE")
-                .bind(wallet_id)
-                .fetch_optional(connection)
+                .bind(&offer.wallet_id)
+                .fetch_optional(&mut *connection)
                 .await
                 .map_err(|error| storage_error("lock offer payment wallet", error))?;
             if wallet.is_none() {
-                return Err(Error::NotFound(format!("payment wallet {wallet_id}")));
+                return Err(Error::NotFound(format!("payment wallet {}", offer.wallet_id)));
+            }
+            let policy = super::policy::load_policy_connection(connection, &offer.policy_id)
+                .await?
+                .ok_or_else(|| Error::NotFound(format!("payment policy {}", offer.policy_id)))?;
+            let inbound = policy
+                .inbound_limits
+                .as_ref()
+                .ok_or_else(|| conflict("offer policy does not authorize inbound payments"))?;
+            if policy.scenario_id != offer.scenario_id
+                || !policy.wallet_ids.contains(&offer.wallet_id)
+                || !policy.budget_unit.matches(&offer.asset)
+                || !policy.networks.contains(&offer.asset.network)
+                || !policy.assets.contains(&offer.asset)
+                || offer.amount > inbound.max_per_payment
+                || offer
+                    .protocols
+                    .iter()
+                    .any(|protocol| !policy.protocols.contains(protocol))
+            {
+                return Err(conflict("offer exceeds or falls outside its inbound policy scope"));
             }
             Ok(())
         }
@@ -959,6 +978,7 @@ mod catalog {
                         // order, preventing cross-aggregate deadlocks.
                         insert_policy(connection, &policy).await?;
                         lock_wallets(connection, &policy.wallet_ids).await?;
+                        validate_wallet_bindings(connection, &policy).await?;
                         for wallet_id in &policy.wallet_ids {
                             sqlx::query(
                                 "INSERT INTO pay_policy_wallet (policy_id, wallet_id, created_at) VALUES ($1, $2, $3)",
@@ -998,6 +1018,7 @@ mod catalog {
                             return Err(conflict("payment policy identity or revision changed"));
                         }
                         lock_wallets(connection, &policy.wallet_ids).await?;
+                        validate_wallet_bindings(connection, &policy).await?;
                         let encoded = EncodedPolicy::new(&policy)?;
                         let result = sqlx::query(
                             "UPDATE pay_policy SET protocols = $1, networks = $2, assets = $3, \
@@ -1186,6 +1207,97 @@ mod catalog {
                     .map_err(|error| storage_error("lock payment policy wallets", error))?;
             if locked != wallet_ids {
                 return Err(conflict("payment policy references an unavailable wallet"));
+            }
+            Ok(())
+        }
+
+        /// Validates every cross-policy wallet invariant while the wallet rows
+        /// are locked in canonical order. This deliberately replaces the old
+        /// DDL triggers so the full policy mutation is one observable,
+        /// testable `AgentVault` transaction in both database dialects.
+        async fn validate_wallet_bindings(connection: &mut PgConnection, policy: &PaymentPolicy) -> Result<()> {
+            for wallet_id in &policy.wallet_ids {
+                let row = sqlx::query(
+                    "SELECT budget_asset, budget_decimals, max_per_payment IS NOT NULL AS has_payment_limit, \
+                     max_per_day IS NOT NULL AS has_day_limit FROM pay_wallet WHERE id = $1",
+                )
+                .bind(wallet_id)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(|error| storage_error("load locked payment policy wallet", error))?;
+                let budget_asset: Option<String> = row
+                    .try_get("budget_asset")
+                    .map_err(|error| storage_error("decode wallet budget asset", error))?;
+                let budget_decimals: Option<i16> = row
+                    .try_get("budget_decimals")
+                    .map_err(|error| storage_error("decode wallet budget decimals", error))?;
+                let has_hard_limits = row
+                    .try_get::<bool, _>("has_payment_limit")
+                    .map_err(|error| storage_error("decode wallet payment limit", error))?
+                    && row
+                        .try_get::<bool, _>("has_day_limit")
+                        .map_err(|error| storage_error("decode wallet daily limit", error))?;
+
+                match (budget_asset.as_deref(), budget_decimals) {
+                    (None, None) => {
+                        let changed = sqlx::query(
+                            "UPDATE pay_wallet SET budget_asset = $1, budget_decimals = $2, \
+                             updated_at = GREATEST(updated_at + 1, $3) \
+                             WHERE id = $4 AND budget_asset IS NULL AND budget_decimals IS NULL",
+                        )
+                        .bind(&policy.budget_unit.asset)
+                        .bind(i16::from(policy.budget_unit.decimals))
+                        .bind(policy.created_at)
+                        .bind(wallet_id)
+                        .execute(&mut *connection)
+                        .await
+                        .map_err(|error| conflict(format!("initialize wallet budget unit rejected: {error}")))?;
+                        if changed.rows_affected() != 1 {
+                            return Err(conflict("wallet budget unit changed while binding policy"));
+                        }
+                    }
+                    (Some(asset), Some(decimals))
+                        if asset == policy.budget_unit.asset.as_str()
+                            && decimals == i16::from(policy.budget_unit.decimals) => {}
+                    _ => return Err(conflict("payment policy budget unit does not match its wallet")),
+                }
+
+                if !policy.enabled {
+                    continue;
+                }
+                let duplicate: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pay_policy_wallet membership \
+                     JOIN pay_policy other ON other.id = membership.policy_id \
+                     WHERE membership.wallet_id = $1 AND other.enabled \
+                     AND other.scenario_id = $2 AND other.id <> $3)",
+                )
+                .bind(wallet_id)
+                .bind(&policy.scenario_id)
+                .bind(&policy.id)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(|error| storage_error("validate unique scenario wallet policy", error))?;
+                if duplicate {
+                    return Err(conflict("scenario wallet already has an enabled payment policy"));
+                }
+
+                let shared: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pay_policy_wallet membership \
+                     JOIN pay_policy other ON other.id = membership.policy_id \
+                     WHERE membership.wallet_id = $1 AND other.enabled \
+                     AND other.scenario_id <> $2 AND other.id <> $3)",
+                )
+                .bind(wallet_id)
+                .bind(&policy.scenario_id)
+                .bind(&policy.id)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(|error| storage_error("validate shared payment wallet limits", error))?;
+                if shared && !has_hard_limits {
+                    return Err(conflict(
+                        "wallet shared across scenarios requires aggregate hard limits",
+                    ));
+                }
             }
             Ok(())
         }
@@ -1430,16 +1542,16 @@ mod catalog {
         use sqlx::{PgConnection, Row as _};
 
         use crate::{
-            model::{wallet::Wallet, Amount, BudgetUnit},
+            model::{wallet::Wallet, Amount, AssetIdentity, BudgetUnit},
             storage::{
-                EncryptedWalletKeyVersion, Page, PageRequest, PaymentWallet, WalletCustody, WalletKeyStatus,
-                WalletProvisioningConfig, WalletStorage,
+                EncryptedWalletKeyVersion, Page, PageRequest, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage,
+                WalletCustody, WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
             },
             Error, Result,
         };
 
         use super::super::{
-            codec::{encode_optional_amount, page_bounds},
+            codec::{decode_amount, encode_amount, encode_optional_amount, page_bounds, PgAmount},
             conflict, records, storage_error, PostgresStorage,
         };
 
@@ -1730,6 +1842,20 @@ mod catalog {
                         {
                             return Err(conflict("wallet policy bindings, revision, or budget unit changed"));
                         }
+                        let enabled_scenarios: i64 = sqlx::query_scalar(
+                            "SELECT count(DISTINCT policy.scenario_id) FROM pay_policy_wallet membership \
+                             JOIN pay_policy policy ON policy.id = membership.policy_id \
+                             WHERE membership.wallet_id = $1 AND policy.enabled",
+                        )
+                        .bind(&wallet_id)
+                        .fetch_one(&mut *connection)
+                        .await
+                        .map_err(|error| storage_error("count shared wallet scenarios", error))?;
+                        if enabled_scenarios > 1 && (max_per_payment.is_none() || max_per_day.is_none()) {
+                            return Err(conflict(
+                                "wallet shared across scenarios requires aggregate hard limits",
+                            ));
+                        }
                         let max_per_payment = encode_optional_amount(max_per_payment)?;
                         let max_per_day = encode_optional_amount(max_per_day)?;
                         let result = sqlx::query(
@@ -1769,6 +1895,83 @@ mod catalog {
                     return Err(conflict("wallet was not found or update timestamp moved backwards"));
                 }
                 Ok(())
+            }
+        }
+
+        #[async_trait]
+        impl WalletBalanceStorage for PostgresStorage {
+            async fn upsert_balance(&self, balance: &WalletBalanceRecord) -> Result<WalletBalanceRecord> {
+                balance
+                    .validate()
+                    .map_err(|field| Error::InvalidRequest(format!("invalid wallet balance {field}")))?;
+                let asset_available = encode_amount(balance.asset_available)?;
+                let native_available = encode_amount(balance.native_available)?;
+                let result = sqlx::query(
+                    "INSERT INTO pay_wallet_balance \
+                     (wallet_id, network, asset, token_contract, asset_decimals, asset_available, \
+                      native_available, observed_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                     ON CONFLICT(wallet_id, network, asset, token_contract, asset_decimals) DO UPDATE SET \
+                       asset_available = EXCLUDED.asset_available, native_available = EXCLUDED.native_available, \
+                       observed_at = EXCLUDED.observed_at, updated_at = EXCLUDED.updated_at \
+                     WHERE EXCLUDED.observed_at >= pay_wallet_balance.observed_at",
+                )
+                .bind(&balance.wallet_id)
+                .bind(&balance.asset.network)
+                .bind(&balance.asset.asset)
+                .bind(balance.asset.token_contract.as_deref().unwrap_or(""))
+                .bind(i16::from(balance.asset.decimals))
+                .bind(asset_available)
+                .bind(native_available)
+                .bind(balance.observed_at)
+                .bind(balance.updated_at)
+                .execute(self.pool())
+                .await
+                .map_err(|error| storage_error("upsert wallet balance", error))?;
+                if result.rows_affected() != 1 {
+                    return Err(conflict("wallet balance observation moved backwards"));
+                }
+                Ok(balance.clone())
+            }
+
+            async fn get_balance(&self, wallet_id: &str, asset: &AssetIdentity) -> Result<Option<WalletBalanceRecord>> {
+                asset
+                    .validate()
+                    .map_err(|field| Error::InvalidRequest(format!("invalid wallet balance asset {field}")))?;
+                let row = sqlx::query(
+                    "SELECT asset_available, native_available, observed_at, updated_at \
+                     FROM pay_wallet_balance WHERE wallet_id = $1 AND network = $2 AND asset = $3 \
+                     AND token_contract = $4 AND asset_decimals = $5",
+                )
+                .bind(wallet_id)
+                .bind(&asset.network)
+                .bind(&asset.asset)
+                .bind(asset.token_contract.as_deref().unwrap_or(""))
+                .bind(i16::from(asset.decimals))
+                .fetch_optional(self.pool())
+                .await
+                .map_err(|error| storage_error("get wallet balance", error))?;
+                row.map(|row| {
+                    let asset_available: PgAmount = row
+                        .try_get("asset_available")
+                        .map_err(|error| storage_error("decode wallet asset balance", error))?;
+                    let native_available: PgAmount = row
+                        .try_get("native_available")
+                        .map_err(|error| storage_error("decode wallet native balance", error))?;
+                    Ok(WalletBalanceRecord {
+                        wallet_id: wallet_id.to_owned(),
+                        asset: asset.clone(),
+                        asset_available: decode_amount(&asset_available, "pay_wallet_balance.asset_available")?,
+                        native_available: decode_amount(&native_available, "pay_wallet_balance.native_available")?,
+                        observed_at: row
+                            .try_get("observed_at")
+                            .map_err(|error| storage_error("decode wallet balance observed_at", error))?,
+                        updated_at: row
+                            .try_get("updated_at")
+                            .map_err(|error| storage_error("decode wallet balance updated_at", error))?,
+                    })
+                })
+                .transpose()
             }
         }
 
@@ -1888,6 +2091,34 @@ mod catalog {
         }
 
         pub(super) async fn insert_key(connection: &mut PgConnection, key: &EncryptedWalletKeyVersion) -> Result<()> {
+            let wallet = sqlx::query(
+                "SELECT custody_type, algorithm, address, public_key FROM pay_wallet WHERE id = $1 FOR SHARE",
+            )
+            .bind(&key.wallet_id)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(|error| storage_error("validate encrypted wallet key owner", error))?
+            .ok_or_else(|| Error::NotFound(format!("payment wallet {}", key.wallet_id)))?;
+            let custody: String = wallet
+                .try_get("custody_type")
+                .map_err(|error| storage_error("decode wallet custody", error))?;
+            let algorithm: String = wallet
+                .try_get("algorithm")
+                .map_err(|error| storage_error("decode wallet algorithm", error))?;
+            let address: String = wallet
+                .try_get("address")
+                .map_err(|error| storage_error("decode wallet address", error))?;
+            let public_key: Option<String> = wallet
+                .try_get("public_key")
+                .map_err(|error| storage_error("decode wallet public key", error))?;
+            if custody != "local"
+                || (key.status == WalletKeyStatus::Active
+                    && (algorithm != key.algorithm
+                        || address != key.address
+                        || public_key.as_deref() != Some(key.public_key.as_str())))
+            {
+                return Err(conflict("key version does not match a local-custody wallet"));
+            }
             sqlx::query(
                 "INSERT INTO wallet_key_version (wallet_id, version, algorithm, address, public_key, encryption_scheme, \
                  kek_id, wrapped_data_key, wrap_nonce, key_ciphertext, key_nonce, aad, status, activated_at, retired_at, created_at) \
@@ -2922,10 +3153,10 @@ mod outbox {
         validate_message(message)?;
         let payload = encode_json(&message.payload, "pay_outbox.payload")?;
         let inserted = sqlx::query(
-            "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, correlation_id, \
+            "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
              run_id, payload, status, attempt_count, available_at, lease_owner, lease_expires_at, \
              last_error, created_at, delivered_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT DO NOTHING RETURNING id",
         )
         .bind(&message.id)
@@ -2933,7 +3164,6 @@ mod outbox {
         .bind(&message.aggregate_id)
         .bind(&message.event_type)
         .bind(&message.destination)
-        .bind(&message.correlation_id)
         .bind(&message.run_id)
         .bind(payload)
         .bind(message.status.as_str())
@@ -2973,7 +3203,6 @@ mod outbox {
             || message.aggregate_id.trim().is_empty()
             || message.event_type.trim().is_empty()
             || message.destination.trim().is_empty()
-            || message.correlation_id.trim().is_empty()
             || message.run_id.trim().is_empty()
         {
             return Err(Error::InvalidRequest(
@@ -2989,7 +3218,6 @@ mod outbox {
             && left.aggregate_id == right.aggregate_id
             && left.event_type == right.event_type
             && left.destination == right.destination
-            && left.correlation_id == right.correlation_id
             && left.run_id == right.run_id
             && left.payload == right.payload
             && left.created_at == right.created_at
@@ -3616,6 +3844,7 @@ mod payment {
         intent
             .validate()
             .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
+        validate_intent_authority(connection, intent).await?;
         sqlx::query(
             "INSERT INTO pay_intent (id, scenario_id, run_id, wallet_id, policy_id, offer_id, direction, protocol, \
              network, asset, token_contract, asset_decimals, recipient, amount, settled_amount, resource, \
@@ -3657,6 +3886,45 @@ mod payment {
         .execute(connection)
         .await
         .map_err(|error| conflict(format!("payment intent insert rejected: {error}")))?;
+        Ok(())
+    }
+
+    async fn validate_intent_authority(connection: &mut PgConnection, intent: &PaymentIntent) -> Result<()> {
+        // Denials remain immutable audit facts. Their relational identity is
+        // still enforced by foreign keys, while the rejected scope is allowed
+        // to describe precisely why authorization failed.
+        if intent.status == PaymentStatus::Failed {
+            return Ok(());
+        }
+        let (policy_id, wallet_id) = intent
+            .authority_ids()
+            .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
+        let locked: Option<String> = sqlx::query_scalar("SELECT id FROM pay_policy WHERE id = $1 FOR SHARE")
+            .bind(policy_id)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(|error| storage_error("lock payment intent policy", error))?;
+        if locked.is_none() {
+            return Err(Error::NotFound(format!("payment policy {policy_id}")));
+        }
+        let policy = load_policy_connection(connection, policy_id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("payment policy {policy_id}")))?;
+        let limit = policy
+            .limits_for(intent.direction)
+            .ok_or_else(|| conflict("policy does not authorize payment intent direction"))?;
+        if policy.scenario_id != intent.scenario_id
+            || !policy.wallet_ids.iter().any(|allowed| allowed == wallet_id)
+            || !policy.budget_unit.matches(&intent.asset)
+            || !policy.protocols.contains(&intent.protocol)
+            || !policy.networks.contains(&intent.asset.network)
+            || !policy.assets.contains(&intent.asset)
+            || intent.amount > limit.max_per_payment
+        {
+            return Err(conflict(
+                "payment intent exceeds or falls outside its directional policy scope",
+            ));
+        }
         Ok(())
     }
 
@@ -4863,7 +5131,6 @@ pub(super) mod records {
             aggregate_id: field(row, "aggregate_id")?,
             event_type: field(row, "event_type")?,
             destination: field(row, "destination")?,
-            correlation_id: field(row, "correlation_id")?,
             run_id: field(row, "run_id")?,
             payload: decode_json(field(row, "payload")?, "pay_outbox.payload")?,
             status: outbox_status(&field::<String>(row, "status")?)?,
@@ -5801,6 +6068,7 @@ impl crate::storage::IStorage for PostgresStorage {
             policies: self.clone(),
             offers: self.clone(),
             wallets: self.clone(),
+            wallet_balances: self.clone(),
             payments: self.clone(),
             approvals: self.clone(),
             events: self.clone(),

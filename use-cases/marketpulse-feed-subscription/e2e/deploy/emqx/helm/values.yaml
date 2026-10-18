@@ -49,24 +49,76 @@ config:
       "agentvault/v1/clients/+/payments/events/+"
     ]}.
     
-    %% QuantStream workload is pinned to its own registered client topic tree.
-    {allow, {username, "quantstream-workload"}, publish, [
-      "agentvault/v1/clients/client-quantstream/commands/authorize",
-      "agentvault/v1/clients/client-quantstream/commands/outbound-response"
+    %% Five Payer workloads and approvers have mutually exclusive client trees.
+    {allow, {username, "quantstream-rust-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-rust/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-rust/commands/outbound-response"
     ]}.
-    {allow, {username, "quantstream-workload"}, subscribe, [
-      "agentvault/v1/clients/client-quantstream/results/+",
-      "agentvault/v1/clients/client-quantstream/approvals/required",
-      "agentvault/v1/clients/client-quantstream/payments/events/+"
+    {allow, {username, "quantstream-rust-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-rust/results/+"
     ]}.
-    
-    %% Approval decisions use an independent business administrator credential.
-    {allow, {username, "quantstream-approver"}, publish, [
-      "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/decisions"
+    {allow, {username, "quantstream-rust-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-rust/approvers/principal-quantstream-rust-admin/decisions"
     ]}.
-    {allow, {username, "quantstream-approver"}, subscribe, [
-      "agentvault/v1/clients/client-quantstream/approvals/required",
-      "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/results/+"
+    {allow, {username, "quantstream-rust-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-rust/approvals/required",
+      "agentvault/v1/clients/client-quantstream-rust/approvers/principal-quantstream-rust-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-go-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-go/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-go/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-go-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-go/results/+"
+    ]}.
+    {allow, {username, "quantstream-go-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-go/approvers/principal-quantstream-go-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-go-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-go/approvals/required",
+      "agentvault/v1/clients/client-quantstream-go/approvers/principal-quantstream-go-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-python-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-python/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-python/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-python-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-python/results/+"
+    ]}.
+    {allow, {username, "quantstream-python-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-python/approvers/principal-quantstream-python-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-python-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-python/approvals/required",
+      "agentvault/v1/clients/client-quantstream-python/approvers/principal-quantstream-python-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-typescript-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-typescript/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-typescript/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-typescript-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-typescript/results/+"
+    ]}.
+    {allow, {username, "quantstream-typescript-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-typescript/approvers/principal-quantstream-typescript-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-typescript-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-typescript/approvals/required",
+      "agentvault/v1/clients/client-quantstream-typescript/approvers/principal-quantstream-typescript-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-java-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-java/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-java/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-java-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-java/results/+"
+    ]}.
+    {allow, {username, "quantstream-java-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-java/approvers/principal-quantstream-java-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-java-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-java/approvals/required",
+      "agentvault/v1/clients/client-quantstream-java/approvers/principal-quantstream-java-admin/results/+"
     ]}.
     
     {deny, all}.
@@ -76,4 +128,3 @@ persistence:
 resources:
   requests: { cpu: 20m, memory: 32Mi }
   limits: { cpu: 1000m, memory: 512Mi }
-

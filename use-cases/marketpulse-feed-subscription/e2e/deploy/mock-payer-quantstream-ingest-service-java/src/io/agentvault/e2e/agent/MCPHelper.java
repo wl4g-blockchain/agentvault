@@ -3,8 +3,11 @@ package io.agentvault.e2e.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.AgentVault;
 import io.agentvault.sdk.config.Config.MqttConfig;
+import io.agentvault.sdk.config.Config.GrpcConfig;
 import io.agentvault.sdk.config.Config.PayerConfig;
 import io.agentvault.sdk.transport.MqttVaultTransport;
+import io.agentvault.sdk.transport.GrpcVaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -42,32 +45,25 @@ public final class MCPHelper implements AutoCloseable {
 
     private final ThreadLocal<Operation> operation = new ThreadLocal<>();
     private final Map<String, Operation> activeOperations = new ConcurrentHashMap<>();
-    private final MqttVaultTransport mqtt;
+    private final AutoCloseable vaultTransport;
     private final McpSyncClient mcp;
     private final Map<String, Boolean> tools;
 
     public MCPHelper() {
         long timeoutSeconds = positive("AGENTVAULT_MQTT_TIMEOUT_SECONDS");
-        MqttVaultTransport mqttTransport = new MqttVaultTransport(new MqttConfig(
-                required("AGENTVAULT_MQTT_HOST"),
-                Math.toIntExact(positive("AGENTVAULT_MQTT_PORT")),
-                bool("AGENTVAULT_MQTT_TLS"),
-                required("AGENTVAULT_MQTT_USERNAME"),
-                required("AGENTVAULT_MQTT_PASSWORD"),
-                "quantstream-java",
-                required("QUANTSTREAM_CLIENT_ID"),
-                Duration.ofSeconds(timeoutSeconds),
-                2 * 1024 * 1024));
+        String transportName = System.getenv().getOrDefault("AGENTVAULT_TRANSPORT", "mqtt").trim().toLowerCase();
+        BaseTransport selected = createTransport(transportName, timeoutSeconds);
         McpSyncClient mcpClient = null;
         try {
-            mqttTransport.connect();
             PayerConfig payerConfig = new PayerConfig(
                     required("QUANTSTREAM_SCENARIO_ID"),
                     Duration.ofSeconds(positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")),
                     Duration.ofSeconds(1),
                     1,
                     256 * 1024);
-            var payer = new AgentVault(mqttTransport).payer(payerConfig).standard();
+            var payer = new AgentVault(selected.transport()).payer(payerConfig).spring();
+            System.getLogger("io.agentvault.e2e").log(System.Logger.Level.INFO,
+                    "agentvault.sdk.payer.transport_selected transport={0}", transportName);
             URI endpoint = URI.create(required("MARKETPULSE_URL"));
             String origin = endpoint.getScheme() + "://" + endpoint.getAuthority();
             String path = endpoint.getRawPath();
@@ -91,7 +87,7 @@ public final class MCPHelper implements AutoCloseable {
             if (!discovered.containsAll(expected.keySet())) {
                 throw new IllegalStateException("MarketPulse did not publish both required MCP tools");
             }
-            mqtt = mqttTransport;
+            vaultTransport = selected.closeable();
             mcp = mcpClient;
             tools = expected;
         } catch (RuntimeException | Error error) {
@@ -102,7 +98,7 @@ public final class MCPHelper implements AutoCloseable {
                     // Preserve the startup error; cleanup is best-effort.
                 }
             }
-            mqttTransport.close();
+            selected.close();
             throw error;
         }
     }
@@ -173,7 +169,38 @@ public final class MCPHelper implements AutoCloseable {
     @Override
     public void close() {
         if (mcp != null) mcp.close();
-        mqtt.close();
+        try {
+            vaultTransport.close();
+        } catch (Exception error) {
+            throw new IllegalStateException("close AgentVault transport", error);
+        }
+    }
+
+    private record BaseTransport(VaultTransport transport,
+                                 AutoCloseable closeable) implements AutoCloseable {
+        @Override public void close() {
+            try { closeable.close(); } catch (Exception error) {
+                throw new IllegalStateException("close AgentVault transport", error);
+            }
+        }
+    }
+
+    private static BaseTransport createTransport(String name, long timeoutSeconds) {
+        if ("mqtt".equals(name)) {
+            var transport = new MqttVaultTransport(new MqttConfig(
+                    required("AGENTVAULT_MQTT_HOST"), Math.toIntExact(positive("AGENTVAULT_MQTT_PORT")),
+                    bool("AGENTVAULT_MQTT_TLS"), required("AGENTVAULT_MQTT_USERNAME"),
+                    required("AGENTVAULT_MQTT_PASSWORD"), "quantstream-java",
+                    required("QUANTSTREAM_CLIENT_ID"), Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024));
+            return new BaseTransport(transport, transport);
+        }
+        if ("grpc".equals(name)) {
+            var transport = new GrpcVaultTransport(new GrpcConfig(
+                    required("AGENTVAULT_GRPC_ENDPOINT"), bool("AGENTVAULT_GRPC_TLS"), null,
+                    Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024));
+            return new BaseTransport(transport, transport);
+        }
+        throw new IllegalStateException("AGENTVAULT_TRANSPORT must be mqtt or grpc");
     }
 
     private static String required(String name) {

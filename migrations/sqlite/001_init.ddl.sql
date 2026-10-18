@@ -109,6 +109,35 @@ CREATE UNIQUE INDEX uq_pay_wallet_evm_address
       AND lower(substr(address, 1, 2)) = '0x'
       AND substr(lower(address), 3) NOT GLOB '*[^0-9a-f]*';
 
+-- Periodic, non-authoritative chain observations used by management,
+-- alerting, and capacity planning. Signing still performs a fresh trusted
+-- balance check immediately before using a key.
+CREATE TABLE pay_wallet_balance (
+    wallet_id           TEXT NOT NULL REFERENCES pay_wallet(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    network             TEXT NOT NULL CHECK (length(trim(network)) > 0),
+    asset               TEXT NOT NULL CHECK (length(trim(asset)) > 0),
+    token_contract      TEXT NOT NULL DEFAULT '',
+    asset_decimals      INTEGER NOT NULL CHECK (asset_decimals BETWEEN 0 AND 255),
+    asset_available     TEXT NOT NULL CHECK (
+                            length(asset_available) BETWEEN 1 AND 39
+                            AND asset_available NOT GLOB '*[^0-9]*'
+                            AND (asset_available = '0' OR substr(asset_available, 1, 1) BETWEEN '1' AND '9')
+                            AND (length(asset_available) < 39 OR asset_available <= '340282366920938463463374607431768211455')
+                        ),
+    native_available    TEXT NOT NULL CHECK (
+                            length(native_available) BETWEEN 1 AND 39
+                            AND native_available NOT GLOB '*[^0-9]*'
+                            AND (native_available = '0' OR substr(native_available, 1, 1) BETWEEN '1' AND '9')
+                            AND (length(native_available) < 39 OR native_available <= '340282366920938463463374607431768211455')
+                        ),
+    observed_at         INTEGER NOT NULL CHECK (observed_at >= 0),
+    updated_at          INTEGER NOT NULL CHECK (updated_at >= observed_at),
+    PRIMARY KEY (wallet_id, network, asset, token_contract, asset_decimals)
+);
+
+CREATE INDEX ix_pay_wallet_balance_observed
+    ON pay_wallet_balance(observed_at, wallet_id);
+
 -- Key material uses AES-256-GCM envelope encryption with full UUID v4 nonces.
 -- XChaCha20-Poly1305 was the pre-release design and is intentionally unsupported.
 -- Rotation appends a version and retires the old row; encrypted material is immutable.
@@ -307,44 +336,9 @@ CREATE TABLE pay_policy (
     UNIQUE (id, scenario_id)
 );
 
-CREATE TRIGGER trg_pay_policy_budget_unit_insert
-BEFORE INSERT ON pay_policy
-WHEN EXISTS (
-    SELECT 1
-    FROM json_each(NEW.assets)
-    WHERE json_type(value) IS NOT 'object'
-       OR json_type(value, '$.asset') IS NOT 'text'
-       OR json_extract(value, '$.asset') IS NOT NEW.budget_asset
-       OR json_type(value, '$.decimals') IS NOT 'integer'
-       OR json_extract(value, '$.decimals') IS NOT NEW.budget_decimals
-)
-BEGIN
-    SELECT RAISE(ABORT, 'policy assets must share the declared budget unit');
-END;
-
-CREATE TRIGGER trg_pay_policy_budget_unit_update
-BEFORE UPDATE ON pay_policy
-WHEN EXISTS (
-    SELECT 1
-    FROM json_each(NEW.assets)
-    WHERE json_type(value) IS NOT 'object'
-       OR json_type(value, '$.asset') IS NOT 'text'
-       OR json_extract(value, '$.asset') IS NOT NEW.budget_asset
-       OR json_type(value, '$.decimals') IS NOT 'integer'
-       OR json_extract(value, '$.decimals') IS NOT NEW.budget_decimals
-)
-BEGIN
-    SELECT RAISE(ABORT, 'policy assets must share the declared budget unit');
-END;
-
-CREATE TRIGGER trg_pay_policy_identity_immutable
-BEFORE UPDATE ON pay_policy
-WHEN OLD.scenario_id IS NOT NEW.scenario_id
-  OR OLD.budget_asset IS NOT NEW.budget_asset
-  OR OLD.budget_decimals IS NOT NEW.budget_decimals
-BEGIN
-    SELECT RAISE(ABORT, 'policy scenario and budget unit are immutable');
-END;
+-- Policy value and transition invariants are validated by the model and the
+-- explicit policy -> wallet storage transaction. The canonical schema keeps
+-- only declarative constraints; it contains no hidden business procedures.
 
 -- Explicit association: one policy authorizes one or more wallets.
 CREATE TABLE pay_policy_wallet (
@@ -353,98 +347,6 @@ CREATE TABLE pay_policy_wallet (
     created_at          INTEGER NOT NULL CHECK (created_at >= 0),
     PRIMARY KEY (policy_id, wallet_id)
 );
-
-CREATE TRIGGER trg_pay_policy_wallet_validate
-BEFORE INSERT ON pay_policy_wallet
-BEGIN
-    UPDATE pay_wallet
-       SET budget_asset = (SELECT budget_asset FROM pay_policy WHERE id = NEW.policy_id),
-           budget_decimals = (SELECT budget_decimals FROM pay_policy WHERE id = NEW.policy_id),
-           updated_at = max(updated_at + 1, NEW.created_at)
-     WHERE id = NEW.wallet_id
-       AND budget_asset IS NULL
-       AND budget_decimals IS NULL;
-    SELECT RAISE(ABORT, 'policy budget unit does not match its wallet')
-     WHERE NOT EXISTS (
-        SELECT 1
-          FROM pay_wallet wallet
-          JOIN pay_policy policy ON policy.id = NEW.policy_id
-         WHERE wallet.id = NEW.wallet_id
-           AND wallet.budget_asset IS policy.budget_asset
-           AND wallet.budget_decimals IS policy.budget_decimals
-    );
-    SELECT RAISE(ABORT, 'scenario wallet already has an enabled payment policy')
-     WHERE (SELECT enabled FROM pay_policy WHERE id = NEW.policy_id) = 1
-       AND EXISTS (
-            SELECT 1
-              FROM pay_policy_wallet existing
-              JOIN pay_policy other ON other.id = existing.policy_id
-             WHERE existing.wallet_id = NEW.wallet_id
-               AND other.enabled = 1
-               AND other.id <> NEW.policy_id
-               AND other.scenario_id = (SELECT scenario_id FROM pay_policy WHERE id = NEW.policy_id)
-       );
-    SELECT RAISE(ABORT, 'wallet shared across scenarios requires aggregate hard limits')
-     WHERE (SELECT enabled FROM pay_policy WHERE id = NEW.policy_id) = 1
-       AND EXISTS (
-            SELECT 1 FROM pay_wallet
-             WHERE id = NEW.wallet_id AND (max_per_payment IS NULL OR max_per_day IS NULL)
-       )
-       AND EXISTS (
-            SELECT 1
-              FROM pay_policy_wallet existing
-              JOIN pay_policy other ON other.id = existing.policy_id
-             WHERE existing.wallet_id = NEW.wallet_id
-               AND other.enabled = 1
-               AND other.scenario_id <> (SELECT scenario_id FROM pay_policy WHERE id = NEW.policy_id)
-       );
-END;
-
-CREATE TRIGGER trg_pay_policy_wallet_immutable_update
-BEFORE UPDATE ON pay_policy_wallet
-BEGIN
-    SELECT RAISE(ABORT, 'policy wallet membership is immutable; replace the policy');
-END;
-
-CREATE TRIGGER trg_pay_policy_wallet_immutable_delete
-BEFORE DELETE ON pay_policy_wallet
-BEGIN
-    SELECT RAISE(ABORT, 'policy wallet membership is immutable; replace the policy');
-END;
-
-CREATE TRIGGER trg_pay_policy_enable_validate
-BEFORE UPDATE OF enabled ON pay_policy
-WHEN NEW.enabled = 1
-BEGIN
-    SELECT RAISE(ABORT, 'scenario wallet already has an enabled payment policy')
-     WHERE EXISTS (
-        SELECT 1
-          FROM pay_policy_wallet membership
-          JOIN pay_policy_wallet existing ON existing.wallet_id = membership.wallet_id
-          JOIN pay_policy other ON other.id = existing.policy_id
-         WHERE membership.policy_id = NEW.id
-           AND other.enabled = 1
-           AND other.id <> NEW.id
-           AND other.scenario_id = NEW.scenario_id
-    );
-    SELECT RAISE(ABORT, 'wallet shared across scenarios requires aggregate hard limits')
-     WHERE EXISTS (
-        SELECT 1
-          FROM pay_policy_wallet membership
-          JOIN pay_wallet wallet ON wallet.id = membership.wallet_id
-         WHERE membership.policy_id = NEW.id
-           AND (wallet.max_per_payment IS NULL OR wallet.max_per_day IS NULL)
-           AND EXISTS (
-                SELECT 1
-                  FROM pay_policy_wallet existing
-                  JOIN pay_policy other ON other.id = existing.policy_id
-                 WHERE existing.wallet_id = membership.wallet_id
-                   AND other.enabled = 1
-                   AND other.id <> NEW.id
-                   AND other.scenario_id <> NEW.scenario_id
-           )
-    );
-END;
 
 CREATE INDEX ix_pay_policy_wallet_wallet
     ON pay_policy_wallet(wallet_id, policy_id);
@@ -483,70 +385,6 @@ CREATE TABLE pay_offer (
     FOREIGN KEY (policy_id, wallet_id)
         REFERENCES pay_policy_wallet(policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT
 );
-
-CREATE TRIGGER trg_pay_offer_policy_insert
-BEFORE INSERT ON pay_offer
-WHEN NOT EXISTS (
-    SELECT 1 FROM pay_policy policy
-     WHERE policy.id = NEW.policy_id
-       AND policy.inbound_max_per_payment IS NOT NULL
-       AND policy.budget_asset IS NEW.asset
-       AND policy.budget_decimals IS NEW.asset_decimals
-       AND (
-            length(NEW.amount) < length(policy.inbound_max_per_payment)
-            OR (length(NEW.amount) = length(policy.inbound_max_per_payment)
-                AND NEW.amount <= policy.inbound_max_per_payment)
-       )
-       AND EXISTS (
-            SELECT 1 FROM json_each(policy.assets) allowed
-             WHERE json_extract(allowed.value, '$.network') IS NEW.network
-               AND json_extract(allowed.value, '$.asset') IS NEW.asset
-               AND json_extract(allowed.value, '$.decimals') IS NEW.asset_decimals
-               AND json_extract(allowed.value, '$.token_contract') IS NEW.token_contract
-       )
-       AND NOT EXISTS (
-            SELECT 1 FROM json_each(NEW.protocols) offered
-             WHERE NOT EXISTS (
-                SELECT 1 FROM json_each(policy.protocols) allowed_protocol
-                 WHERE allowed_protocol.value IS offered.value
-             )
-       )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'offer policy does not authorize this inbound budget unit');
-END;
-
-CREATE TRIGGER trg_pay_offer_policy_update
-BEFORE UPDATE ON pay_offer
-WHEN NOT EXISTS (
-    SELECT 1 FROM pay_policy policy
-     WHERE policy.id = NEW.policy_id
-       AND policy.inbound_max_per_payment IS NOT NULL
-       AND policy.budget_asset IS NEW.asset
-       AND policy.budget_decimals IS NEW.asset_decimals
-       AND (
-            length(NEW.amount) < length(policy.inbound_max_per_payment)
-            OR (length(NEW.amount) = length(policy.inbound_max_per_payment)
-                AND NEW.amount <= policy.inbound_max_per_payment)
-       )
-       AND EXISTS (
-            SELECT 1 FROM json_each(policy.assets) allowed
-             WHERE json_extract(allowed.value, '$.network') IS NEW.network
-               AND json_extract(allowed.value, '$.asset') IS NEW.asset
-               AND json_extract(allowed.value, '$.decimals') IS NEW.asset_decimals
-               AND json_extract(allowed.value, '$.token_contract') IS NEW.token_contract
-       )
-       AND NOT EXISTS (
-            SELECT 1 FROM json_each(NEW.protocols) offered
-             WHERE NOT EXISTS (
-                SELECT 1 FROM json_each(policy.protocols) allowed_protocol
-                 WHERE allowed_protocol.value IS offered.value
-             )
-       )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'offer policy does not authorize this inbound budget unit');
-END;
 
 -- One active fixed-price offer owns one scenario resource. Its protocols array
 -- lists alternate wire adapters for that same price and recipient; allowing a
@@ -665,77 +503,9 @@ CREATE TABLE pay_intent (
     CHECK (settlement_ref IS NULL OR length(trim(settlement_ref)) > 0)
 );
 
-CREATE TRIGGER trg_pay_intent_policy_insert
-BEFORE INSERT ON pay_intent
-WHEN NEW.status <> 'failed' AND NOT EXISTS (
-    SELECT 1 FROM pay_policy policy
-     WHERE policy.id = NEW.policy_id
-       AND policy.budget_asset IS NEW.asset
-       AND policy.budget_decimals IS NEW.asset_decimals
-       AND (
-            (NEW.direction = 'inbound' AND policy.inbound_max_per_payment IS NOT NULL)
-            OR (NEW.direction = 'outbound' AND policy.outbound_max_per_payment IS NOT NULL)
-       )
-       AND EXISTS (SELECT 1 FROM json_each(policy.protocols) WHERE value IS NEW.protocol)
-       AND EXISTS (
-            SELECT 1 FROM json_each(policy.assets) allowed
-             WHERE json_extract(allowed.value, '$.network') IS NEW.network
-               AND json_extract(allowed.value, '$.asset') IS NEW.asset
-               AND json_extract(allowed.value, '$.decimals') IS NEW.asset_decimals
-               AND json_extract(allowed.value, '$.token_contract') IS NEW.token_contract
-       )
-       AND (
-            NEW.direction = 'inbound'
-            AND (
-                length(NEW.amount) < length(policy.inbound_max_per_payment)
-                OR (length(NEW.amount) = length(policy.inbound_max_per_payment)
-                    AND NEW.amount <= policy.inbound_max_per_payment)
-            )
-            OR NEW.direction = 'outbound'
-            AND (
-                length(NEW.amount) < length(policy.outbound_max_per_payment)
-                OR (length(NEW.amount) = length(policy.outbound_max_per_payment)
-                    AND NEW.amount <= policy.outbound_max_per_payment)
-            )
-       )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'policy does not authorize intent direction or budget unit');
-END;
-
 -- State transitions may change lifecycle, reservation, settlement, and lease
--- fields only. The authorized business identity is immutable after creation.
-CREATE TRIGGER trg_pay_intent_identity_immutable
-BEFORE UPDATE ON pay_intent
-WHEN OLD.scenario_id IS NOT NEW.scenario_id
-  OR OLD.run_id IS NOT NEW.run_id
-  OR OLD.wallet_id IS NOT NEW.wallet_id
-  OR OLD.policy_id IS NOT NEW.policy_id
-  OR OLD.offer_id IS NOT NEW.offer_id
-  OR OLD.direction IS NOT NEW.direction
-  OR OLD.protocol IS NOT NEW.protocol
-  OR OLD.network IS NOT NEW.network
-  OR OLD.asset IS NOT NEW.asset
-  OR OLD.token_contract IS NOT NEW.token_contract
-  OR OLD.asset_decimals IS NOT NEW.asset_decimals
-  OR OLD.recipient IS NOT NEW.recipient
-  OR OLD.amount IS NOT NEW.amount
-  OR OLD.resource IS NOT NEW.resource
-  OR OLD.challenge_hash IS NOT NEW.challenge_hash
-  OR OLD.request_hash IS NOT NEW.request_hash
-  OR OLD.created_at IS NOT NEW.created_at
-  OR OLD.expires_at IS NOT NEW.expires_at
-BEGIN
-    SELECT RAISE(ABORT, 'payment intent identity is immutable');
-END;
-
-CREATE TRIGGER trg_pay_intent_credential_forward_only
-BEFORE UPDATE OF credential_hash ON pay_intent
-WHEN OLD.credential_hash IS NOT NULL
- AND OLD.credential_hash IS NOT NEW.credential_hash
-BEGIN
-    SELECT RAISE(ABORT, 'payment credential binding is immutable once set');
-END;
+-- fields only. Storage compares the full immutable identity and applies every
+-- lifecycle transition with an optimistic revision predicate.
 
 CREATE UNIQUE INDEX uq_pay_intent_credential
     ON pay_intent(protocol, direction, credential_hash)
@@ -938,29 +708,6 @@ CREATE UNIQUE INDEX uq_pay_ledger_reversal_once
     ON pay_ledger(reversal_of)
     WHERE reversal_of IS NOT NULL;
 
-CREATE TRIGGER trg_pay_ledger_validate_reversal
-BEFORE INSERT ON pay_ledger
-WHEN NEW.reversal_of IS NOT NULL
-BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-          FROM pay_ledger AS original
-         WHERE original.id = NEW.reversal_of
-           AND original.entry_type <> 'reversal'
-           AND original.wallet_id = NEW.wallet_id
-           AND original.intent_id IS NEW.intent_id
-           AND original.scenario_id IS NEW.scenario_id
-           AND original.network = NEW.network
-           AND original.asset = NEW.asset
-           AND original.token_contract IS NEW.token_contract
-           AND original.asset_decimals = NEW.asset_decimals
-           AND original.amount = NEW.amount
-           AND original.direction <> NEW.direction
-           AND original.effect_ref IS NEW.effect_ref
-           AND original.transfer_ref IS NEW.transfer_ref
-    ) THEN RAISE(ABORT, 'ledger reversal must exactly negate one unreversed wallet fact') END;
-END;
-
 CREATE INDEX ix_pay_ledger_scenario_direction_time
     ON pay_ledger(scenario_id, direction, effective_at DESC);
 CREATE INDEX ix_pay_ledger_wallet_direction_time
@@ -987,7 +734,6 @@ CREATE TABLE pay_outbox (
     aggregate_id        TEXT NOT NULL CHECK (length(trim(aggregate_id)) > 0),
     event_type          TEXT NOT NULL CHECK (length(trim(event_type)) > 0),
     destination         TEXT NOT NULL CHECK (length(trim(destination)) > 0),
-    correlation_id      TEXT NOT NULL CHECK (length(trim(correlation_id)) > 0),
     run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     payload             TEXT NOT NULL CHECK (json_valid(payload)),
     status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'dead_letter')),
@@ -1014,157 +760,8 @@ CREATE TABLE pay_outbox (
 CREATE INDEX ix_pay_outbox_claim
     ON pay_outbox(available_at, lease_expires_at, created_at)
     WHERE status = 'pending';
-CREATE INDEX ix_pay_outbox_correlation
-    ON pay_outbox(correlation_id, created_at);
-
-CREATE TRIGGER trg_pay_event_no_update
-BEFORE UPDATE ON pay_event
-BEGIN
-    SELECT RAISE(ABORT, 'pay_event is append-only');
-END;
-
-CREATE TRIGGER trg_pay_event_no_delete
-BEFORE DELETE ON pay_event
-BEGIN
-    SELECT RAISE(ABORT, 'pay_event is append-only');
-END;
-
-CREATE TRIGGER trg_pay_ledger_no_update
-BEFORE UPDATE ON pay_ledger
-BEGIN
-    SELECT RAISE(ABORT, 'pay_ledger is append-only');
-END;
-
-CREATE TRIGGER trg_pay_ledger_no_delete
-BEFORE DELETE ON pay_ledger
-BEGIN
-    SELECT RAISE(ABORT, 'pay_ledger is append-only');
-END;
-
-CREATE TRIGGER trg_wallet_key_version_no_delete
-BEFORE DELETE ON wallet_key_version
-BEGIN
-    SELECT RAISE(ABORT, 'wallet key versions cannot be deleted');
-END;
-
-CREATE TRIGGER trg_wallet_key_version_protect_material
-BEFORE UPDATE OF
-    wallet_id, version, algorithm, address, public_key, encryption_scheme,
-    kek_id, wrapped_data_key, wrap_nonce, key_ciphertext, key_nonce, aad,
-    activated_at, created_at
-ON wallet_key_version
-WHEN OLD.wallet_id IS NOT NEW.wallet_id
-    OR OLD.version IS NOT NEW.version
-    OR OLD.algorithm IS NOT NEW.algorithm
-    OR OLD.address IS NOT NEW.address
-    OR OLD.public_key IS NOT NEW.public_key
-    OR OLD.encryption_scheme IS NOT NEW.encryption_scheme
-    OR OLD.kek_id IS NOT NEW.kek_id
-    OR OLD.wrapped_data_key IS NOT NEW.wrapped_data_key
-    OR OLD.wrap_nonce IS NOT NEW.wrap_nonce
-    OR OLD.key_ciphertext IS NOT NEW.key_ciphertext
-    OR OLD.key_nonce IS NOT NEW.key_nonce
-    OR OLD.aad IS NOT NEW.aad
-    OR OLD.activated_at IS NOT NEW.activated_at
-    OR OLD.created_at IS NOT NEW.created_at
-BEGIN
-    SELECT RAISE(ABORT, 'wallet key version identity and encrypted material are immutable');
-END;
-
-CREATE TRIGGER trg_wallet_key_version_forward_only
-BEFORE UPDATE OF status, retired_at ON wallet_key_version
-WHEN NOT (
-    (
-        OLD.status = 'active'
-        AND (
-            (NEW.status = 'active' AND NEW.retired_at IS NULL)
-            OR (NEW.status IN ('retired', 'compromised') AND NEW.retired_at IS NOT NULL)
-        )
-    )
-    OR (
-        OLD.status = 'retired'
-        AND NEW.status IN ('retired', 'compromised')
-        AND OLD.retired_at IS NEW.retired_at
-    )
-    OR (
-        OLD.status = 'compromised'
-        AND NEW.status = 'compromised'
-        AND OLD.retired_at IS NEW.retired_at
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'wallet key version lifecycle transitions are forward-only');
-END;
-
-CREATE TRIGGER trg_wallet_key_version_validate_insert
-BEFORE INSERT ON wallet_key_version
-WHEN NOT EXISTS (
-        SELECT 1
-        FROM pay_wallet
-        WHERE id = NEW.wallet_id AND custody_type = 'local'
-    )
-    OR (
-        NEW.status = 'active'
-        AND NOT EXISTS (
-            SELECT 1
-            FROM pay_wallet
-            WHERE id = NEW.wallet_id
-              AND algorithm = NEW.algorithm
-              AND address = NEW.address
-              AND public_key = NEW.public_key
-        )
-    )
-BEGIN
-    SELECT RAISE(ABORT, 'key version does not match a local-custody wallet');
-END;
-
-CREATE TRIGGER trg_pay_wallet_custody_type_immutable
-BEFORE UPDATE OF custody_type ON pay_wallet
-WHEN OLD.custody_type IS NOT NEW.custody_type
-BEGIN
-    SELECT RAISE(ABORT, 'wallet custody type is immutable');
-END;
-
-CREATE TRIGGER trg_pay_wallet_budget_unit_immutable
-BEFORE UPDATE OF budget_asset, budget_decimals ON pay_wallet
-WHEN (
-        OLD.budget_asset IS NOT NEW.budget_asset
-        OR OLD.budget_decimals IS NOT NEW.budget_decimals
-    )
-    AND EXISTS (SELECT 1 FROM pay_policy_wallet WHERE wallet_id = OLD.id)
-BEGIN
-    SELECT RAISE(ABORT, 'wallet budget unit is immutable after policy binding');
-END;
-
-CREATE TRIGGER trg_pay_wallet_shared_limits_required
-BEFORE UPDATE OF max_per_payment, max_per_day ON pay_wallet
-WHEN (NEW.max_per_payment IS NULL OR NEW.max_per_day IS NULL)
- AND (
-        SELECT count(DISTINCT policy.scenario_id)
-          FROM pay_policy_wallet membership
-          JOIN pay_policy policy ON policy.id = membership.policy_id
-         WHERE membership.wallet_id = OLD.id
-           AND policy.enabled = 1
-     ) > 1
-BEGIN
-    SELECT RAISE(ABORT, 'wallet shared across scenarios requires aggregate hard limits');
-END;
-
-CREATE TRIGGER trg_pay_wallet_active_key_consistency
-BEFORE UPDATE OF algorithm, address, public_key ON pay_wallet
-WHEN EXISTS (
-    SELECT 1
-    FROM wallet_key_version
-    WHERE wallet_id = NEW.id
-      AND status = 'active'
-      AND (
-          algorithm IS NOT NEW.algorithm
-          OR address IS NOT NEW.address
-          OR public_key IS NOT NEW.public_key
-      )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'wallet metadata must match its active key version');
-END;
+-- Events, ledger facts, and encrypted key material are exposed only through
+-- append/forward-transition storage ports. SQLite has a single application
+-- writer and therefore needs no procedural mutation guards in its schema.
 
 COMMIT;

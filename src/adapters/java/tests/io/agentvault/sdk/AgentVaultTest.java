@@ -3,7 +3,7 @@ package io.agentvault.sdk;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import io.agentvault.sdk.config.Config.PayeeConfig;
 import io.agentvault.sdk.config.Config.PayerConfig;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import org.junit.jupiter.api.Test;
 
 final class AgentVaultTest {

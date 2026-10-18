@@ -71,7 +71,17 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
     }
 
     pub async fn protect(&self, operation: &PayeeOperation) -> Result<ProtectionOutcome> {
+        tracing::info!(
+            event.name = "agentvault.sdk.payee.intercepted",
+            run.id = %operation.run_id,
+            scenario.id = %operation.scenario_id
+        );
         let challenge = self.challenge(operation).await?;
+        tracing::info!(
+            event.name = "agentvault.sdk.payee.challenge_created",
+            run.id = %operation.run_id,
+            payment.challenge_hash = %challenge.challenge_hash
+        );
         let Some(payload) = operation.credential_payload.clone() else {
             return Ok(ProtectionOutcome::PaymentRequired {
                 challenge: Box::new(challenge),
@@ -105,6 +115,11 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             .clone()
             .ok_or_else(|| Error::Decode("valid AgentVault verification omitted verification_ref".to_owned()))?;
         validate_verification_binding(operation, &challenge, &verification)?;
+        tracing::info!(
+            event.name = "agentvault.sdk.payee.verified",
+            run.id = %operation.run_id,
+            payment.intent_id = %verification.intent.id
+        );
         let settle_context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let payment = self
             .settle_payment(&SettlePaymentRequest {
@@ -114,6 +129,11 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             })
             .await?;
         validate_settlement_binding(operation, &verification, &payment)?;
+        tracing::info!(
+            event.name = "agentvault.sdk.payee.settled",
+            run.id = %operation.run_id,
+            payment.intent_id = %payment.intent.id
+        );
         Ok(ProtectionOutcome::Authorized {
             payment: Box::new(payment),
         })

@@ -74,14 +74,21 @@ where
         if first.status().as_u16() != 402 {
             return Ok(first);
         }
+        tracing::info!(event.name = "agentvault.sdk.payer.x402_detected", run.id = %context.run_id);
         let first = bounded_response(first, self.core.config().max_challenge_bytes).await?;
         let sdk_request = sdk_request(&original)?;
+        tracing::info!(event.name = "agentvault.sdk.payer.signing_requested", run.id = %context.run_id);
         let authorized = self
             .core
             .authorize(&sdk_request, &first, &context)
             .await
             .map_err(middleware_error)?
             .ok_or_else(|| middleware_error(Error::Decode("expected an HTTP 402 challenge".to_owned())))?;
+        tracing::info!(
+            event.name = "agentvault.sdk.payer.signed",
+            run.id = %context.run_id,
+            payment.intent_id = %authorized.intent.id
+        );
 
         let existing = request_headers(original.headers())?;
         let (header_name, header_value) = self
@@ -97,6 +104,12 @@ where
 
         let attempts = usize::from(self.core.config().delivery_retries) + 1;
         for attempt in 0..attempts {
+            tracing::info!(
+                event.name = "agentvault.sdk.payer.retrying",
+                run.id = %context.run_id,
+                attempt.no = attempt + 1,
+                payment.intent_id = %authorized.intent.id
+            );
             let paid = paid_template.try_clone().ok_or_else(|| {
                 middleware_error(Error::UnsafeRetry("paid request body became non-replayable".to_owned()))
             })?;

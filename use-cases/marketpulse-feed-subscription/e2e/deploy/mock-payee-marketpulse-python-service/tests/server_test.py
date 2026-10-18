@@ -13,7 +13,14 @@ class MarketPulseServerTest(unittest.TestCase):
     def test_owns_mcp_and_operational_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "MARKETPULSE_BIND": "127.0.0.1:18081",
-            "AGENTVAULT_URL": "http://127.0.0.1:18080/api/v1",
+            "AGENTVAULT_TRANSPORT": "mqtt",
+            "AGENTVAULT_MQTT_HOST": "127.0.0.1",
+            "AGENTVAULT_MQTT_PORT": "1883",
+            "AGENTVAULT_MQTT_TLS": "false",
+            "AGENTVAULT_MQTT_USERNAME": "marketpulse-payee",
+            "AGENTVAULT_MQTT_PASSWORD": "test-only",
+            "AGENTVAULT_MQTT_CLIENT_ID": "client-marketpulse",
+            "AGENTVAULT_MQTT_TIMEOUT_SECONDS": "1",
             "MARKETPULSE_DATABASE": str(Path(directory) / "marketpulse.sqlite3"),
             "MARKETPULSE_SCENARIO_ID": "scenario-test",
             "MARKETPULSE_OFFER_ID": "offer-test",

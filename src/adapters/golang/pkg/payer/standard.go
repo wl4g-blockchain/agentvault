@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,7 +35,7 @@ func PaymentFromResponse(response *http.Response) (*model.AuthorizedPayment, boo
 // StandardPayerMiddleware is both a standard RoundTripper and a safe client
 // client factory. Use Client() so redirects are disabled for credentials.
 type StandardPayerMiddleware struct {
-	core *PayerMiddleware
+	*PayerMiddleware
 	base http.RoundTripper
 }
 
@@ -43,8 +44,10 @@ func NewStandardPayerMiddleware(core *PayerMiddleware, client *http.Client) *Sta
 	if client != nil && client.Transport != nil {
 		base = client.Transport
 	}
-	return &StandardPayerMiddleware{core: core, base: base}
+	return &StandardPayerMiddleware{PayerMiddleware: core, base: base}
 }
+
+var _ http.RoundTripper = (*StandardPayerMiddleware)(nil)
 
 // Client returns an http.Client that cannot forward a payment credential over
 // redirects. Timeout is copied from the optional source client by callers via
@@ -63,7 +66,7 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if !protected {
 		return m.base.RoundTrip(request)
 	}
-	if m == nil || m.core == nil || m.base == nil {
+	if m == nil || m.PayerMiddleware == nil || m.base == nil {
 		return nil, errors.New("payer HTTP middleware is not configured")
 	}
 	if err := model.ValidateIdentifier("run_id", operation.RunID); err != nil {
@@ -80,7 +83,9 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if first.StatusCode != http.StatusPaymentRequired {
 		return first, nil
 	}
-	body, err := readBounded(first.Body, first.ContentLength, m.core.config.MaxChallengeBytes)
+	slog.Info("payer middleware detected payment challenge",
+		"event.name", "agentvault.sdk.payer.x402_detected", "run.id", operation.RunID)
+	body, err := readBounded(first.Body, first.ContentLength, m.config.MaxChallengeBytes)
 	first.Body.Close()
 	if err != nil {
 		return nil, err
@@ -89,7 +94,9 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
-	authorized, err := m.core.Authorize(request.Context(), model.PayerHTTPRequest{
+	slog.Info("payer middleware requested AgentVault signature",
+		"event.name", "agentvault.sdk.payer.signing_requested", "run.id", operation.RunID)
+	authorized, err := m.Authorize(request.Context(), model.PayerHTTPRequest{
 		Method: request.Method, URL: request.URL.String(), Origin: origin,
 		Headers: flattenHeaders(request.Header), FollowRedirects: false,
 	}, model.PayerHTTPResponse{
@@ -98,11 +105,17 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
-	headerName, headerValue, err := m.core.CredentialHeader(authorized, origin, flattenHeaders(template.Header))
+	slog.Info("payer middleware received signed credential",
+		"event.name", "agentvault.sdk.payer.signed", "run.id", operation.RunID,
+		"payment.intent_id", authorized.Intent.ID)
+	headerName, headerValue, err := m.CredentialHeader(authorized, origin, flattenHeaders(template.Header))
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt <= m.core.config.DeliveryRetries; attempt++ {
+	for attempt := 0; attempt <= m.config.DeliveryRetries; attempt++ {
+		slog.Info("payer middleware is delivering signed request",
+			"event.name", "agentvault.sdk.payer.retrying", "run.id", operation.RunID,
+			"attempt.no", attempt+1, "payment.intent_id", authorized.Intent.ID)
 		paid, cloneErr := cloneReplayable(template)
 		if cloneErr != nil {
 			return nil, cloneErr
@@ -112,13 +125,13 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 		if sendErr != nil {
 			return nil, sendErr
 		}
-		if reportErr := m.core.Report(request.Context(), operation, authorized, model.PayerHTTPResponse{
+		if reportErr := m.Report(request.Context(), operation, authorized, model.PayerHTTPResponse{
 			Status: response.StatusCode, Headers: flattenHeaders(response.Header),
 		}); reportErr != nil {
 			response.Body.Close()
 			return nil, reportErr
 		}
-		if response.StatusCode != http.StatusServiceUnavailable || attempt == m.core.config.DeliveryRetries {
+		if response.StatusCode != http.StatusServiceUnavailable || attempt == m.config.DeliveryRetries {
 			response.Request = paid.WithContext(context.WithValue(paid.Context(), paymentResultKey{}, authorized))
 			return response, nil
 		}

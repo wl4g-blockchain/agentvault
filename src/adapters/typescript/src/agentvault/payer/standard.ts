@@ -1,4 +1,4 @@
-import { readBounded } from '../transport/http.js';
+import { readBounded } from '../transport/transport.js';
 import type { PayerRequestContext } from '../model/payer.js';
 import {
   PayerMiddleware,
@@ -31,7 +31,9 @@ export class FetchPayerMiddleware {
     const replay = request.clone();
     const first = await this.fetchImpl(request);
     if (first.status !== 402) return first;
+    sdkEvent('agentvault.sdk.payer.x402_detected', { runId: operation.runId });
     const challengeBody = await readBounded(first.clone(), this.core.config.maxChallengeBytes);
+    sdkEvent('agentvault.sdk.payer.signing_requested', { runId: operation.runId });
     const authorized = await this.core.authorize(
       {
         method: replay.method, url: target.href, origin: target.origin,
@@ -41,10 +43,16 @@ export class FetchPayerMiddleware {
       operation,
     );
     if (!authorized) return first;
+    sdkEvent('agentvault.sdk.payer.signed', {
+      runId: operation.runId, intentId: authorized.intent.id,
+    });
     const [headerName, headerValue] = this.core.credentialHeader(authorized, target.origin, replay.headers);
     const headers = new Headers(replay.headers);
     headers.set(headerName, headerValue);
     for (let attempt = 0; attempt <= this.core.config.deliveryRetries; attempt += 1) {
+      sdkEvent('agentvault.sdk.payer.retrying', {
+        runId: operation.runId, intentId: authorized.intent.id, attemptNo: attempt + 1,
+      });
       const paid = new Request(replay.clone(), { headers, redirect: 'manual' });
       const response = await this.fetchImpl(paid);
       const responseView: PayerHttpResponse = { status: response.status, headers: response.headers };
@@ -56,4 +64,8 @@ export class FetchPayerMiddleware {
     }
     throw new Error('payer retry loop ended unexpectedly');
   }
+}
+
+function sdkEvent(event: string, fields: Record<string, unknown>): void {
+  console.info(JSON.stringify({ event, ...fields }));
 }

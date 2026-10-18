@@ -20,13 +20,14 @@ fn request_envelope(body: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "type": "payment.authorize",
         "version": 1,
-        "correlationId": "0123456789abcdef0123456789abcdef",
+        "requestSpanId": "0123456789abcdef",
         "request": {
             "method": "POST",
             "path": AUTHORIZE_PATH,
             "headers": {
                 "accept": "application/json",
-                "content-type": "application/json"
+                "content-type": "application/json",
+                "traceparent": "00-11111111111111111111111111111111-0123456789abcdef-01"
             },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
@@ -38,11 +39,14 @@ fn decision_envelope(path_approval_id: &str, body: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "type": "payment.approval_decision",
         "version": 1,
-        "correlationId": "abcdef0123456789abcdef0123456789",
+        "requestSpanId": "abcdef0123456789",
         "request": {
             "method": "POST",
             "path": format!("/api/v1/approvals/{path_approval_id}/decision"),
-            "headers": {"content-type": "application/json"},
+            "headers": {
+                "content-type": "application/json",
+                "traceparent": "00-22222222222222222222222222222222-abcdef0123456789-01"
+            },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
     }))
@@ -53,13 +57,14 @@ fn outbound_response_envelope(intent_id: &str, body: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "type": "payment.outbound_response",
         "version": 1,
-        "correlationId": "fedcba9876543210fedcba9876543210",
+        "requestSpanId": "fedcba9876543210",
         "request": {
             "method": "POST",
             "path": format!("/api/v1/payments/{intent_id}/outbound-response"),
             "headers": {
                 "accept": "application/json",
-                "content-type": "application/json"
+                "content-type": "application/json",
+                "traceparent": "00-33333333333333333333333333333333-fedcba9876543210-01"
             },
             "body": URL_SAFE_NO_PAD.encode(serde_json::to_vec(body).unwrap())
         }
@@ -70,12 +75,13 @@ fn outbound_response_envelope(intent_id: &str, body: &Value) -> Vec<u8> {
 fn payee_envelope(message_type: &str, path: &str, body: &Value) -> Vec<u8> {
     let headers = json!({
         "accept": "application/json",
-        "content-type": "application/json"
+        "content-type": "application/json",
+        "traceparent": "00-44444444444444444444444444444444-0011223344556677-01"
     });
     serde_json::to_vec(&json!({
         "type": message_type,
         "version": 1,
-        "correlationId": "00112233445566778899aabbccddeeff",
+        "requestSpanId": "0011223344556677",
         "request": {
             "method": "POST",
             "path": path,
@@ -210,11 +216,8 @@ fn isolates_approval_cache_and_result_topics_by_approver_principal() {
         "client-quantstream:approval-decision:principal-quantstream-admin"
     );
     assert_eq!(
-        topic.response_topic(
-            "agentvault/v1/clients",
-            "abcdef0123456789abcdef0123456789"
-        ),
-        "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/results/abcdef0123456789abcdef0123456789"
+        topic.response_topic("agentvault/v1/clients", "abcdef0123456789"),
+        "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/results/abcdef0123456789"
     );
 }
 
@@ -267,7 +270,7 @@ fn approval_decision_binds_the_topic_client_and_exact_http_shape() {
 }
 
 #[test]
-fn rejects_padding_unknown_headers_and_noncanonical_correlation() {
+fn rejects_padding_unknown_headers_and_noncanonical_request_span_id() {
     let body = request_body();
     let mut envelope: Value = serde_json::from_slice(&request_envelope(&body)).unwrap();
     envelope["request"]["body"] = Value::String(format!("{}=", envelope["request"]["body"].as_str().unwrap()));
@@ -278,7 +281,12 @@ fn rejects_padding_unknown_headers_and_noncanonical_correlation() {
     assert!(parse_authorize_command(&serde_json::to_vec(&envelope).unwrap()).is_err());
 
     let mut envelope: Value = serde_json::from_slice(&request_envelope(&body)).unwrap();
-    envelope["correlationId"] = Value::String("ABCDEF0123456789ABCDEF0123456789".to_owned());
+    envelope["requestSpanId"] = Value::String("ABCDEF0123456789".to_owned());
+    assert!(parse_authorize_command(&serde_json::to_vec(&envelope).unwrap()).is_err());
+
+    let mut envelope: Value = serde_json::from_slice(&request_envelope(&body)).unwrap();
+    envelope["request"]["headers"]["traceparent"] =
+        Value::String("00-11111111111111111111111111111111-fedcba9876543210-01".to_owned());
     assert!(parse_authorize_command(&serde_json::to_vec(&envelope).unwrap()).is_err());
 }
 
@@ -289,31 +297,21 @@ async fn coalesces_exact_duplicates_and_conflicts_on_reuse() {
     let cache = ResponseCache::new(backend);
     let first_hash = digest(b"first");
     assert!(matches!(
-        cache
-            .begin("client-a", "0123456789abcdef0123456789abcdef", first_hash)
-            .await,
+        cache.begin("client-a", "0123456789abcdef", first_hash).await,
         CacheDisposition::New
     ));
     assert!(matches!(
-        cache
-            .begin("client-a", "0123456789abcdef0123456789abcdef", first_hash)
-            .await,
+        cache.begin("client-a", "0123456789abcdef", first_hash).await,
         CacheDisposition::InFlight
     ));
-    let response = error_response("0123456789abcdef0123456789abcdef", 400, "INVALID_REQUEST", "invalid");
-    cache
-        .complete("client-a", "0123456789abcdef0123456789abcdef", response)
-        .await;
+    let response = error_response("0123456789abcdef", 400, "INVALID_REQUEST", "invalid");
+    cache.complete("client-a", "0123456789abcdef", response).await;
     assert!(matches!(
-        cache
-            .begin("client-a", "0123456789abcdef0123456789abcdef", first_hash)
-            .await,
+        cache.begin("client-a", "0123456789abcdef", first_hash).await,
         CacheDisposition::Cached(_)
     ));
     assert!(matches!(
-        cache
-            .begin("client-a", "0123456789abcdef0123456789abcdef", digest(b"different"))
-            .await,
+        cache.begin("client-a", "0123456789abcdef", digest(b"different")).await,
         CacheDisposition::Conflict
     ));
 }
@@ -326,7 +324,6 @@ fn maps_only_approval_required_outbox_destinations() {
         aggregate_id: "intent-1".to_owned(),
         event_type: "approval_required".to_owned(),
         destination: "client:client-quantstream.approvals".to_owned(),
-        correlation_id: "intent-1".to_owned(),
         run_id: "approval-run-1".to_owned(),
         payload: json!({
             "approval_id": "approval-1",
@@ -373,7 +370,6 @@ fn payment_event_routing_is_tenant_and_run_scoped() {
         aggregate_id: "intent-1".to_owned(),
         event_type: "payment_settled".to_owned(),
         destination: "scenario:scenario-quantstream.payments".to_owned(),
-        correlation_id: "intent-1".to_owned(),
         run_id: "run-42".to_owned(),
         payload: json!({"intent_id": "intent-1", "tx_hash": "0x1234"}),
         status: OutboxStatus::Pending,
@@ -398,7 +394,6 @@ fn payment_event_routing_is_tenant_and_run_scoped() {
 
     let envelope = serde_json::to_value(payment_event_envelope(&message).unwrap()).unwrap();
     assert_eq!(envelope["type"], "payment.event");
-    assert_eq!(envelope["correlationId"], "intent-1");
     assert_eq!(envelope["runId"], "run-42");
     assert_eq!(envelope["eventType"], "payment_settled");
 }

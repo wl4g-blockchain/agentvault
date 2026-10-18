@@ -41,3 +41,11 @@ class StandardPayerMiddlewareTest(unittest.TestCase):
                 await client.aclose()
 
         asyncio.run(execute())
+
+    def test_observability_message_keeps_run_identity(self):
+        from agentvault.payer.standard import _event
+
+        with self.assertLogs("agentvault.sdk", level="INFO") as captured:
+            _event("agentvault.sdk.payer.signed", run_id="run-1", intent_id="intent-1")
+        self.assertIn("run.id=run-1", captured.output[0])
+        self.assertIn("intent.id=intent-1", captured.output[0])

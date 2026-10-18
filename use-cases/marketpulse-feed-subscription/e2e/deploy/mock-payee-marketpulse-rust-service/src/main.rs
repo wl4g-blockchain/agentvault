@@ -2,6 +2,7 @@ use mock_payee_marketpulse_rust_service::server::MarketPulseServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt().json().with_target(false).try_init();
     run().await
 }
 

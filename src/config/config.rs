@@ -9,10 +9,14 @@ use std::{collections::BTreeMap, net::IpAddr, path::Path, time::Duration};
 use ::config::{Config as ConfigLoader, Environment, File};
 use serde::{Deserialize, Serialize};
 
-use crate::{model::Amount, Error, Result};
+use crate::{
+    model::{wallet::WalletSelectionStrategy, Amount},
+    Error, Result,
+};
 
 pub const DEFAULT_MQTT_TOPIC_PREFIX: &str = "agentvault/v1/clients";
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_GRPC_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CACHE_ENTRIES: usize = 1_000_000;
 pub(crate) const MAX_CACHE_VALUE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CACHE_REDIS_ENDPOINTS: usize = 32;
@@ -159,6 +163,7 @@ pub struct AgentVaultConfig {
     pub recovery_encryption: RecoveryEncryptionConfig,
     pub approval: ApprovalRuntimeConfig,
     pub reconciliation: ReconciliationConfig,
+    pub wallet_balance_sync: WalletBalanceSyncConfig,
     pub transport: TransportConfig,
 }
 
@@ -175,8 +180,15 @@ impl AgentVaultConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PayerConfig {
     pub enabled: bool,
+    pub wallet_selection: WalletSelectionConfig,
     pub x402: PayerX402Config,
     pub mpp: PayerMppConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WalletSelectionConfig {
+    pub strategy: WalletSelectionStrategy,
 }
 
 /// Inbound payment adapters. Each provider is colocated with the protocol
@@ -473,6 +485,18 @@ pub struct ReconciliationConfig {
     pub initial_backoff: Duration,
     #[serde(with = "humantime_serde")]
     pub max_backoff: Duration,
+}
+
+/// Periodic, non-authoritative observations of managed wallet balances.
+/// Authorization and signing never trust these snapshots; they remain an
+/// operations, capacity, and alerting data set.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WalletBalanceSyncConfig {
+    pub enabled: bool,
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    pub batch_size: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -862,6 +886,16 @@ impl Default for ReconciliationConfig {
     }
 }
 
+impl Default for WalletBalanceSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(3 * 60),
+            batch_size: 1_000,
+        }
+    }
+}
+
 impl Default for LocalTransportConfig {
     fn default() -> Self {
         Self {
@@ -1221,6 +1255,20 @@ impl AppConfig {
                 "agentvault.reconciliation must be enabled when payer or payee is enabled".to_owned(),
             ));
         }
+        let balance_sync = &self.agentvault.wallet_balance_sync;
+        if balance_sync.interval.is_zero()
+            || balance_sync.batch_size == 0
+            || balance_sync.batch_size > MAX_RECONCILIATION_BATCH_SIZE
+        {
+            return Err(Error::Config(
+                "agentvault.wallet_balance_sync scheduling limits are invalid".to_owned(),
+            ));
+        }
+        if self.agentvault.payer.enabled && !balance_sync.enabled {
+            return Err(Error::Config(
+                "agentvault.wallet_balance_sync must be enabled when payer is enabled".to_owned(),
+            ));
+        }
         Ok(())
     }
 
@@ -1267,7 +1315,7 @@ impl AppConfig {
     fn validate_transport(&self) -> Result<()> {
         if self.agentvault.transport.grpc.enabled
             && (self.agentvault.transport.grpc.port == 0
-                || !(256..=MAX_REQUEST_BYTES).contains(&self.agentvault.transport.grpc.max_message_bytes)
+                || !(256..=MAX_GRPC_MESSAGE_BYTES).contains(&self.agentvault.transport.grpc.max_message_bytes)
                 || self.agentvault.transport.grpc.request_timeout.is_zero())
         {
             return Err(Error::Config(

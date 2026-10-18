@@ -96,6 +96,10 @@ agentvault:
   # retry the protected request, then reconcile trusted settlement evidence.
   payer:
     enabled: false
+    # least_spent balances aggregate daily usage; stable_random deterministically
+    # spreads immutable run requests across otherwise eligible wallets.
+    wallet_selection:
+      strategy: least_spent
     x402:
       enabled: false
       max_challenge_ttl: 5m
@@ -243,6 +247,13 @@ agentvault:
     batch_size: 100
     initial_backoff: 5s
     max_backoff: 5m
+
+  # Non-authoritative management/alerting snapshots. Signing still performs a
+  # fresh chain read; the default production cadence is three minutes.
+  wallet_balance_sync:
+    enabled: true
+    interval: 3m
+    batch_size: 1000
 
   # HTTP, gRPC, Unix-socket and MQTT adapters invoke the same handlers. No
   # transport accepts a caller-supplied digest.

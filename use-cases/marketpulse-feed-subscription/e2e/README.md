@@ -17,11 +17,13 @@ two real business systems rather than a unit-test fixture:
   and delivers data only after confirmed settlement.
 - **QuantStream** is a payer quantitative-ingestion platform. Five equivalent
   Go, Rust, Python, Java, and TypeScript services poll both tools, detect 402,
-  request intent-bound signing over MQTT through their language SDK, retry the
+  request intent-bound signing over the case-selected MQTT or gRPC transport
+  through their language SDK, retry the
   identical MCP operation with the returned credential, submit the official
   payment response, and durably store the result. They configure only a
-  Scenario—never a Wallet, Policy, or projected payment field. AgentVault
-  selects a signable EOA from the Scenario's two-member Policy wallet pool;
+  language-specific Scenario—never a Wallet, Policy, or projected payment field.
+  Each Payer owns an independent Client, Scenario, Policy, MQTT identity and two
+  funded EOAs; AgentVault selects a signable EOA only from that two-member pool;
   the services never hold an EOA key. The two paid runs must settle from two
   distinct Wallets, proving selection rather than merely hiding a fixed ID.
 
@@ -36,7 +38,7 @@ token is a business-level second check, independent of HTTP IAM.
 QuantStream service (Go/Rust/Python/Java/TS)
   ├─ free MCP call ───────────────────────────────┐
   └─ paid MCP call → 402                          │
-       └─ AgentVault SDK → MQTT authorize         │
+       └─ AgentVault SDK → MQTT / gRPC authorize  │
             └─ AgentVault: Client/Scenario        │
                → Policy/Wallet/balance/budget     │
                ├─ authorized → EOA sign           │
@@ -64,11 +66,12 @@ override either identity.
 ## Limits and approval behavior
 
 The provisioning manifest expresses `Client 1:N Scenario`, `Scenario 1:N
-Policy`, and `Policy 1:N Wallet membership`. A Wallet may appear in more than
-one Policy so multiple Scenarios can share it. Among equally authorized
-candidates AgentVault prefers the lowest daily usage and uses a stable hash to
-break ties; Wallet-wide hard limits and deterministic transactional locks remain
-authoritative.
+Policy`, and `Policy 1:N Wallet membership`. Production may share a Wallet
+across Policies, but this matrix deliberately provisions five isolated Payer
+identities and ten distinct EOAs so cross-SDK leakage is observable. Among
+equally authorized candidates AgentVault prefers the lowest daily usage and
+uses a stable hash to break ties; Wallet-wide hard limits and deterministic
+transactional locks remain authoritative.
 
 - QuantStream OUTBOUND normal daily allowance: 1 USDC.
 - One additional payment enters `PendingApproval`.
@@ -153,12 +156,13 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
-python3 runner.py -s matrix
+python3 runner.py -s matrix --matrix-workers 2
+python3 runner.py -s matrix --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py cleanup
 ```
 
-The shell entry point remains available as `deploy/e2e.sh`; the Python runner
-adds structure validation and writes immutable evidence under
+`runner.py` is the only outer orchestration entry. It owns build, deployment,
+health checks, scenario selection, diagnostics and cleanup, and writes immutable evidence under
 `reports/<yyyyMMddHHmmss>/<module>/` plus that run's `summary.md`. Deployments
 are retained by default for manual inspection. Use `--cleanup-after-run` for an
 explicit teardown after a run, or `runner.py cleanup` later.
@@ -166,18 +170,31 @@ explicit teardown after a run, or `runner.py cleanup` later.
 ## Full-flow acceptance evidence
 
 A payer/payee language-pair run fails unless it proves all of the following.
-`matrix` executes all 25 language pairs sequentially:
+`matrix` executes 5 Payers × 5 Payees × 2 signing transports = 50 isolated
+cases with two bounded workers by default: one owns all MQTT cases and one owns
+all gRPC cases. Each worker has a distinct Compose project, port range, runtime
+configuration, database volume and chain state; `--matrix-workers 1` provides a
+serial fallback.
+
+Every case writes an identity-bound checkpoint only after all five detailed
+verifiers pass. If the host or runner is interrupted, `--resume-run` validates
+those checkpoints, rejects mismatched/corrupt evidence, and executes only the
+remaining cases in the same immutable report directory.
 
 1. free MCP delivery and a genuine x402 v2 402 for the paid tool;
 2. two stable logical operations, including a delivery retry without a second
    authorization or a changed credential;
-3. MQTT approval notification, UI decision, one consumed exact-amount grant,
-   and automatic continuation of the same Intent;
+3. the selected MQTT/gRPC signing request reaches AgentVault, while MQTT
+   approval notification, UI decision, one consumed exact-amount grant, and
+   automatic continuation of the same Intent;
 4. two OUTBOUND and two INBOUND settled Intents, four confirmed Ledger payment
    facts, bound receipts, and settlement/reconciliation Events;
 5. two durable MarketPulse deliveries and two durable QuantStream ingestion
    rows; and
-6. an actual 2 USDC TestUSDC balance transfer from payer to payee.
+6. the active Payer's two EOAs each lose exactly 1 USDC, the other eight Payer
+   EOAs remain byte-for-byte unchanged, the gateway/payee gains exactly 2 USDC,
+   total token balance is conserved, and all ten AgentVault SQL snapshots
+   converge to chain state.
 
 Provider fee/refund/deposit/transfer/reversal matrices, MPP/Tempo settlement,
 and Solana payment are not overstated here; they require their own provider

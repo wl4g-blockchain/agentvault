@@ -14,6 +14,19 @@
       "type": "object",
       "additionalProperties": { "type": "string" }
     },
+    "commandHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content-type", "traceparent"],
+      "properties": {
+        "accept": { "const": "application/json" },
+        "content-type": { "const": "application/json" },
+        "traceparent": {
+          "type": "string",
+          "pattern": "^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$"
+        }
+      }
+    },
     "httpRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -32,7 +45,7 @@
             { "type": "string", "pattern": "^/api/v1/payments/[A-Za-z0-9._-]+/outbound-response$" }
           ]
         },
-        "headers": { "$ref": "#/$defs/headers" },
+        "headers": { "$ref": "#/$defs/commandHeaders" },
         "body": {
           "type": "string",
           "description": "Base64url without padding of the canonical HTTP request body"
@@ -42,7 +55,7 @@
     "sdkCommand": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "request"],
+      "required": ["type", "version", "requestSpanId", "request"],
       "properties": {
         "type": { "enum": [
           "payment.authorize",
@@ -53,14 +66,14 @@
           "payment.settle"
         ] },
         "version": { "const": 1 },
-        "correlationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
         "request": { "$ref": "#/$defs/httpRequest" }
       }
     },
     "sdkResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "status", "headers", "body"],
+      "required": ["type", "version", "requestSpanId", "status", "headers", "body"],
       "properties": {
         "type": { "enum": [
           "payment.authorization_result",
@@ -72,7 +85,7 @@
           "payment.error"
         ] },
         "version": { "const": 1 },
-        "correlationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
         "status": { "type": "integer", "minimum": 100, "maximum": 599 },
         "headers": { "$ref": "#/$defs/headers" },
         "body": {
@@ -84,11 +97,10 @@
     "approvalRequired": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "approvalId", "intentId", "runId", "scenarioId", "expiresAt"],
+      "required": ["type", "version", "approvalId", "intentId", "runId", "scenarioId", "expiresAt"],
       "properties": {
         "type": { "const": "payment.approval_required" },
         "version": { "const": 1 },
-        "correlationId": { "type": "string" },
         "approvalId": { "type": "string" },
         "intentId": { "type": "string" },
         "runId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$" },
@@ -102,11 +114,11 @@
       "type": "object",
       "description": "Published only on clients/{client}/approvers/{principal}/decisions; both identities come from the broker-authorized topic, never this payload.",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "request"],
+      "required": ["type", "version", "requestSpanId", "request"],
       "properties": {
         "type": { "const": "payment.approval_decision" },
         "version": { "const": 1 },
-        "correlationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
         "request": {
           "type": "object",
           "additionalProperties": false,
@@ -114,7 +126,7 @@
           "properties": {
             "method": { "const": "POST" },
             "path": { "type": "string", "pattern": "^/api/v1/approvals/[A-Za-z0-9._-]+/decision$" },
-            "headers": { "$ref": "#/$defs/headers" },
+            "headers": { "$ref": "#/$defs/commandHeaders" },
             "body": { "type": "string" }
           }
         }
@@ -123,11 +135,11 @@
     "approvalDecisionResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "version", "correlationId", "status", "headers", "body"],
+      "required": ["type", "version", "requestSpanId", "status", "headers", "body"],
       "properties": {
         "type": { "const": "payment.approval_decision_result" },
         "version": { "const": 1 },
-        "correlationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
         "status": { "type": "integer", "minimum": 100, "maximum": 599 },
         "headers": { "$ref": "#/$defs/headers" },
         "body": { "type": "string" }

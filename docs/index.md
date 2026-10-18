@@ -25,7 +25,7 @@ AuthGuard + Envoy Gateway             HTTP 身份、登录、会话、IAM、路�
           │ signed context / opaque scope token
           ▼
 AgentVault                            支付领域授权、预算、审批、签名、结算、Ledger
-          │ SDK / HTTP / gRPC / Unix / MQTT
+          │ SDK(gRPC/MQTT) / Admin HTTP / Unix
           ▼
 Flowgent / Sigbot / QuantStream       工作流、Agent、业务交付与补偿
           │
@@ -65,11 +65,13 @@ Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC
 
 `run_id` 在 SDK、HTTP/gRPC/MQTT wire、Intent、Outbox 和业务交付中保持不变，授权轮询、网络超时、重发、Verify、Settle 及交付恢复都复用它；不再存在第二个公开的业务幂等字段。同一 Scenario 下，同 `run_id` 且同请求指纹返回原结果；同 `run_id` 但不同指纹必须冲突并 Fail Closed。
 
-可观测标识与业务标识严格分离：W3C `traceparent` 传递 `trace_id/span_id/parent_span_id`。规范要求每次实际 HTTP/gRPC/MQTT/Provider 调用或重试由 OpenTelemetry 自动创建新的子 Span，但始终复用同一 `run_id`。`span_id` 只区分一次调用，不是由业务方传入的字段，不得进入业务唯一约束、去重逻辑或恢复查询；需持久化的内部尝试由 `attempt_no + event_type` 表达。异步协议的 `correlation_id` 仅由 SDK/Transport 内部生成，用于一次请求/响应会话配对，并记录为 OTel `messaging.message.conversation_id`；业务调用方无需管理它。一次会话可包含 publish、consume、response 与重投等多个 Span，因此 `correlation_id` 不得改名、复用或冒充 `span_id`；消息重投可保持 Correlation 不变但必须创建新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 仅把 `run_id` 映射为该协议头，不创建新身份。
+可观测标识与业务标识严格分离：交易 Run 的生命周期大于单段 Trace，同一 `run_id` 可跨进程重启、人工审批和对账形成多个 `trace_id`；每次 HTTP/gRPC/MQTT/Provider 调用或重试创建新的 `span_id`，并通过 W3C `traceparent` 传递父子关系。系统禁止定义额外的独立关联标识。异步 wire 中兼容字段 `requestSpanId` 必须与 `traceparent` 的 producer Span ID 完全相同，用于响应 Topic 并由响应回显；它不是新 ID，不得持久化、参与业务唯一约束或恢复查询，只允许作为 MQTT QoS 重投递的短生命周期回复缓存键。消费响应创建新 Span，重试保持 `run_id`、递增 `attempt_no` 并取得新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 只把 `run_id` 映射为该协议头，不创建新身份。
 
 OUTBOUND 时 AgentVault 把 Scenario 下所有匹配的 Policy-Wallet membership 视为候选钱包池。协议、资产、Origin、Recipient 或方向不匹配的 membership 不进入候选；Wallet 停用、缺少本地 Active Key、算法/规范地址不兼容 Challenge 网络或预算拒绝则保留为可审计的拒绝结果。系统按“可直接授权、需审批、拒绝”分组，在同组内优先选择当日已花费加预留最少的 Wallet，并以请求哈希做稳定散列决胜。选择结果写入 Intent 作为内部审计事实；幂等重放始终返回同一结果。候选数量有界，最终 membership、网络兼容性、Key Version、Policy 快照与双层预算在 SQL 锁内再次校验，因此并发选择不能绕过限额。多个匹配 Policy 是替代授权（OR）；需要叠加限制时应合并为一个 Policy，避免用重叠 Policy 表达交集语义。链上余额会在每次签名前再次 Fail Closed 检查；它不是负载均衡权重，也不会把同一个 Intent 静默改绑到另一 Wallet。
 
 钱包池选择是授权前的确定性调度，不是分布式锁：并发请求可能在锁外看到同一用量快照，最终 SQL 条件更新仍会阻止超额，其中一个请求可以 Fail Closed，但系统不会在已创建 Intent 后静默换钱包。Catalog 分页接口只服务展示；Scenario-Wallet 归属、Offer 解析等权限事实必须使用数据库存在性/唯一性查询，禁止从“第一页里是否找到”推导授权结果。
+
+AgentVault 自己持有链/RPC 连接；业务 Payer 只提交 `scenario_id + run_id + challenge`，不得配置私钥、Wallet ID 或链 RPC。签名前的链上余额/Gas 检查属于实时安全闸门；独立的 Wallet Balance Sync Job 默认每 3 分钟分页观察托管钱包并写入非权威 SQL 快照，只服务资金看板、预算预警和运营分析，绝不能替代签名前检查或 Ledger 结算证据。
 
 ## 3. 双向 Policy
 
@@ -98,7 +100,7 @@ Controllers                       Application / Domain                  Adapters
 └────────────────────┘            └──────────────────────────┘          └─────────────────────┘
 ```
 
-HTTP、gRPC、Unix Socket 与 MQTT 复用同一个 `PaymentApi` 和 Handler 图，不在传输层复制预算或签名逻辑。gRPC 仅是 SDK 内部的有界 Envelope 传输，不形成额外公开业务 API；启用 AuthGuard 时由其 Envoy gRPC 入口认证并注入签名 Principal Context。由于网关看不到 Envelope 内部路径，gRPC 服务只允许自身仍执行 Scenario/Approver 领域授权的 SDK 支付命令，明确拒绝 `/admin/*` 与未知路由；Admin API 只能走可被 AuthGuard 逐路由判定的 HTTP 入口。`src/cmd/` 是唯一组合根，负责选择 SQL、Cache、Protocol、Provider、RPC 和 Transport adapter。业务 Handler 只依赖 Port trait。
+SDK 控制面只允许 gRPC 与 MQTT，两者同 HTTP Admin/Unix 入口复用同一个 `PaymentApi` 和 Handler 图，不在传输层复制预算或签名逻辑。gRPC 仅是 SDK 内部的有界 Envelope 传输，不形成额外公开业务 API；启用 AuthGuard 时由其 Envoy gRPC 入口认证并注入签名 Principal Context。由于网关看不到 Envelope 内部路径，gRPC 服务只允许自身仍执行 Scenario/Approver 领域授权的 SDK 支付命令，明确拒绝 `/admin/*` 与未知路由；Admin API 只能走可被 AuthGuard 逐路由判定的 HTTP 入口。`src/cmd/` 是唯一组合根，负责选择 SQL、Cache、Protocol、Provider、RPC 和 Transport adapter。业务 Handler 只依赖 Port trait。
 
 源代码顶层严格收敛为：
 
@@ -126,7 +128,7 @@ Go、Rust、Python、TypeScript（以及保持同矩阵的 Java）测试统一�
 
 ## 5. 持久化与一致性
 
-SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` 初始化，并由 schema parity test 校验表、列、索引和版本。八个支付核心表与六个支撑表如下：
+SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` 初始化，并由 schema parity test 校验表、列、索引和版本。八个支付核心表与七个支撑表如下：
 
 | 分类 | 表 | 职责 |
 |---|---|---|
@@ -139,12 +141,26 @@ SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` �
 | 核心 | `pay_approval` | 一次性审批请求和 Grant 绑定 |
 | 核心 | `pay_ledger` | 已确认资金事实 |
 | 支撑 | `pay_wallet`、`wallet_key_version` | Wallet 元数据、硬限额和加密密钥版本 |
+| 支撑 | `pay_wallet_balance` | Balance Sync Job 写入的非权威链上余额观察值 |
 | 支撑 | `pay_policy_wallet` | Policy 与 Wallet membership |
 | 支撑 | `pay_scenario_approver` | 四眼审批人映射 |
 | 支撑 | `pay_outbox` | 崩溃可恢复的外部消息投递 |
 | 支撑 | `pay_schema_version` | Forward-only schema 版本 |
 
 普通 Catalog CRUD 复用数据库 base 宏消除 bind/executor 样板；预算预留、Grant 消费、Intent 状态转换、可信 Ledger 入账和 Outbox 写入保持显式聚合事务。这样复用不会隐藏资金锁序和条件更新。
+
+Canonical DDL **禁止业务 Trigger、存储过程和隐式副作用**。`CHECK`、`FOREIGN KEY`、`UNIQUE`、类型和索引只承担单行或静态关系约束；需要读取其他聚合、判断状态迁移或获取锁的规则，必须由 AgentVault Storage Port 在一个显式事务内执行。PostgreSQL 使用确定性的行锁顺序和带旧版本条件的 `UPDATE`，SQLite 使用 `BEGIN IMMEDIATE` 和同一套领域校验；任何校验失败都会回滚完整调用。两种方言因此共享相同业务语义，而不是维护两套 Trigger 程序。
+
+| 原 DDL 隐式逻辑 | 显式 AgentVault 原子调用 |
+|---|---|
+| Policy 预算单位、Scenario-Wallet 唯一启用策略、共享 Wallet 硬限额 | `PolicyStorage.insert/update` 锁定 Policy 与排序后的 Wallet，校验全部 membership，并在首次绑定时条件初始化预算单位 |
+| Offer 的 Scenario、Wallet、方向、协议、网络、资产和单笔限额 | `OfferStorage.insert/update` 在 Policy→Wallet 锁内验证完整 INBOUND 授权范围 |
+| Intent 授权范围、不可变身份、Credential 只绑定一次 | 创建时锁定 Policy 并验证方向/协议/资产/金额；迁移时比较完整不可变身份和旧 revision，再执行条件更新 |
+| Ledger 精确冲正与不可变历史 | 只公开 append/reversal Port；冲正前锁定原分录并验证 Wallet、Intent、金额、资产、方向和外部 Effect 全部匹配 |
+| Wallet 预算/共享限额与 Key Version 生命周期 | Wallet 事务统计已绑定策略，Key Repository 校验 Local Custody 和 Active 元数据；轮换/Compromise 使用 forward-only 条件更新并检查影响行数 |
+| Event、Ledger、加密 Key Material 的 append-only 语义 | 对外 Port 不提供任意 update/delete；运行时只调用专用追加或状态迁移函数，生产数据库凭据不得暴露给业务服务 |
+
+直接绕过 Storage Port 执行任意 SQL 不属于受支持的运行模式。生产 PostgreSQL 应由独立迁移身份拥有 Schema，AgentVault 运行身份遵循最小权限；SQLite 文件只能由单一 AgentVault 进程写入。数据库管理员始终能改写数据库，Trigger 也不能抵御管理员，因此安全边界必须是凭据隔离、审计和受控迁移，而不是隐藏在 DDL 中的业务代码。
 
 关键一致性规则：
 
@@ -200,7 +216,7 @@ SecretRef、Cluster 单槽 Namespace、字段级 TTL、连接/操作超时和有
 
 本地托管 EOA 使用 AES-256-GCM envelope encryption、完整 UUID v4 Nonce 和不可变 Key Version。Wallet 元数据位于 `pay_wallet`，加密 EOA 密文位于同一 Wallet 聚合的 `wallet_key_version` 子表；这是支持安全轮换所需的规范化一对多关系，不是独立文件 Key Store。`agentvault.key_management` 只引用 KEK，绝不保存 EOA 私钥。轮换先写新版本并原子切换 Active；旧版本仅作为不可变审计与受控恢复材料保留，未签名操作不会继续使用 Retired Key。任何 API 都不能导出明文私钥。Credential/Grant 的崩溃恢复材料由独立 `agentvault.recovery_encryption` AES-256-GCM 密钥环保护，Event 和日志只保存 Hash/Reference。
 
-APM 提供结构化日志、OTLP Trace、Prometheus/OpenMetrics、健康检查和受限运行时诊断。HTTP 入站提取 W3C `traceparent/tracestate`，gRPC metadata 进入同一 tracing middleware；AgentVault 调用外部 Facilitator/Provider 与 EVM RPC 时建立 client span 并继续注入该上下文，运营 Secret Header 无权覆盖 trace header。SDK 的 HTTP/gRPC 调用必须接入各语言标准 OpenTelemetry instrumentation，业务应用负责携带当前 Context。MQTT 功能 wire 不会把 `correlation_id` 冒充 Trace Context；生产部署若启用 MQTT，必须同时启用能对 publish/consume/retry 注入与提取 W3C Context 的 MQTT instrumentation，否则只满足功能协议，不满足本架构的跨服务 OTel 验收标准。Trace Context 只用于可观测性，绝不参与 Client/Scenario 授权。Grafana Dashboard 位于 `deploy/apm/grafana/`。
+APM 提供结构化日志、OTLP Trace、Prometheus/OpenMetrics、健康检查和受限运行时诊断。HTTP 入站提取 W3C `traceparent/tracestate`，gRPC metadata 进入同一 tracing middleware；AgentVault 调用外部 Facilitator/Provider 与 EVM RPC 时建立 client span 并继续注入该上下文，运营 Secret Header 无权覆盖 trace header。SDK 的 gRPC/MQTT Transport 必须创建或继承 producer Span Context，注入 W3C Trace Context，并输出可校验的 `trace_id/span_id/parent_span_id` 结构化日志；宿主业务已接入 OpenTelemetry 时，Adapter 必须桥接当前 Context，不得自建第二条身份链。MQTT 的 `requestSpanId` 只是 producer Span ID 的 wire 投影；publish、consume、response 和 retry 各自建立 Span 并传播/链接 W3C Context。Trace Context 只用于可观测性，绝不参与 Client/Scenario 授权。Grafana Dashboard 位于 `deploy/apm/grafana/`。
 
 Management 健康端点区分存活与就绪：`/healthz` 只证明进程事件循环可服务；`/readyz` 在 `mgmt.health.probe_timeout` 内查询当前权威 SQL adapter，数据库不可用或超时即返回 503。Memory/Redis Cache 仅是可降级加速层，故其故障产生指标和告警但不篡改资金状态，也不单独摘除 Ready 实例。
 
@@ -210,8 +226,7 @@ Management 健康端点区分存活与就绪：`/healthz` 只证明进程事件�
 
 ```text
 model/        wire/domain DTO
-transport/    HTTP、MQTT、超时、响应上限和脱敏
-               以及可切换的 gRPC 内部传输
+transport/    统一契约、gRPC/MQTT 实现、超时、响应上限和脱敏
 payer/        PayerMiddleware + 生态 HTTP 客户端拦截器
 payee/        PayeeMiddleware + 生态服务端中间件
 config/       传输与双向 Middleware 强类型配置
@@ -222,8 +237,8 @@ Payer 总入口负责捕获 402、请求授权、等待签名/审批结果、校
 绑定、有限重试原业务 HTTP/MCP 请求并上报结算响应；Rust/Go/Python/TypeScript/Java
 分别提供 Reqwest、net/http、HTTPX、Fetch、Spring 实现。Payee 总入口负责 Offer、
 Challenge、Verify、Settle，并由 Axum、Gin、FastAPI/ASGI、Express、Spring 适配器
-决定是否放行业务请求。业务代码只在启动时选择 gRPC、MQTT 或受 AuthGuard/Envoy
-保护的 HTTP Transport，切换传输不改变业务 Handler。
+决定是否放行业务请求。业务代码只在启动时选择 gRPC 或 MQTT；SDK 不提供 HTTP
+控制面 Transport，切换传输不改变业务 Handler。
 
 五种 Payer 配置只包含 `scenario_id` 与超时、审批轮询、重试等客户端行为参数；不得出现 Wallet、Policy、金额、资产、网络、收款人或商户 Origin 配置。SDK 授权 wire 只发送操作上下文和捕获的原始 Challenge，并校验返回 Intent 中由 AgentVault 选择的 Policy/Wallet 与签名凭据绑定完整。
 
@@ -235,7 +250,7 @@ SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外�
 - `deploy/helm/agentvault/`：AuthGuard 为默认启用的 umbrella dependency，受保护 HTTPRoute 使用 `authguard.io/protected=true`；禁用后不创建受保护 Route，运营方必须明确暴露开放 Service。
 - `use-cases/marketpulse-feed-subscription/e2e/`：从零构建、部署和分层验证的真实案例。
 
-E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道 Client transport identity 与 Scenario，不配置 Wallet 或支付字段。Provisioning 为同一 OUTBOUND Policy 注册两个独立充值 EOA，两次真实付款必须由 AgentVault 自动落到两个不同 Wallet；数据库 membership/Intent 和两个链上余额同时作为验收证据。付费 Tool 经 x402、MQTT 签名、超额审批 UI、官方 Facilitator、Anvil TestUSDC、PostgreSQL Ledger 和失败后恢复完成闭环。Payee profile 启动 Facilitator + Anvil + Solana；Payer dependency profile 只启动链节点。当前资金断言覆盖 EVM/x402，Solana 在该案例中验证真实节点健康，不宣称已完成 Solana 支付。
+E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。Provisioning 为五个 Payer 分别建立 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 串行执行 5×5×2=50 个隔离 Case，并由 `s21` 至 `s24` 分别验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步链路以及十钱包精确 Token 余额守恒。当前资金断言覆盖 EVM/x402；Solana 在该案例中只验证真实节点健康，不宣称已完成 Solana 支付。
 
 ## 12. 安全边界
 

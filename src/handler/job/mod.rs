@@ -3,6 +3,7 @@
 mod approval_expiration;
 mod outbox_dispatcher;
 mod reconciliation;
+mod wallet_balance_sync;
 
 pub use approval_expiration::{ApprovalExpirationJob, ApprovalExpirationRun};
 pub use outbox_dispatcher::{
@@ -14,6 +15,7 @@ pub use reconciliation::{
     ReconciliationEvidence, ReconciliationEvidenceSource, ReconciliationJob, ReconciliationRun, UnixClock,
     VerifyOnlyProviderEvidence,
 };
+pub use wallet_balance_sync::WalletBalanceSyncJob;
 
 #[cfg(test)]
 #[path = "../../../tests/handler/job/mod_test.rs"]

@@ -3,17 +3,18 @@ import { isIP } from 'node:net';
 import { inspect } from 'node:util';
 import mqtt, { type MqttClient } from 'mqtt';
 import { MqttConfig } from '../config/config.js';
-import { ApiError, type VaultTransport } from './http.js';
+import { ApiError, type VaultTransport } from './transport.js';
 
 const AUTHORIZE_PATH = '/api/v1/payments/authorize';
 const OUTBOUND_RESPONSE_PATH = /^\/api\/v1\/payments\/([^/?#]+)\/outbound-response$/;
-const CORRELATION = /^[0-9a-f]{32}$/;
+const REQUEST_SPAN_ID = /^(?!0{16}$)[0-9a-f]{16}$/;
+const TRACEPARENT = /^00-((?!0{32}$)[0-9a-f]{32})-((?!0{16}$)[0-9a-f]{16})-([0-9a-f]{2})$/;
 
 interface WireResponse {
   type: 'payment.authorization_result' | 'payment.outbound_response_result' | 'payment.offer_resolved' |
     'payment.challenge_created' | 'payment.verification_result' | 'payment.settlement_result' | 'payment.error';
   version: 1;
-  correlationId: string;
+  requestSpanId: string;
   status: number;
   headers: Record<string, string>;
   body: string;
@@ -28,6 +29,7 @@ interface PendingRequest {
 
 export class MqttVaultTransport implements VaultTransport {
   private client: MqttClient | undefined;
+  private connectPromise: Promise<void> | undefined;
   private readonly prefix: string;
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -40,7 +42,17 @@ export class MqttVaultTransport implements VaultTransport {
   }
 
   async connect(): Promise<void> {
-    if (this.client) return;
+    if (this.client?.connected) return;
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = this.open();
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = undefined;
+    }
+  }
+
+  private async open(): Promise<void> {
     const address = isIP(this.config.host) === 6 ? `[${this.config.host}]` : this.config.host;
     const broker = `${this.config.tls ? 'mqtts' : 'mqtt'}://${address}:${this.config.port}`;
     const client = mqtt.connect(broker, {
@@ -86,24 +98,37 @@ export class MqttVaultTransport implements VaultTransport {
     const client = this.client;
     this.client = undefined;
     if (client) await new Promise<void>((resolve) => client.end(false, {}, () => resolve()));
-    for (const [correlation, waiting] of this.pending) {
+    for (const [requestSpanId, waiting] of this.pending) {
       clearTimeout(waiting.timer);
       waiting.reject(new Error('MQTT transport closed'));
-      this.pending.delete(correlation);
+      this.pending.delete(requestSpanId);
     }
   }
 
   async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const operation = this.operation(method, path);
     if (body === undefined) throw new Error('MQTT payment commands require a request body');
-    if (!this.client?.connected) throw new Error('MQTT transport is not connected');
+    await this.connect();
+    const client = this.client;
+    if (!client?.connected) throw new Error('AgentVault MQTT transport did not become ready');
     if (this.pending.size >= 256) throw new Error('too many pending MQTT payment requests');
-    const correlationId = randomBytes(16).toString('hex');
-    const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json' };
+    const trace = producerTraceContext({});
+    const requestSpanId = trace.spanId;
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      traceparent: trace.traceparent,
+    };
+    console.info(JSON.stringify({
+      event: 'agentvault.sdk.transport.mqtt.produced',
+      traceId: trace.traceId,
+      spanId: trace.spanId,
+      parentId: trace.parentSpanId ?? '',
+    }));
     const payload = Buffer.from(JSON.stringify({
       type: operation.messageType,
       version: 1,
-      correlationId,
+      requestSpanId,
       request: {
         method: 'POST',
         path,
@@ -116,21 +141,21 @@ export class MqttVaultTransport implements VaultTransport {
     }
     const result = new Promise<WireResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(correlationId);
+        this.pending.delete(requestSpanId);
         reject(new Error('AgentVault MQTT request timed out'));
       }, this.config.timeoutMs);
-      this.pending.set(correlationId, { expectedType: operation.responseType, resolve, reject, timer });
+      this.pending.set(requestSpanId, { expectedType: operation.responseType, resolve, reject, timer });
     });
-    this.client.publish(
+    client.publish(
       `${this.prefix}/commands/${operation.command}`,
       payload,
       { qos: 1, retain: false },
       (error) => {
         if (!error) return;
-        const waiting = this.pending.get(correlationId);
+        const waiting = this.pending.get(requestSpanId);
         if (waiting) {
           clearTimeout(waiting.timer);
-          this.pending.delete(correlationId);
+          this.pending.delete(requestSpanId);
           waiting.reject(new Error(`MQTT publish failed: ${error.name}`));
         }
       },
@@ -150,8 +175,8 @@ export class MqttVaultTransport implements VaultTransport {
       const detail = (value as { error?: { code?: string; message?: string } } | undefined)?.error;
       throw new ApiError(
         response.status,
-        detail?.code ?? 'HTTP_ERROR',
-        detail?.message ?? `AgentVault returned HTTP ${response.status}`,
+        detail?.code ?? 'TRANSPORT_ERROR',
+        detail?.message ?? `AgentVault returned status ${response.status}`,
       );
     }
     return value as T;
@@ -210,29 +235,55 @@ export class MqttVaultTransport implements VaultTransport {
     } catch {
       return;
     }
-    const correlation = value.correlationId;
-    const waiting = typeof correlation === 'string' ? this.pending.get(correlation) : undefined;
+    const requestSpanId = value.requestSpanId;
+    const waiting = typeof requestSpanId === 'string' ? this.pending.get(requestSpanId) : undefined;
     const status = value.status;
     const responseTypeMatches = typeof status === 'number' &&
       ((status >= 400 && value.type === 'payment.error') ||
         (status < 400 && value.type === waiting?.expectedType));
     const headers = value.headers;
-    if (!waiting || !responseTypeMatches || value.version !== 1 || typeof correlation !== 'string' ||
-        !CORRELATION.test(correlation) || topic !== `${this.prefix}/results/${correlation}` ||
+    if (!waiting || !responseTypeMatches || value.version !== 1 || typeof requestSpanId !== 'string' ||
+        !REQUEST_SPAN_ID.test(requestSpanId) || topic !== `${this.prefix}/results/${requestSpanId}` ||
         !Number.isInteger(status) || (status as number) < 100 || (status as number) > 599 ||
         typeof value.body !== 'string' || !headers || typeof headers !== 'object' || Array.isArray(headers) ||
         Object.values(headers).some((item) => typeof item !== 'string') ||
-        !['type', 'version', 'correlationId', 'status', 'headers', 'body'].every((key) => key in value) ||
+        !['type', 'version', 'requestSpanId', 'status', 'headers', 'body'].every((key) => key in value) ||
         Object.keys(value).length !== 6) {
       return;
     }
     const response = value as unknown as WireResponse;
     clearTimeout(waiting.timer);
-    this.pending.delete(correlation);
+    this.pending.delete(requestSpanId);
     waiting.resolve(response);
   }
 }
 
 function subscriptionGranted(grants: ReadonlyArray<{ qos: number }> | undefined, expectedCount: number): boolean {
   return grants?.length === expectedCount && grants.every((grant) => grant.qos === 1);
+}
+
+function producerTraceContext(headers: Readonly<Record<string, string>>): {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  traceparent: string;
+} {
+  const parentValue = Object.entries(headers).find(([name]) => name.toLowerCase() === 'traceparent')?.[1] ?? '';
+  const parent = TRACEPARENT.exec(parentValue);
+  const traceId = parent?.[1] ?? randomNonzeroHex(16);
+  const spanId = randomNonzeroHex(8);
+  const flags = parent?.[3] ?? '01';
+  return {
+    traceId,
+    spanId,
+    ...(parent?.[2] ? { parentSpanId: parent[2] } : {}),
+    traceparent: `00-${traceId}-${spanId}-${flags}`,
+  };
+}
+
+function randomNonzeroHex(bytes: number): string {
+  for (;;) {
+    const value = randomBytes(bytes).toString('hex');
+    if (!/^0+$/.test(value)) return value;
+  }
 }

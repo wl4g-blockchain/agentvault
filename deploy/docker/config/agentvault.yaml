@@ -40,6 +40,8 @@ cache:
 agentvault:
   payer:
     enabled: true
+    wallet_selection:
+      strategy: least_spent
     x402:
       enabled: true
       max_challenge_ttl: 5m
@@ -124,6 +126,11 @@ agentvault:
     batch_size: 100
     initial_backoff: 5s
     max_backoff: 5m
+
+  wallet_balance_sync:
+    enabled: true
+    interval: 3m
+    batch_size: 1000
 
   transport:
     grpc:

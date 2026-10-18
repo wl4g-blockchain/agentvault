@@ -140,8 +140,8 @@ async fn outbox_class_claim_isolated_and_replayed_after_worker_restart() {
     ] {
         sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
-             correlation_id, run_id, payload, status, attempt_count, available_at, created_at) \
-             VALUES ($1, 'payment_intent', 'intent-1', $2, $3, 'intent-1', $1, '{}'::jsonb, 'pending', 0, 10, 10)",
+             run_id, payload, status, attempt_count, available_at, created_at) \
+             VALUES ($1, 'payment_intent', 'intent-1', $2, $3, $1, '{}'::jsonb, 'pending', 0, 10, 10)",
         )
         .bind(id)
         .bind(event_type)
@@ -302,6 +302,31 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         updated_at: 3,
     };
     crate::storage::PolicyStorage::insert(&storage, &policy).await.unwrap();
+    let mut duplicate_policy = policy.clone();
+    duplicate_policy.id = unique("pg-policy-duplicate");
+    duplicate_policy.created_at += 1;
+    duplicate_policy.updated_at += 1;
+    assert!(matches!(
+        crate::storage::PolicyStorage::insert(&storage, &duplicate_policy).await,
+        Err(Error::PaymentConflict(_))
+    ));
+    let excessive_offer = PaymentOffer {
+        id: unique("pg-offer-excessive"),
+        scenario_id: scenario.id.clone(),
+        policy_id: policy.id.clone(),
+        resource: format!("https://feed.example/mcp/excessive-{}", Uuid::new_v4()),
+        protocols: vec!["x402".to_owned()],
+        asset: asset.clone(),
+        amount: Amount::new(101),
+        wallet_id: wallet.id.clone(),
+        enabled: true,
+        created_at: 4,
+        updated_at: 4,
+    };
+    assert!(matches!(
+        crate::storage::OfferStorage::insert(&storage, &excessive_offer).await,
+        Err(Error::PaymentConflict(_))
+    ));
     let mut alternate_policy = policy.clone();
     alternate_policy.id = unique("pg-policy-b");
     alternate_policy.wallet_ids = vec![alternate_wallet.id.clone()];
@@ -329,6 +354,25 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         &asset,
         &recipient,
     );
+    let mut excessive_intent = intent(
+        &unique("pg-intent-excessive"),
+        &unique("pg-run-excessive"),
+        &scenario.id,
+        &wallet.id,
+        &policy.id,
+        &asset,
+        &recipient,
+    );
+    excessive_intent.amount = Amount::new(101);
+    excessive_intent.reserved_amount = Amount::new(101);
+    assert!(matches!(
+        storage
+            .transaction(|connection| {
+                Box::pin(async move { super::payment::insert_intent(connection, &excessive_intent, None).await })
+            })
+            .await,
+        Err(Error::PaymentConflict(_))
+    ));
     let barrier = Arc::new(Barrier::new(3));
     let left_storage = storage.clone();
     let left_barrier = Arc::clone(&barrier);
@@ -562,7 +606,6 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         aggregate_id: settled.id.clone(),
         event_type: "settled".to_owned(),
         destination: format!("scenario:{}.payments", settled.scenario_id),
-        correlation_id: settled.id.clone(),
         run_id: unique("pg-settled-notification"),
         payload: serde_json::json!({"intent_id": settled.id.clone()}),
         status: OutboxStatus::Pending,
@@ -616,6 +659,19 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         .unwrap();
     assert_eq!(snapshot.scenario_spent_and_reserved, Amount::new(60));
     assert_eq!(snapshot.wallet_spent_and_reserved, Amount::new(60));
+    let invalid_reversal = PaymentLedgerEntry {
+        id: unique("pg-ledger-reversal-invalid"),
+        entry_type: LedgerEntryType::Reversal,
+        direction: PaymentDirection::Outbound,
+        posting_key: unique("pg-ledger-reversal-invalid-fact"),
+        reversal_of: Some(ledger.id.clone()),
+        created_at: settled.updated_at + 1,
+        ..ledger.clone()
+    };
+    assert!(matches!(
+        crate::storage::LedgerStorage::append(&storage, &invalid_reversal).await,
+        Err(Error::PaymentConflict(_))
+    ));
     let losing_wallet_id = if settled.wallet_id.as_deref() == Some(wallet.id.as_str()) {
         &alternate_wallet.id
     } else {
@@ -930,6 +986,22 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         }
         status => panic!("unexpected expiry/credential race winner: {status:?}"),
     }
+
+    let reversal = PaymentLedgerEntry {
+        id: unique("pg-ledger-reversal"),
+        entry_type: LedgerEntryType::Reversal,
+        direction: PaymentDirection::Inbound,
+        posting_key: unique("pg-ledger-reversal-fact"),
+        reversal_of: Some(ledger.id.clone()),
+        created_at: settled.updated_at + 1,
+        ..ledger
+    };
+    assert!(matches!(
+        crate::storage::LedgerStorage::append(&storage, &reversal)
+            .await
+            .unwrap(),
+        IdempotentWrite::Inserted(_)
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]

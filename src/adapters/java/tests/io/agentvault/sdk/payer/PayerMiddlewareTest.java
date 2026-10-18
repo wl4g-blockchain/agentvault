@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.config.Config.PayerConfig;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.agentvault.sdk.model.Payer.PayerHttpRequest;
 import io.agentvault.sdk.model.Payer.PayerHttpResponse;
 import io.agentvault.sdk.model.Payer.PayerRequestContext;

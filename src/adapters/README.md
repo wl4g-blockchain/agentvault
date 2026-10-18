@@ -9,7 +9,7 @@ machines out of business code:
 | Go | `StandardPayerMiddleware` (`net/http`) | `GinPayeeMiddleware` / `StandardPayeeMiddleware` |
 | Python | `HttpxPayerMiddleware` | `FastPayeeMiddleware` (ASGI/FastAPI) |
 | TypeScript | `FetchPayerMiddleware` | `ExpressPayeeMiddleware` |
-| Java | `StandardPayerMiddleware` (Spring client) | `SpringInterceptorPayeeMiddleware` |
+| Java | `SpringInterceptorPayerMiddleware` | `SpringInterceptorPayeeMiddleware` |
 
 `PayerMiddleware` owns 402 detection, stable operation identity, approval wait,
 credential-origin binding, bounded retry, and settlement-response reporting.
@@ -19,7 +19,7 @@ native request and response types.
 
 Each language exposes one `AgentVault` facade. Business code selects a
 transport once, calls `vault.payer(config)` or `vault.payee(config)`, and then
-attaches the ecosystem adapter with `standard()` or its framework-specific
+attaches the ecosystem adapter with `standard()` or its explicitly named framework-specific
 method. There are no parallel `PaymentClient`, `PayeeClient`, or
 `ApprovalClient` entrypoints; advanced operations remain methods on the role
 middleware or the single facade.
@@ -28,9 +28,8 @@ Business applications choose one `VaultTransport` at startup:
 
 - gRPC for synchronous service-to-service calls (TLS required off loopback);
 - MQTT for durable client-scoped commands and correlated results;
-- HTTP when AgentVault is reached through the AuthGuard/Envoy edge.
 
-With HTTP or gRPC, one transport instance can back both role middlewares and
+With gRPC, one transport instance can back both role middlewares and
 the approval methods on `AgentVault`. MQTT exposes only the payer/payee command
 flow and correlated results to workload credentials; approval events and the
 administrative query/decision API require a separate Admin identity.

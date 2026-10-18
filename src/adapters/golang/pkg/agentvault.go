@@ -57,7 +57,6 @@ type Method = transport.Method
 type APIError = transport.APIError
 type MqttVaultTransport = transport.MqttVaultTransport
 type MqttConfig = config.MqttConfig
-type HttpVaultTransport = transport.HttpVaultTransport
 type GrpcVaultTransport = transport.GrpcVaultTransport
 type GrpcConfig = config.GrpcConfig
 
@@ -68,8 +67,6 @@ const (
 
 var ErrRunConflict = transport.ErrRunConflict
 var NewMqttVaultTransport = transport.NewMqttVaultTransport
-var NewHttpVaultTransport = transport.NewHttpVaultTransport
-var NewHttpVaultTransportWithOptions = transport.NewHttpVaultTransportWithOptions
 var NewGrpcVaultTransport = transport.NewGrpcVaultTransport
 
 type OperationContext = model.OperationContext

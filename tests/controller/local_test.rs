@@ -20,7 +20,7 @@ fn request_envelope(body: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "type": "payment.authorize",
         "version": 1,
-        "correlationId": "0123456789abcdef0123456789abcdef",
+        "requestSpanId": "0123456789abcdef",
         "request": {
             "method": "POST",
             "path": AUTHORIZE_PATH,
@@ -109,21 +109,21 @@ async fn bound_socket_has_private_mode_and_guard_respects_replacement() {
 }
 
 #[tokio::test]
-async fn correlation_registry_replays_exact_results_and_rejects_conflicts() {
-    let registry = CorrelationRegistry::new();
+async fn request_span_registry_replays_exact_results_and_rejects_conflicts() {
+    let registry = RequestSpanRegistry::new();
     let hash = [1_u8; 32];
     assert!(matches!(
-        registry.begin("principal", "correlation", hash).await,
-        CorrelationDisposition::New
+        registry.begin("principal", "0123456789abcdef", hash).await,
+        RequestSpanDisposition::New
     ));
     assert!(matches!(
-        registry.begin("principal", "correlation", [2_u8; 32]).await,
-        CorrelationDisposition::Conflict
+        registry.begin("principal", "0123456789abcdef", [2_u8; 32]).await,
+        RequestSpanDisposition::Conflict
     ));
-    let response = error_response("correlation", 400, "INVALID_REQUEST", "invalid");
-    registry.complete("principal", "correlation", response).await;
+    let response = error_response("0123456789abcdef", 400, "INVALID_REQUEST", "invalid");
+    registry.complete("principal", "0123456789abcdef", response).await;
     assert!(matches!(
-        registry.begin("principal", "correlation", hash).await,
-        CorrelationDisposition::Cached(_)
+        registry.begin("principal", "0123456789abcdef", hash).await,
+        RequestSpanDisposition::Cached(_)
     ));
 }

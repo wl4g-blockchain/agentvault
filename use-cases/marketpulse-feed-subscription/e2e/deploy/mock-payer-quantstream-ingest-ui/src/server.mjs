@@ -55,13 +55,13 @@ mqttClient.on("connect", () => {
 mqttClient.on("message", (topic, payload) => {
   if (payload.length > 256 * 1024) return;
   if (topic.startsWith(decisionResultPrefix)) {
-    const correlationId = topic.slice(decisionResultPrefix.length);
-    const waiter = decisionAcks.get(correlationId);
+    const requestSpanId = topic.slice(decisionResultPrefix.length);
+    const waiter = decisionAcks.get(requestSpanId);
     if (!waiter) return;
     try {
       const envelope = JSON.parse(payload.toString("utf8"));
-      if (envelope.correlationId !== correlationId || typeof envelope.status !== "number") return;
-      decisionAcks.delete(correlationId);
+      if (envelope.requestSpanId !== requestSpanId || typeof envelope.status !== "number") return;
+      decisionAcks.delete(requestSpanId);
       waiter.resolve(envelope);
     } catch {
       // A malformed response cannot complete an administrator decision.
@@ -95,21 +95,23 @@ const server = createServer(async (request, response) => {
       if (body.decision !== "approve" && body.decision !== "reject") {
         return json(response, 400, { error: "decision must be approve or reject" });
       }
-      const correlationId = randomBytes(16).toString("hex");
+      const traceId = randomNonzeroHex(16);
+      const requestSpanId = randomNonzeroHex(8);
+      const traceparent = `00-${traceId}-${requestSpanId}-01`;
       const decisionBody = approvalDecisionBody(approval, body.decision);
       if (typeof body.reason === "string" && body.reason.trim()) decisionBody.reason = body.reason.slice(0, 512);
       const message = {
         type: "payment.approval_decision",
         version: 1,
-        correlationId,
+        requestSpanId,
         request: {
           method: "POST",
           path: `/api/v1/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
-          headers: {"content-type": "application/json"},
+          headers: {"content-type": "application/json", traceparent},
           body: Buffer.from(JSON.stringify(decisionBody), "utf8").toString("base64url")
         }
       };
-      const result = await publishDecision(correlationId, JSON.stringify(message));
+      const result = await publishDecision(requestSpanId, JSON.stringify(message));
       const resultBody = decodeResultBody(result.body);
       if (result.status >= 200 && result.status < 300) pending.remove(match[1]);
       return json(response, result.status, resultBody);
@@ -172,13 +174,13 @@ async function readJSON(request, limit) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function publishDecision(correlationId, payload) {
+function publishDecision(requestSpanId, payload) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      decisionAcks.delete(correlationId);
+      decisionAcks.delete(requestSpanId);
       reject(new Error("approval decision timed out"));
     }, decisionTimeoutMs);
-    decisionAcks.set(correlationId, {
+    decisionAcks.set(requestSpanId, {
       resolve: (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -187,7 +189,7 @@ function publishDecision(correlationId, payload) {
     mqttClient.publish(decisionTopic, payload, { qos: 1, retain: false }, (error) => {
       if (!error) return;
       clearTimeout(timer);
-      decisionAcks.delete(correlationId);
+      decisionAcks.delete(requestSpanId);
       reject(error);
     });
   });
@@ -198,6 +200,13 @@ function decodeResultBody(encoded) {
     return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
   } catch {
     return { error: "invalid AgentVault approval response" };
+  }
+}
+
+function randomNonzeroHex(bytes) {
+  for (;;) {
+    const value = randomBytes(bytes).toString("hex");
+    if (!/^0+$/.test(value)) return value;
   }
 }
 

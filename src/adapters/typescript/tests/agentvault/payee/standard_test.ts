@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { VaultTransport } from '../../../src/agentvault/transport/http.js';
+import type { VaultTransport } from '../../../src/agentvault/transport/transport.js';
 import { PayeeMiddleware } from '../../../src/agentvault/payee/payee.js';
 
 test('StandardPayeeMiddleware delegates to the shared payee state machine', async () => {

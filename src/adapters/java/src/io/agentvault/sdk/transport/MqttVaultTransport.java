@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentvault.sdk.config.Config.MqttConfig;
-import io.agentvault.sdk.model.Base.ApiException;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport.ApiException;
+import io.agentvault.sdk.transport.VaultTransport;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Set;
@@ -24,10 +24,11 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final System.Logger LOG = System.getLogger(MqttVaultTransport.class.getName());
     private static final String AUTHORIZE_PATH = "/api/v1/payments/authorize";
     private static final String PAYMENTS_PATH = "/api/v1/payments/";
     private static final Set<String> RESPONSE_FIELDS = Set.of(
-            "type", "version", "correlationId", "status", "headers", "body");
+            "type", "version", "requestSpanId", "status", "headers", "body");
 
     private record Pending(String responseType, CompletableFuture<JsonNode> future) {}
     private record Operation(String command, String messageType, String responseType) {}
@@ -49,7 +50,7 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
             String broker = (config.tls() ? "ssl://" : "tcp://") + host + ":" + config.port();
             client = new MqttClient(
                     broker,
-                    config.connectionPrefix() + "-" + randomId().substring(0, 12),
+                    config.connectionPrefix() + "-" + randomHex(8).substring(0, 12),
                     new MemoryPersistence());
             client.setCallback(new MqttCallback() {
                 @Override public void connectionLost(Throwable cause) {}
@@ -88,21 +89,28 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
     @Override public <T> T post(String path, Object body, Class<T> type) {
         Operation operation = operation(path);
         if (body == null) throw new IllegalArgumentException("MQTT payment commands require a request body");
+        connect();
         if (client == null || !client.isConnected()) {
-            throw new IllegalStateException("MQTT transport is not connected");
+            throw new IllegalStateException("AgentVault MQTT transport did not become ready");
         }
         if (pending.size() >= 256) throw new IllegalStateException("too many pending MQTT payment requests");
-        String correlation = randomId();
+        String traceId = randomHex(16);
+        String requestSpanId = randomHex(8);
+        String traceparent = "00-" + traceId + "-" + requestSpanId + "-01";
+        LOG.log(System.Logger.Level.INFO,
+                "agentvault.sdk.transport.mqtt.produced trace_id={0} span_id={1} parent_id=",
+                traceId, requestSpanId);
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         Pending waiting = new Pending(operation.responseType(), future);
-        if (pending.putIfAbsent(correlation, waiting) != null) {
-            throw new IllegalStateException("MQTT correlation collision");
+        if (pending.putIfAbsent(requestSpanId, waiting) != null) {
+            throw new IllegalStateException("MQTT requestSpanId collision");
         }
         try {
             byte[] bodyBytes = JSON.writeValueAsBytes(body);
             ObjectNode headers = JSON.createObjectNode();
             headers.put("accept", "application/json");
             headers.put("content-type", "application/json");
+            headers.put("traceparent", traceparent);
             ObjectNode request = JSON.createObjectNode();
             request.put("method", "POST");
             request.put("path", path);
@@ -111,7 +119,7 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
             ObjectNode envelope = JSON.createObjectNode();
             envelope.put("type", operation.messageType());
             envelope.put("version", 1);
-            envelope.put("correlationId", correlation);
+            envelope.put("requestSpanId", requestSpanId);
             envelope.set("request", request);
             byte[] raw = JSON.writeValueAsBytes(envelope);
             if (raw.length > config.maxResponseBytes()) {
@@ -137,8 +145,8 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
             int status = response.path("status").asInt();
             if (status < 200 || status >= 300) {
                 JsonNode error = value.path("error");
-                throw new ApiException(status, error.path("code").asText("HTTP_ERROR"),
-                        error.path("message").asText("AgentVault returned HTTP " + status));
+                throw new ApiException(status, error.path("code").asText("TRANSPORT_ERROR"),
+                        error.path("message").asText("AgentVault returned status " + status));
             }
             return JSON.treeToValue(value, type);
         } catch (java.util.concurrent.TimeoutException error) {
@@ -151,7 +159,7 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
         } catch (java.util.concurrent.ExecutionException error) {
             throw new IllegalStateException("AgentVault MQTT request failed", error.getCause());
         } finally {
-            pending.remove(correlation, waiting);
+            pending.remove(requestSpanId, waiting);
         }
     }
 
@@ -159,16 +167,16 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
         if (message.getPayload().length > config.maxResponseBytes()) return;
         try {
             JsonNode value = JSON.readTree(message.getPayload());
-            String correlation = value.path("correlationId").asText("");
-            Pending waiting = pending.get(correlation);
+            String requestSpanId = value.path("requestSpanId").asText("");
+            Pending waiting = pending.get(requestSpanId);
             int status = value.path("status").asInt(-1);
             String responseType = value.path("type").asText("");
             boolean responseTypeMatches = status >= 400
                     ? "payment.error".equals(responseType)
                     : waiting != null && waiting.responseType().equals(responseType);
             if (waiting == null || !responseTypeMatches || value.path("version").asInt() != 1
-                    || !correlation.matches("[0-9a-f]{32}")
-                    || !topic.equals(prefix + "/results/" + correlation)
+                    || !requestSpanId.matches("(?!0{16})[0-9a-f]{16}")
+                    || !topic.equals(prefix + "/results/" + requestSpanId)
                     || !value.path("status").canConvertToInt() || status < 100 || status > 599
                     || !value.path("headers").isObject() || !value.path("body").isTextual()
                     || value.size() != RESPONSE_FIELDS.size() || !RESPONSE_FIELDS.stream().allMatch(value::has)
@@ -220,10 +228,14 @@ public final class MqttVaultTransport implements VaultTransport, AutoCloseable {
         };
     }
 
-    private static String randomId() {
-        byte[] bytes = new byte[16];
-        RANDOM.nextBytes(bytes);
-        return java.util.HexFormat.of().formatHex(bytes);
+    private static String randomHex(int size) {
+        byte[] bytes = new byte[size];
+        String value;
+        do {
+            RANDOM.nextBytes(bytes);
+            value = java.util.HexFormat.of().formatHex(bytes);
+        } while (value.chars().allMatch(character -> character == '0'));
+        return value;
     }
 
     @Override public synchronized void close() {

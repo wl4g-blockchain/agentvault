@@ -141,6 +141,15 @@ fn grpc_transport_requires_bounded_messages_and_timeout() {
     ));
 
     config.agentvault.transport.grpc.max_message_bytes = 2 * 1024 * 1024;
+    assert!(config.validate_for_serve().is_ok());
+
+    config.agentvault.transport.grpc.max_message_bytes = 16 * 1024 * 1024 + 1;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("gRPC")
+    ));
+
+    config.agentvault.transport.grpc.max_message_bytes = 2 * 1024 * 1024;
     config.agentvault.transport.grpc.request_timeout = Duration::ZERO;
     assert!(matches!(
         config.validate_for_serve(),

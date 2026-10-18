@@ -72,7 +72,6 @@ fn message(id: &str, event_type: &str, attempt_count: u32) -> OutboxMessage {
         aggregate_id: "intent-1".to_owned(),
         event_type: event_type.to_owned(),
         destination: "scenario:scenario-1.payments".to_owned(),
-        correlation_id: "intent-1".to_owned(),
         run_id: "run-1".to_owned(),
         payload: json!({"intent_id": "intent-1"}),
         status: OutboxStatus::Pending,

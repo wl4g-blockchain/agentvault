@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import express, { type RequestHandler } from 'express';
-import { ApiError } from '../transport/http.js';
+import { ApiError } from '../transport/transport.js';
 import { InvalidPaymentError, type PayeeMiddleware } from './payee.js';
 
 export interface ExpressPayeeRoute {
@@ -111,6 +111,11 @@ export class ExpressPayeeMiddleware {
           network: receipt.asset.network,
         })).toString('base64');
         response.setHeader('payment-response', paymentResponse);
+        response.once('finish', () => console.info(JSON.stringify({
+          event: 'agentvault.sdk.payee.resource_released',
+          runId,
+          intentId: outcome.payment.intent.id,
+        })));
         next();
       } catch (error) {
         const status = error instanceof ApiError

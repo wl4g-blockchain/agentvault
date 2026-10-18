@@ -24,6 +24,7 @@ tokio = { version = "1.47", features = ["time"] }
 tonic = { version = "0.14", features = ["transport", "tls-webpki-roots"] }
 tonic-prost = "0.14"
 tower = "0.5"
+tracing = "0.1"
 zeroize = "1.8"
 
 [build-dependencies]

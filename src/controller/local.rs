@@ -44,13 +44,13 @@ const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const RESPONSE_CACHE_CAPACITY: usize = 4_096;
 const RESPONSE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const OVERLOAD_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
-const UNKNOWN_CORRELATION_ID: &str = "00000000000000000000000000000000";
+const UNKNOWN_REQUEST_SPAN_ID: &str = "0000000000000001";
 
 /// Length-prefixed payment transport protected by Unix ownership and mode.
 pub struct LocalController {
     settings: LocalSettings,
     api: Arc<PaymentApi>,
-    correlations: Arc<CorrelationRegistry>,
+    request_spans: Arc<RequestSpanRegistry>,
 }
 
 impl LocalController {
@@ -70,7 +70,7 @@ impl LocalController {
                 request_timeout: config.request_timeout,
             },
             api,
-            correlations: Arc::new(CorrelationRegistry::new()),
+            request_spans: Arc::new(RequestSpanRegistry::new()),
         })
     }
 
@@ -79,7 +79,7 @@ impl LocalController {
         let permits = Arc::new(Semaphore::new(self.settings.max_connections));
         let context = ConnectionContext {
             api: Arc::clone(&self.api),
-            correlations: Arc::clone(&self.correlations),
+            request_spans: Arc::clone(&self.request_spans),
             request_timeout: self.settings.request_timeout,
         };
         let mut workers = JoinSet::new();
@@ -98,7 +98,7 @@ impl LocalController {
                     let (mut stream, _) = accepted.context("accept Unix-socket payment connection")?;
                     let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                         let response = error_response(
-                            UNKNOWN_CORRELATION_ID,
+                            UNKNOWN_REQUEST_SPAN_ID,
                             429,
                             "RATE_LIMITED",
                             "too many concurrent local payment connections",
@@ -167,7 +167,7 @@ struct LocalSettings {
 #[derive(Clone)]
 struct ConnectionContext {
     api: Arc<PaymentApi>,
-    correlations: Arc<CorrelationRegistry>,
+    request_spans: Arc<RequestSpanRegistry>,
     request_timeout: Duration,
 }
 
@@ -184,7 +184,7 @@ async fn handle_connection(
                     result?
                 } else {
                     let response = error_response(
-                        UNKNOWN_CORRELATION_ID,
+                        UNKNOWN_REQUEST_SPAN_ID,
                         408,
                         "REQUEST_TIMEOUT",
                         "local payment request timed out",
@@ -209,12 +209,12 @@ async fn handle_connection(
 }
 
 async fn process_frame(frame: &[u8], context: &ConnectionContext) -> ResponseEnvelope {
-    let correlation_id = probe_correlation_id(frame).unwrap_or_else(|| UNKNOWN_CORRELATION_ID.to_owned());
+    let request_span_id = probe_request_span_id(frame).unwrap_or_else(|| UNKNOWN_REQUEST_SPAN_ID.to_owned());
     let command = match parse_command(frame) {
         Ok(command) => command,
         Err(failure) => {
             return error_response(
-                failure.correlation_id.as_deref().unwrap_or(&correlation_id),
+                failure.request_span_id.as_deref().unwrap_or(&request_span_id),
                 failure.status,
                 failure.code,
                 failure.message,
@@ -224,24 +224,24 @@ async fn process_frame(frame: &[u8], context: &ConnectionContext) -> ResponseEnv
     let request_hash = Sha256::digest(frame).into();
     let principal = command.principal.as_str().to_owned();
     match context
-        .correlations
-        .begin(&principal, &command.correlation_id, request_hash)
+        .request_spans
+        .begin(&principal, &command.request_span_id, request_hash)
         .await
     {
-        CorrelationDisposition::Cached(response) => response,
-        CorrelationDisposition::Conflict => error_response(
-            &command.correlation_id,
+        RequestSpanDisposition::Cached(response) => response,
+        RequestSpanDisposition::Conflict => error_response(
+            &command.request_span_id,
             409,
             "PAYMENT_CONFLICT",
-            "correlation id was reused with different content",
+            "request span id was reused with different content",
         ),
-        CorrelationDisposition::Full => error_response(
-            &command.correlation_id,
+        RequestSpanDisposition::Full => error_response(
+            &command.request_span_id,
             429,
             "RATE_LIMITED",
-            "the local correlation cache is at capacity",
+            "the local request cache is at capacity",
         ),
-        CorrelationDisposition::Wait(mut receiver) => {
+        RequestSpanDisposition::Wait(mut receiver) => {
             let waited = tokio::time::timeout(context.request_timeout, async {
                 loop {
                     if let Some(response) = receiver.borrow().clone() {
@@ -256,20 +256,20 @@ async fn process_frame(frame: &[u8], context: &ConnectionContext) -> ResponseEnv
             match waited {
                 Ok(Some(response)) => response,
                 Ok(None) => error_response(
-                    &command.correlation_id,
+                    &command.request_span_id,
                     500,
                     "INTERNAL_ERROR",
                     "the correlated payment request was interrupted",
                 ),
                 Err(_) => error_response(
-                    &command.correlation_id,
+                    &command.request_span_id,
                     408,
                     "REQUEST_TIMEOUT",
                     "the correlated payment request timed out",
                 ),
             }
         }
-        CorrelationDisposition::New => {
+        RequestSpanDisposition::New => {
             let response = match unix_time() {
                 Ok(now) => match tokio::time::timeout(
                     context.request_timeout,
@@ -277,20 +277,20 @@ async fn process_frame(frame: &[u8], context: &ConnectionContext) -> ResponseEnv
                 )
                 .await
                 {
-                    Ok(Ok(value)) => success_response(&command.correlation_id, &value),
-                    Ok(Err(error)) => response_for_error(&command.correlation_id, error),
+                    Ok(Ok(value)) => success_response(&command.request_span_id, &value),
+                    Ok(Err(error)) => response_for_error(&command.request_span_id, error),
                     Err(_) => error_response(
-                        &command.correlation_id,
+                        &command.request_span_id,
                         408,
                         "REQUEST_TIMEOUT",
                         "payment authorization timed out",
                     ),
                 },
-                Err(error) => response_for_error(&command.correlation_id, error),
+                Err(error) => response_for_error(&command.request_span_id, error),
             };
             context
-                .correlations
-                .complete(&principal, &command.correlation_id, response.clone())
+                .request_spans
+                .complete(&principal, &command.request_span_id, response.clone())
                 .await;
             response
         }
@@ -303,7 +303,7 @@ struct RequestEnvelope {
     #[serde(rename = "type")]
     message_type: String,
     version: u8,
-    correlation_id: String,
+    request_span_id: String,
     request: WireRequest,
 }
 
@@ -317,23 +317,23 @@ struct WireRequest {
 }
 
 struct ParsedCommand {
-    correlation_id: String,
+    request_span_id: String,
     principal: CallerPrincipal,
     request: AuthorizePaymentRequest,
 }
 
 #[derive(Debug)]
 struct ParseFailure {
-    correlation_id: Option<String>,
+    request_span_id: Option<String>,
     status: u16,
     code: &'static str,
     message: &'static str,
 }
 
 impl ParseFailure {
-    fn invalid(correlation_id: Option<String>, message: &'static str) -> Self {
+    fn invalid(request_span_id: Option<String>, message: &'static str) -> Self {
         Self {
-            correlation_id,
+            request_span_id,
             status: 400,
             code: "INVALID_REQUEST",
             message,
@@ -347,35 +347,35 @@ fn parse_command(payload: &[u8]) -> Result<ParsedCommand, ParseFailure> {
     }
     let envelope: RequestEnvelope = serde_json::from_slice(payload).map_err(|_| {
         ParseFailure::invalid(
-            probe_correlation_id(payload),
+            probe_request_span_id(payload),
             "invalid local payment authorization envelope",
         )
     })?;
-    let correlation = valid_correlation_id(&envelope.correlation_id).then(|| envelope.correlation_id.clone());
+    let request_span_id = valid_request_span_id(&envelope.request_span_id).then(|| envelope.request_span_id.clone());
     if envelope.message_type != "payment.authorize"
         || envelope.version != 1
-        || correlation.is_none()
+        || request_span_id.is_none()
         || envelope.request.method != "POST"
         || envelope.request.path != AUTHORIZE_PATH
     {
         return Err(ParseFailure::invalid(
-            correlation,
+            request_span_id,
             "invalid local payment authorization envelope contract",
         ));
     }
-    let correlation_id = envelope.correlation_id;
+    let request_span_id = envelope.request_span_id;
     validate_headers(&envelope.request.headers)
-        .map_err(|message| ParseFailure::invalid(Some(correlation_id.clone()), message))?;
+        .map_err(|message| ParseFailure::invalid(Some(request_span_id.clone()), message))?;
     let body = decode_canonical_body(&envelope.request.body)
-        .map_err(|message| ParseFailure::invalid(Some(correlation_id.clone()), message))?;
+        .map_err(|message| ParseFailure::invalid(Some(request_span_id.clone()), message))?;
     let request: AuthorizePaymentRequest = serde_json::from_slice(&body).map_err(|_| {
         ParseFailure::invalid(
-            Some(correlation_id.clone()),
+            Some(request_span_id.clone()),
             "invalid local payment authorization request body",
         )
     })?;
     Ok(ParsedCommand {
-        correlation_id,
+        request_span_id,
         principal: CallerPrincipal::unrestricted(),
         request,
     })
@@ -423,14 +423,15 @@ const fn is_base64url_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
 }
 
-fn probe_correlation_id(payload: &[u8]) -> Option<String> {
+fn probe_request_span_id(payload: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(payload).ok()?;
-    let correlation_id = value.get("correlationId")?.as_str()?;
-    valid_correlation_id(correlation_id).then(|| correlation_id.to_owned())
+    let request_span_id = value.get("requestSpanId")?.as_str()?;
+    valid_request_span_id(request_span_id).then(|| request_span_id.to_owned())
 }
 
-fn valid_correlation_id(value: &str) -> bool {
-    value.len() == 32
+fn valid_request_span_id(value: &str) -> bool {
+    value != "0000000000000000"
+        && value.len() == 16
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
@@ -442,17 +443,17 @@ struct ResponseEnvelope {
     #[serde(rename = "type")]
     message_type: &'static str,
     version: u8,
-    correlation_id: String,
+    request_span_id: String,
     status: u16,
     headers: BTreeMap<String, String>,
     body: String,
 }
 
-fn success_response(correlation_id: &str, response: &AuthorizePaymentResponse) -> ResponseEnvelope {
+fn success_response(request_span_id: &str, response: &AuthorizePaymentResponse) -> ResponseEnvelope {
     match serde_json::to_vec(response) {
-        Ok(body) => encoded_response(correlation_id, 200, body),
+        Ok(body) => encoded_response(request_span_id, 200, body),
         Err(_) => error_response(
-            correlation_id,
+            request_span_id,
             500,
             "INTERNAL_ERROR",
             "the operation could not be completed",
@@ -460,7 +461,7 @@ fn success_response(correlation_id: &str, response: &AuthorizePaymentResponse) -
     }
 }
 
-fn response_for_error(correlation_id: &str, error: Error) -> ResponseEnvelope {
+fn response_for_error(request_span_id: &str, error: Error) -> ResponseEnvelope {
     let (status, code, message) = match error {
         Error::InvalidRequest(_) | Error::PaymentProtocol(_) => (400, "INVALID_REQUEST", error.to_string()),
         Error::Unauthenticated => (401, "UNAUTHORIZED", "a valid bearer token is required".to_owned()),
@@ -472,21 +473,21 @@ fn response_for_error(correlation_id: &str, error: Error) -> ResponseEnvelope {
             (500, "INTERNAL_ERROR", "the operation could not be completed".to_owned())
         }
     };
-    error_response(correlation_id, status, code, &message)
+    error_response(request_span_id, status, code, &message)
 }
 
-fn error_response(correlation_id: &str, status: u16, code: &'static str, message: &str) -> ResponseEnvelope {
+fn error_response(request_span_id: &str, status: u16, code: &'static str, message: &str) -> ResponseEnvelope {
     let body = serde_json::to_vec(&json!({"error": {"code": code, "message": message}})).unwrap_or_else(|_| {
         br#"{"error":{"code":"INTERNAL_ERROR","message":"the operation could not be completed"}}"#.to_vec()
     });
-    encoded_response(correlation_id, status, body)
+    encoded_response(request_span_id, status, body)
 }
 
-fn encoded_response(correlation_id: &str, status: u16, body: Vec<u8>) -> ResponseEnvelope {
+fn encoded_response(request_span_id: &str, status: u16, body: Vec<u8>) -> ResponseEnvelope {
     ResponseEnvelope {
         message_type: "payment.authorization_result",
         version: 1,
-        correlation_id: correlation_id.to_owned(),
+        request_span_id: request_span_id.to_owned(),
         status,
         headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
         body: URL_SAFE_NO_PAD.encode(body),
@@ -542,7 +543,7 @@ where
     writer.flush().await.context("flush Unix-socket payment response")
 }
 
-enum CorrelationDisposition {
+enum RequestSpanDisposition {
     New,
     Wait(watch::Receiver<Option<ResponseEnvelope>>),
     Cached(ResponseEnvelope),
@@ -557,32 +558,32 @@ struct CachedRequest {
     updated_at: Instant,
 }
 
-struct CorrelationRegistry {
+struct RequestSpanRegistry {
     entries: Mutex<HashMap<(String, String), CachedRequest>>,
 }
 
-impl CorrelationRegistry {
+impl RequestSpanRegistry {
     fn new() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
         }
     }
 
-    async fn begin(&self, principal: &str, correlation_id: &str, request_hash: [u8; 32]) -> CorrelationDisposition {
+    async fn begin(&self, principal: &str, request_span_id: &str, request_hash: [u8; 32]) -> RequestSpanDisposition {
         let now = Instant::now();
         let mut entries = self.entries.lock().await;
         entries.retain(|_, entry| {
             entry.response.is_none() || now.saturating_duration_since(entry.updated_at) <= RESPONSE_CACHE_TTL
         });
-        let key = (principal.to_owned(), correlation_id.to_owned());
+        let key = (principal.to_owned(), request_span_id.to_owned());
         if let Some(entry) = entries.get_mut(&key) {
             if entry.request_hash != request_hash {
-                return CorrelationDisposition::Conflict;
+                return RequestSpanDisposition::Conflict;
             }
             entry.updated_at = now;
             return entry.response.clone().map_or_else(
-                || CorrelationDisposition::Wait(entry.completion.subscribe()),
-                CorrelationDisposition::Cached,
+                || RequestSpanDisposition::Wait(entry.completion.subscribe()),
+                RequestSpanDisposition::Cached,
             );
         }
         if entries.len() >= RESPONSE_CACHE_CAPACITY {
@@ -594,7 +595,7 @@ impl CorrelationRegistry {
             if let Some(oldest) = oldest_completed {
                 entries.remove(&oldest);
             } else {
-                return CorrelationDisposition::Full;
+                return RequestSpanDisposition::Full;
             }
         }
         let (completion, _) = watch::channel(None);
@@ -606,15 +607,15 @@ impl CorrelationRegistry {
                     completion,
                     updated_at: now,
                 });
-                CorrelationDisposition::New
+                RequestSpanDisposition::New
             }
-            Entry::Occupied(_) => CorrelationDisposition::Conflict,
+            Entry::Occupied(_) => RequestSpanDisposition::Conflict,
         }
     }
 
-    async fn complete(&self, principal: &str, correlation_id: &str, response: ResponseEnvelope) {
+    async fn complete(&self, principal: &str, request_span_id: &str, response: ResponseEnvelope) {
         let mut entries = self.entries.lock().await;
-        if let Some(entry) = entries.get_mut(&(principal.to_owned(), correlation_id.to_owned())) {
+        if let Some(entry) = entries.get_mut(&(principal.to_owned(), request_span_id.to_owned())) {
             entry.response = Some(response.clone());
             entry.updated_at = Instant::now();
             entry.completion.send_replace(Some(response));

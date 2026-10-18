@@ -14,7 +14,7 @@ import {
   type SettledIncomingPayment,
   type VerifyPaymentRequest,
 } from '../model/payee.js';
-import type { VaultTransport } from '../transport/http.js';
+import type { VaultTransport } from '../transport/transport.js';
 import { ExpressPayeeMiddleware, type ExpressPayeeRoute } from './express.js';
 import { StandardPayeeMiddleware } from './standard.js';
 
@@ -58,7 +58,13 @@ export class PayeeMiddleware {
   }
 
   async protect(operation: PayeeOperation): Promise<ProtectionOutcome> {
+    sdkEvent('agentvault.sdk.payee.intercepted', {
+      runId: operation.runId, scenarioId: operation.scenarioId,
+    });
     const challenge = await this.challenge(operation);
+    sdkEvent('agentvault.sdk.payee.challenge_created', {
+      runId: operation.runId, challengeHash: challenge.challenge_hash,
+    });
     if (operation.credentialPayload === undefined) {
       return { outcome: 'payment_required', challenge };
     }
@@ -87,6 +93,9 @@ export class PayeeMiddleware {
       throw new Error('valid AgentVault verification omitted verification_ref');
     }
     validateVerificationBinding(operation, challenge, verification);
+    sdkEvent('agentvault.sdk.payee.verified', {
+      runId: operation.runId, intentId: verification.intent.id,
+    });
     const settlement = operationContext(operation);
     const settleRequest: SettlePaymentRequest = {
       ...settlement,
@@ -99,6 +108,9 @@ export class PayeeMiddleware {
       settleRequest,
     );
     validateSettlementBinding(operation, verification, payment);
+    sdkEvent('agentvault.sdk.payee.settled', {
+      runId: operation.runId, intentId: payment.intent.id,
+    });
     return { outcome: 'authorized', payment };
   }
 
@@ -117,6 +129,10 @@ export class PayeeMiddleware {
       `/api/v1/payments/${encodeURIComponent(intentId)}/receipt?scenario_id=${encodeURIComponent(scenarioId)}`,
     );
   }
+}
+
+function sdkEvent(event: string, fields: Record<string, unknown>): void {
+  console.info(JSON.stringify({ event, ...fields }));
 }
 
 function validateChallengeBinding(operation: PayeeOperation, challenge: PaymentChallenge): void {

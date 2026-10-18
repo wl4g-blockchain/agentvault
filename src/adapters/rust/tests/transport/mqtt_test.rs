@@ -27,7 +27,29 @@ fn rejects_cleartext_remote_broker_and_redacts_password() {
     })
     .expect("loopback transport");
     assert!(!format!("{transport:?}").contains("super-secret"));
-    assert_ne!(random_id(), random_id());
+    let context = producer_trace_context(&std::collections::BTreeMap::new());
+    assert_eq!(context.trace_id.len(), 32);
+    assert_eq!(context.span_id.len(), 16);
+    let expected_traceparent = format!("00-{}-{}-01", context.trace_id, context.span_id);
+    assert_eq!(
+        context.headers.get("traceparent").map(String::as_str),
+        Some(expected_traceparent.as_str())
+    );
+}
+
+#[test]
+fn projects_a_child_span_into_request_span_id() {
+    let parent_trace = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+    let context = producer_trace_context(&std::collections::BTreeMap::from([(
+        "traceparent".to_owned(),
+        parent_trace.to_owned(),
+    )]));
+    assert_eq!(context.trace_id, "0123456789abcdef0123456789abcdef");
+    assert_eq!(context.parent_span_id.as_deref(), Some("0123456789abcdef"));
+    assert_eq!(
+        context.headers["traceparent"].split('-').nth(2),
+        Some(context.span_id.as_str())
+    );
 }
 
 #[test]

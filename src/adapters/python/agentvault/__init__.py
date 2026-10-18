@@ -44,6 +44,6 @@ from .model import (
 )
 from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware, settled_payment
 from .payer import HttpxPayerMiddleware, PayerMiddleware
-from .transport import APIError, GrpcVaultTransport, HttpVaultTransport, MqttVaultTransport, VaultTransport
+from .transport import APIError, GrpcVaultTransport, MqttVaultTransport, VaultTransport
 
 __all__ = [name for name in globals() if not name.startswith("_")]

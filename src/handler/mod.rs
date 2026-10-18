@@ -23,7 +23,10 @@ pub use approval_handler::{
     ApprovalDecisionResult, ApprovalGrantTokenService, ApprovalHandler, ApprovalPrincipalAuthorizer,
     JwtApprovalGrantTokenService, StoredApprovalPrincipalAuthorizer, SubmitApprovalDecision,
 };
-pub use balance_handler::{EvmRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSnapshot, WalletBalanceSource};
+pub use balance_handler::{
+    EvmRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSnapshot, WalletBalanceSource, WalletBalanceSync,
+    WalletBalanceSyncRun, WalletBalanceSynchronizer,
+};
 pub use client_handler::ClientHandler;
 pub use evm_receipt::{
     ConfirmedEvmTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery, EvmAuthorizationSource,

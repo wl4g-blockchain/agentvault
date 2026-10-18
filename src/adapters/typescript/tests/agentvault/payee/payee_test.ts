@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { VaultTransport } from '../../../src/agentvault/transport/http.js';
+import type { VaultTransport } from '../../../src/agentvault/transport/transport.js';
 import { InvalidPaymentError, PayeeMiddleware } from '../../../src/agentvault/payee/payee.js';
 
 test('PayeeMiddleware creates a challenge when no credential is present', async () => {

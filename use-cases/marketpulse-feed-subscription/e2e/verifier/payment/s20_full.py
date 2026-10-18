@@ -4,5 +4,5 @@ from common.context import VerificationContext
 from common.deploy import create_deployer
 
 
-def verify(context: VerificationContext) -> str:
+def verify(context: VerificationContext) -> dict[str, str]:
     return create_deployer(context).full(context.payer_language, context.payee_language)

@@ -1,7 +1,8 @@
 use std::{borrow::Cow, collections::HashMap, env, sync::Arc, time::Duration};
 
 use agentvault_sdk::{
-    AgentVault, AuthorizedPayment, MqttConfig, MqttVaultTransport, PayerConfig, PayerRequestContext, PayerRequestExt,
+    AgentVault, AuthorizedPayment, GrpcConfig, GrpcVaultTransport, MqttConfig, MqttVaultTransport, PayerConfig,
+    PayerRequestContext, PayerRequestExt,
 };
 use futures::stream::BoxStream;
 use http::{HeaderName, HeaderValue};
@@ -46,24 +47,43 @@ impl MCPHelper {
     /// Returns an error for invalid configuration, MCP initialization, or a
     /// `MarketPulse` server that does not expose the required tools.
     pub async fn from_env() -> Result<Self, DynError> {
-        let mqtt = MqttVaultTransport::new(MqttConfig {
-            host: required_env("AGENTVAULT_MQTT_HOST")?,
-            port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
-            tls: required_env("AGENTVAULT_MQTT_TLS")?.parse()?,
-            username: required_env("AGENTVAULT_MQTT_USERNAME")?,
-            password: required_env("AGENTVAULT_MQTT_PASSWORD")?,
-            connection_prefix: "quantstream-rust".to_owned(),
-            vault_client_id: required_env("QUANTSTREAM_CLIENT_ID")?,
-            request_timeout: Duration::from_secs(positive_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?),
-            max_response_bytes: 2 * 1024 * 1024,
-        })?;
+        let transport_name = env::var("AGENTVAULT_TRANSPORT").unwrap_or_else(|_| "mqtt".to_owned());
+        let timeout = Duration::from_secs(positive_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?);
         let payer = PayerConfig::new(required_env("QUANTSTREAM_SCENARIO_ID")?)?
-        .with_approval_wait(
-            Duration::from_secs(positive_env("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")?),
-            Duration::from_secs(1),
-        )
-        .with_delivery_retries(1);
-        let http = AgentVault::new(mqtt).payer(payer)?.standard().client()?;
+            .with_approval_wait(
+                Duration::from_secs(positive_env("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")?),
+                Duration::from_secs(1),
+            )
+            .with_delivery_retries(1);
+        let http = match transport_name.as_str() {
+            "mqtt" => {
+                let transport = MqttVaultTransport::new(MqttConfig {
+                    host: required_env("AGENTVAULT_MQTT_HOST")?,
+                    port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
+                    tls: required_env("AGENTVAULT_MQTT_TLS")?.parse()?,
+                    username: required_env("AGENTVAULT_MQTT_USERNAME")?,
+                    password: required_env("AGENTVAULT_MQTT_PASSWORD")?,
+                    connection_prefix: "quantstream-rust".to_owned(),
+                    vault_client_id: required_env("QUANTSTREAM_CLIENT_ID")?,
+                    request_timeout: timeout,
+                    max_response_bytes: 2 * 1024 * 1024,
+                })?;
+                AgentVault::new(transport).payer(payer)?.standard().client()?
+            }
+            "grpc" => {
+                let mut config = GrpcConfig::new(required_env("AGENTVAULT_GRPC_ENDPOINT")?)
+                    .with_tls(required_env("AGENTVAULT_GRPC_TLS")?.parse()?);
+                config.request_timeout = timeout;
+                let transport = GrpcVaultTransport::new(config)?;
+                AgentVault::new(transport).payer(payer)?.standard().client()?
+            }
+            _ => return Err("AGENTVAULT_TRANSPORT must be mqtt or grpc".into()),
+        };
+        tracing::info!(
+            event.name = "agentvault.sdk.payer.transport_selected",
+            agentvault.transport = %transport_name,
+            "selected AgentVault Payer transport"
+        );
         let payment_intents = Arc::new(Mutex::new(HashMap::new()));
         let transport = StreamableHttpClientTransport::with_client(
             AgentVaultMCPClient {

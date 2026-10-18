@@ -83,6 +83,8 @@ impl GrpcPaymentService {
         request: GrpcRequest<Envelope>,
         trace_headers: HeaderMap,
     ) -> Result<GrpcResponse<Envelope>, Status> {
+        let (trace_id, producer_span_id) = trace_identity(&trace_headers)
+            .ok_or_else(|| Status::invalid_argument("valid W3C traceparent metadata is required"))?;
         let principal = self.resolve_principal(&request).await?;
         let encoded = request.into_inner().value;
         if encoded.len() > self.max_message_bytes {
@@ -108,6 +110,14 @@ impl GrpcPaymentService {
             .ok_or_else(|| Status::invalid_argument("payment path must use the canonical API prefix"))?;
         let metric_route = canonical_payment_route(&method, path)
             .ok_or_else(|| Status::permission_denied("gRPC transport does not expose this payment route"))?;
+        tracing::info!(
+            event.name = "agentvault.transport.grpc.request",
+            trace.id = trace_id,
+            trace.producer_span_id = producer_span_id,
+            http.request.method = %method,
+            http.route = metric_route,
+            "received AgentVault gRPC payment request"
+        );
         if wire.headers.len() > MAX_HEADERS {
             return Err(Status::invalid_argument("too many payment request headers"));
         }
@@ -202,7 +212,37 @@ fn trace_headers(request: &GrpcRequest<Envelope>) -> Result<HeaderMap, Status> {
             );
         }
     }
+    if trace_identity(&headers).is_none() {
+        return Err(Status::invalid_argument("valid W3C traceparent metadata is required"));
+    }
     Ok(headers)
+}
+
+fn trace_identity(headers: &HeaderMap) -> Option<(&str, &str)> {
+    let value = headers.get("traceparent")?.to_str().ok()?;
+    let mut fields = value.split('-');
+    let version = fields.next()?;
+    let trace_id = fields.next()?;
+    let span_id = fields.next()?;
+    let flags = fields.next()?;
+    if fields.next().is_some()
+        || version != "00"
+        || !valid_lower_hex(trace_id, 32)
+        || trace_id.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(span_id, 16)
+        || span_id.bytes().all(|byte| byte == b'0')
+        || !valid_lower_hex(flags, 2)
+    {
+        return None;
+    }
+    Some((trace_id, span_id))
+}
+
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 pub(super) fn is_allowed_request_header(name: &HeaderName) -> bool {

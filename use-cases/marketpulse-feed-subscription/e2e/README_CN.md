@@ -13,10 +13,11 @@ Mock 包装成 E2E。它模拟两个完整系统：
   `marketpulse.realtime_news`。收费 Tool 从服务端 Offer 生成 x402 v2 402，
   由 AgentVault 调外部官方 Facilitator 验证/结算，只在确认结算后交付数据。
 - **QuantStream** 是买方量化采集平台。Go、Rust、Python、Java、TypeScript
-  五个逻辑等价的独立后端定时调用两个 Tool；SDK 检测 402，通过 MQTT 请求
+  五个逻辑等价的独立后端定时调用两个 Tool；SDK 检测 402，并按 Case 配置通过 MQTT 或 gRPC 请求
   AgentVault 对 Intent 绑定报文签名，收到 Credential 后重试同一 MCP 操作，
-  上报官方付款响应并持久化采集结果。五个服务只配置 Scenario，不配置 Wallet、
-  Policy 或支付投影，也不持有 EOA 私钥；AgentVault 从 Scenario 的双成员 Policy
+  上报官方付款响应并持久化采集结果。五个服务分别拥有独立 Client、Scenario、
+  Policy、MQTT 身份和两个已充值 EOA；业务进程仍只配置 Scenario，不配置 Wallet、
+  Policy 或支付投影，也不持有 EOA 私钥。AgentVault 只能从该语言 Scenario 的双成员
   Wallet 池自动选择可签名 EOA。两次真实收费采集必须分别落到两个不同 Wallet，
   证明的是服务端自动选择，而不是把固定 Wallet ID 隐藏到别处。
 
@@ -30,7 +31,7 @@ UI 自身 Token 是业务层二级校验，与 HTTP IAM 相互独立。
 QuantStream（Go/Rust/Python/Java/TS）
   ├─ 免费 MCP ───────────────────────────────────┐
   └─ 收费 MCP → 402                              │
-       └─ AgentVault SDK → MQTT authorize        │
+       └─ AgentVault SDK → MQTT / gRPC authorize │
             └─ Client/Scenario → Policy/Wallet   │
                → 余额/预算/白名单复查             │
                ├─ 通过 → EOA 签名                │
@@ -55,9 +56,10 @@ QuantStream（Go/Rust/Python/Java/TS）
 ## 双向额度与审批
 
 Provisioning Manifest 明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
-`Policy 1:N Wallet membership`。一个 Wallet 可被多个 Policy 引用，以支持多个
-Scenario 共享钱包；AgentVault 在同等授权结果中优先选择当日使用量最低的钱包，
-稳定散列负责并列决胜。Wallet 总硬限额与固定事务锁顺序防止累计超额。
+`Policy 1:N Wallet membership`。生产环境允许多个 Policy 共享 Wallet；本矩阵则
+刻意使用五套隔离 Payer 身份和十个不同 EOA，以便直接发现 SDK 之间的越权串用。
+AgentVault 在同等授权结果中优先选择当日使用量最低的钱包，稳定散列负责并列决胜。
+Wallet 总硬限额与固定事务锁顺序防止累计超额。
 
 - QuantStream OUTBOUND 正常日额度：1 USDC；
 - 第二笔付款进入 `PendingApproval`；
@@ -136,26 +138,38 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
-python3 runner.py -s matrix
+python3 runner.py -s matrix --matrix-workers 2
+python3 runner.py -s matrix --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py cleanup
 ```
 
-也可直接运行 `deploy/e2e.sh`。Python Runner 会先校验结构，并写入不可覆盖的
+`runner.py` 是唯一外层编排入口，统一负责构建、部署、健康检查、场景选择、诊断和
+清理；它会先校验结构，并写入不可覆盖的
 `reports/<yyyyMMddHHmmss>/<module>/` 分层证据及该次运行的 `summary.md`。部署默认
 保留以便人工验收和诊断；需要自动回收时显式加 `--cleanup-after-run`，之后回收则
 运行 `runner.py cleanup`。
 
 ## Full Flow 必须提供的证据
 
-每次 Full Flow 明确选择一组付款/收款语言；`matrix` 会串行执行全部 25 种组合。
+每次 Full Flow 明确选择一组付款/收款语言和一种签名传输；`matrix` 默认以两个
+有界 Worker 执行 5 个 Payer × 5 个 Payee × MQTT/gRPC = 50 个相互隔离的组合：
+一个 Worker 专属 MQTT，另一个专属 gRPC。两个 Worker 使用不同 Compose Project、
+端口段、运行时配置、数据库卷与链状态；`--matrix-workers 1` 可显式串行运行。
+
+每个 Case 只有在五份详细验证全部通过后才写入绑定 Case 身份的 Checkpoint。宿主机或
+Runner 中断后，`--resume-run` 会校验既有 Checkpoint，拒绝身份不匹配或损坏的证据，
+并只执行同一不可变报告目录中尚未完成的 Case。
 
 1. 免费 MCP 真实交付，收费 Tool 首次返回真正的 x402 v2 402；
 2. 两个稳定逻辑操作，且交付重试不会二次授权或更换 Credential；
-3. MQTT 审批通知、UI 决策、一个精确金额的已消费 Grant，并自动恢复同一 Intent；
+3. MQTT/gRPC 签名请求真实到达 AgentVault；MQTT 审批通知、UI 决策、一个精确金额
+   的已消费 Grant，并自动恢复同一 Intent；
 4. 两条 OUTBOUND 与两条 INBOUND Settled Intent、四条已确认 Ledger Payment、
    绑定 Receipt 及 Settlement/Reconciliation Event；
 5. 两条 MarketPulse 持久交付和两条 QuantStream 持久采集记录；
-6. TestUSDC 真实从付款地址向收款地址转移 2 USDC。
+6. 当前 Payer 的两个 EOA 各精确减少 1 USDC，其余八个 Payer EOA 保持不变，
+   Gateway/Payee 精确增加 2 USDC，总量守恒，且 AgentVault 对十个钱包的定时余额
+   快照最终全部与链上值一致。
 
 手续费/退款/充值/转账/冲正矩阵、MPP/Tempo 结算与 Solana 支付不在本用例中
 冒充已完成；它们需要各自真实 Provider Fixture 与独立验收场景。

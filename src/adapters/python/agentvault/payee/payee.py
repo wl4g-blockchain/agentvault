@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import urllib.parse
 
 from ..config import PayeeConfig
@@ -9,6 +10,8 @@ from ..model import (
     SettlePaymentRequest, SettledIncomingPayment, VerifyPaymentRequest,
 )
 from ..transport import VaultTransport
+
+_LOG = logging.getLogger("agentvault.sdk")
 
 
 class PayeeMiddleware:
@@ -39,7 +42,11 @@ class PayeeMiddleware:
         return challenge
 
     def protect(self, operation: PayeeOperation) -> ProtectionOutcome:
+        _event("agentvault.sdk.payee.intercepted", run_id=operation.run_id,
+               scenario_id=operation.scenario_id)
         challenge = self.challenge(operation)
+        _event("agentvault.sdk.payee.challenge_created", run_id=operation.run_id,
+               challenge_hash=challenge.challenge_hash)
         if operation.credential_payload is None:
             return ProtectionOutcome.payment_required(challenge)
         credential = PaymentCredential(
@@ -51,9 +58,13 @@ class PayeeMiddleware:
         if verification.verification_ref is None:
             raise RuntimeError("valid AgentVault verification omitted settlement identity")
         _validate_verification_binding(operation, challenge, verification)
+        _event("agentvault.sdk.payee.verified", run_id=operation.run_id,
+               intent_id=verification.intent.id)
         payment = self._settle_payment(SettlePaymentRequest(
             operation.settlement_context(), verification.intent.id, verification.verification_ref))
         _validate_settlement_binding(operation, verification, payment)
+        _event("agentvault.sdk.payee.settled", run_id=operation.run_id,
+               intent_id=payment.intent.id)
         return ProtectionOutcome.authorized(payment)
 
     def resolve_offer(self, request: ResolveOfferRequest) -> PaymentOffer:
@@ -148,3 +159,11 @@ def _validate_settlement_binding(
         or receipt.status.value != "settled"
     ):
         raise RuntimeError("invalid AgentVault settlement response")
+
+
+def _event(name: str, **fields: object) -> None:
+    rendered = " ".join(
+        f"{key.replace('_', '.')}={value}" for key, value in sorted(fields.items())
+    )
+    message = f"{name} {rendered}" if rendered else name
+    _LOG.info(message, extra={"event_name": name, **fields})

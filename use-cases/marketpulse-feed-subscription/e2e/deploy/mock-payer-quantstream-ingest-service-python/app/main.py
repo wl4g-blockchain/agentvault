@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -29,6 +30,7 @@ IngestionRouter().register(app)
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="QuantStream Python MCP ingestor")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()

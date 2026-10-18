@@ -5,8 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.protobuf.BytesValue;
 import io.agentvault.sdk.config.Config.GrpcConfig;
-import io.agentvault.sdk.model.Base.ApiException;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport.ApiException;
+import io.agentvault.sdk.transport.VaultTransport;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientInterceptors;
@@ -18,11 +18,14 @@ import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.ClientCalls;
 import io.grpc.stub.MetadataUtils;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
 public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final System.Logger LOG = System.getLogger(GrpcVaultTransport.class.getName());
     private static final MethodDescriptor<BytesValue, BytesValue> EXECUTE = MethodDescriptor
             .<BytesValue, BytesValue>newBuilder()
             .setType(MethodDescriptor.MethodType.UNARY)
@@ -41,15 +44,7 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
                 .maxInboundMessageSize(config.maxMessageBytes());
         if (config.tls()) builder.useTransportSecurity(); else builder.usePlaintext();
         this.managedChannel = builder.build();
-        if (config.authguardBearer() == null) {
-            this.channel = managedChannel;
-        } else {
-            Metadata headers = new Metadata();
-            headers.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER),
-                    "Bearer " + config.authguardBearer());
-            this.channel = ClientInterceptors.intercept(
-                    managedChannel, MetadataUtils.newAttachHeadersInterceptor(headers));
-        }
+        this.channel = managedChannel;
     }
 
     @Override public <T> T get(String path, Class<T> type) {
@@ -78,8 +73,22 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
             if (wire.length > config.maxMessageBytes()) {
                 throw new IllegalArgumentException("AgentVault gRPC request exceeds configured limit");
             }
+            String traceId = randomHex(16);
+            String spanId = randomHex(8);
+            Metadata metadata = new Metadata();
+            metadata.put(Metadata.Key.of("traceparent", Metadata.ASCII_STRING_MARSHALLER),
+                    "00-" + traceId + "-" + spanId + "-01");
+            if (config.authguardBearer() != null) {
+                metadata.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER),
+                        "Bearer " + config.authguardBearer());
+            }
+            Channel tracedChannel = ClientInterceptors.intercept(
+                    channel, MetadataUtils.newAttachHeadersInterceptor(metadata));
+            LOG.log(System.Logger.Level.INFO,
+                    "agentvault.sdk.transport.grpc.produced trace_id={0} span_id={1} parent_id=",
+                    traceId, spanId);
             BytesValue response = ClientCalls.blockingUnaryCall(
-                    channel,
+                    tracedChannel,
                     EXECUTE,
                     CallOptions.DEFAULT.withDeadlineAfter(config.timeout().toMillis(), TimeUnit.MILLISECONDS),
                     BytesValue.of(com.google.protobuf.ByteString.copyFrom(wire)));
@@ -106,13 +115,23 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
             JsonNode value = JSON.readTree(decoded);
             if (status < 200 || status >= 300) {
                 JsonNode error = value.path("error");
-                throw new ApiException(status, error.path("code").asText("HTTP_ERROR"),
-                        error.path("message").asText("AgentVault returned HTTP " + status));
+                throw new ApiException(status, error.path("code").asText("TRANSPORT_ERROR"),
+                        error.path("message").asText("AgentVault returned status " + status));
             }
             return JSON.treeToValue(value, type);
         } catch (IOException error) {
             throw new IllegalStateException("invalid AgentVault gRPC response", error);
         }
+    }
+
+    private static String randomHex(int size) {
+        byte[] bytes = new byte[size];
+        String value;
+        do {
+            RANDOM.nextBytes(bytes);
+            value = java.util.HexFormat.of().formatHex(bytes);
+        } while (value.chars().allMatch(character -> character == '0'));
+        return value;
     }
 
     @Override public void close() {

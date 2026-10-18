@@ -1,7 +1,11 @@
 import {
   AgentVault,
   ExpressPayeeMiddleware,
-  HttpVaultTransport,
+  GrpcConfig,
+  GrpcVaultTransport,
+  MqttConfig,
+  MqttVaultTransport,
+  type VaultTransport,
   mcpToolRoute,
 } from '@agentvault/sdk';
 import express, { type Express } from 'express';
@@ -21,10 +25,7 @@ export class MarketPulseServer {
 
   static fromEnvironment(): MarketPulseServer {
     const [host, port] = parseBind(required('MARKETPULSE_BIND'));
-    const transport = new HttpVaultTransport(
-      required('AGENTVAULT_URL'),
-      process.env.MARKETPULSE_AUTHGUARD_BEARER,
-    );
+    const transport = payeeTransport();
     const payee = new AgentVault(transport).payee();
     const middleware: ExpressPayeeMiddleware = payee.express([mcpToolRoute(
       '/mcp',
@@ -73,4 +74,35 @@ export function parseBind(bind: string): readonly [string, number] {
     throw new Error('MARKETPULSE_BIND port is out of range');
   }
   return [host, port] as const;
+}
+
+function payeeTransport(): VaultTransport {
+  const transport = (process.env.AGENTVAULT_TRANSPORT ?? 'mqtt').trim().toLowerCase();
+  if (transport === 'mqtt') {
+    return new MqttVaultTransport(new MqttConfig(
+      required('AGENTVAULT_MQTT_HOST'),
+      Number(required('AGENTVAULT_MQTT_PORT')),
+      boolean('AGENTVAULT_MQTT_TLS'),
+      required('AGENTVAULT_MQTT_USERNAME'),
+      required('AGENTVAULT_MQTT_PASSWORD'),
+      'marketpulse-typescript',
+      required('AGENTVAULT_MQTT_CLIENT_ID'),
+      Number(required('AGENTVAULT_MQTT_TIMEOUT_SECONDS')) * 1_000,
+    ));
+  }
+  if (transport === 'grpc') {
+    return new GrpcVaultTransport(new GrpcConfig(
+      required('AGENTVAULT_GRPC_ENDPOINT'),
+      boolean('AGENTVAULT_GRPC_TLS'),
+      undefined,
+      Number(required('AGENTVAULT_GRPC_TIMEOUT_SECONDS')) * 1_000,
+    ));
+  }
+  throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
+}
+
+function boolean(name: string): boolean {
+  const value = (process.env[name] ?? 'false').trim().toLowerCase();
+  if (value !== 'true' && value !== 'false') throw new Error(`${name} must be true or false`);
+  return value === 'true';
 }

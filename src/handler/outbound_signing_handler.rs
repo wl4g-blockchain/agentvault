@@ -258,7 +258,17 @@ impl OutboundSigningHandler {
             IdempotentWrite::Inserted(record) => (record, false),
             IdempotentWrite::Replay(record) => (record, true),
         };
-        self.open_persisted(persisted, replayed)
+        let signed = self.open_persisted(persisted, replayed)?;
+        tracing::info!(
+            event.name = "agentvault.wallet.signed",
+            run.id = %signed.intent.run_id,
+            scenario.id = %signed.intent.scenario_id,
+            payment.intent_id = %signed.intent.id,
+            wallet.id = signed.intent.wallet_id.as_deref().unwrap_or(""),
+            payment.signing_replayed = signed.replayed,
+            "signed outbound payment with a scenario-selected wallet"
+        );
+        Ok(signed)
     }
 
     fn open_persisted(&self, persisted: PersistedSignedPayment, replayed: bool) -> Result<SignedOutboundPayment> {
@@ -553,7 +563,6 @@ fn signed_message(
         aggregate_id: intent.id.clone(),
         event_type: "payment_signed".to_owned(),
         destination: format!("client:{}.payments", authorization.identity.client.id),
-        correlation_id: intent.id.clone(),
         run_id: intent.run_id.clone(),
         payload: json!({
             "intent_id": intent.id,

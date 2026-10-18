@@ -12,10 +12,11 @@ args: []
 env:
   QUANTSTREAM_UI_HOST: "0.0.0.0"
   QUANTSTREAM_UI_PORT: "8086"
-  QUANTSTREAM_CLIENT_ID: "client-quantstream"
-  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-market-ingestion"
-  QUANTSTREAM_APPROVER_PRINCIPAL: "principal-quantstream-admin"
+  QUANTSTREAM_CLIENT_ID: "client-quantstream-rust"
+  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-rust-market-ingestion"
+  QUANTSTREAM_APPROVER_PRINCIPAL: "principal-quantstream-rust-admin"
   AGENTVAULT_MQTT_URL: "mqtt://emqx:1883"
+  AGENTVAULT_MQTT_APPROVER_USERNAME: "quantstream-rust-approver"
   AGENTVAULT_URL: "http://agentvault-e2e:8080/api/v1"
 secret:
   name: marketpulse-e2e-secrets
@@ -45,4 +46,3 @@ persistence:
 resources:
   requests: { cpu: 20m, memory: 32Mi }
   limits: { cpu: 1000m, memory: 512Mi }
-

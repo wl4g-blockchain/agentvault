@@ -63,28 +63,32 @@ def create_run_root() -> tuple[str, Path]:
         instant += timedelta(seconds=1)
 
 
-def verifier(scenario: Scenario) -> Callable[[VerificationContext], str]:
+def verifier(scenario: Scenario) -> Callable[[VerificationContext], str | dict[str, str]]:
     candidate = getattr(importlib.import_module(scenario.module), "verify", None)
     if not callable(candidate):
         raise RuntimeError(f"{scenario.module} must expose verify(context)")
     return candidate
 
 
-def cleanup(timeout_seconds: float, deployer: str) -> None:
-    context = VerificationContext(
-        run_id="cleanup",
-        report_root=REPORT_ROOT,
-        deploy_root=DEPLOY_ROOT,
-        scenario="cleanup",
-        round_number=0,
-        payer_language="rust",
-        payee_language="rust",
-        deployer=deployer,
-        timeout_seconds=timeout_seconds,
-        skip_build=True,
-        reuse_build=True,
-    )
-    create_deployer(context).cleanup()
+def cleanup(timeout_seconds: float, deployer: str, matrix_workers: int = 2) -> None:
+    for worker_slot in (None, *range(matrix_workers)):
+        context = VerificationContext(
+            run_id="cleanup",
+            report_root=REPORT_ROOT,
+            deploy_root=DEPLOY_ROOT,
+            scenario="cleanup",
+            round_number=0,
+            payer_language="rust",
+            payee_language="rust",
+            transport="mqtt",
+            deployer=deployer,
+            timeout_seconds=timeout_seconds,
+            skip_build=True,
+            reuse_build=True,
+            matrix_workers=matrix_workers,
+            worker_slot=worker_slot,
+        )
+        create_deployer(context).cleanup()
 
 
 def parser() -> argparse.ArgumentParser:
@@ -102,10 +106,22 @@ def parser() -> argparse.ArgumentParser:
     languages = ("rust", "go", "python", "typescript", "java")
     result.add_argument("--payer-language", choices=languages, default="rust")
     result.add_argument("--payee-language", choices=languages, default="rust")
+    result.add_argument(
+        "--transport",
+        choices=("mqtt", "grpc"),
+        default="mqtt",
+        help="AgentVault payer/payee control-plane transport; matrix always verifies both",
+    )
     result.add_argument("--skip-build", action="store_true")
     result.add_argument("--reuse-build", action="store_true")
     result.add_argument("--cleanup", action="store_true", help="alias for the cleanup command")
     result.add_argument("--cleanup-after-run", action="store_true")
+    result.add_argument("--matrix-workers", type=int, default=2, help="isolated matrix workers; maximum 2")
+    result.add_argument(
+        "--resume-run",
+        metavar="YYYYMMDDHHMMSS",
+        help="resume an interrupted matrix from validated case checkpoints",
+    )
     result.add_argument("--list", action="store_true", help="list scenarios and exit")
     return result
 
@@ -117,15 +133,27 @@ def main() -> None:
             print(f"{scenario.name:14} {scenario.description}")
         return
     if args.command == "cleanup" or args.cleanup:
-        cleanup(args.timeout, args.deployer)
+        cleanup(args.timeout, args.deployer, args.matrix_workers)
         print("E2E deployment removed")
         return
     if args.rounds < 1:
         raise SystemExit("--rounds must be positive")
     if args.skip_build and args.reuse_build:
         raise SystemExit("--skip-build and --reuse-build are mutually exclusive")
+    if not 1 <= args.matrix_workers <= 2:
+        raise SystemExit("--matrix-workers must be 1 or 2")
     scenarios = selected_scenarios(args.scenario)
-    run_id, report_root = create_run_root()
+    if args.resume_run:
+        if not re.fullmatch(r"[0-9]{14}", args.resume_run):
+            raise SystemExit("--resume-run must be a YYYYMMDDHHMMSS report directory")
+        if args.rounds != 1 or [scenario.name for scenario in scenarios] != ["matrix"]:
+            raise SystemExit("--resume-run is supported only for one matrix round")
+        run_id = args.resume_run
+        report_root = REPORT_ROOT / run_id
+        if not report_root.is_dir():
+            raise SystemExit(f"matrix report does not exist: {report_root}")
+    else:
+        run_id, report_root = create_run_root()
     reports = ReportBook("MarketPulse Feed Subscription E2E", report_root, run_id)
     try:
         for round_number in range(1, args.rounds + 1):
@@ -138,24 +166,36 @@ def main() -> None:
                     round_number=round_number,
                     payer_language=args.payer_language,
                     payee_language=args.payee_language,
+                    transport=args.transport,
                     deployer=args.deployer,
                     timeout_seconds=args.timeout,
                     skip_build=args.skip_build,
                     reuse_build=args.reuse_build,
+                    matrix_workers=args.matrix_workers,
                 )
                 output = verifier(scenario)(context)
-                reports.record(
-                    scenario.report_module,
-                    scenario.report_name,
-                    scenario.name,
-                    round_number,
-                    output,
-                )
+                if isinstance(output, dict):
+                    for filename, evidence in output.items():
+                        reports.record(
+                            scenario.report_module,
+                            filename,
+                            scenario.name,
+                            round_number,
+                            evidence,
+                        )
+                else:
+                    reports.record(
+                        scenario.report_module,
+                        scenario.report_name,
+                        scenario.name,
+                        round_number,
+                        output,
+                    )
         summary = reports.write_summary()
         print(f"E2E scenarios passed; report={summary}")
     finally:
         if args.cleanup_after_run:
-            cleanup(args.timeout, args.deployer)
+            cleanup(args.timeout, args.deployer, args.matrix_workers)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,8 @@ runtime:
     reconnectDelay: 1s
   payer:
     enabled: true
+    walletSelection:
+      strategy: least_spent
     x402:
       enabled: true
       maxChallengeTtl: 5m
@@ -159,6 +161,10 @@ runtime:
     batchSize: 100
     initialBackoff: 5s
     maxBackoff: 5m
+  walletBalanceSync:
+    enabled: true
+    interval: 3m
+    batchSize: 1000
 
 management:
   health:

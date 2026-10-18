@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PayerRequestContext } from '../../../src/agentvault/model/payer.js';
-import type { VaultTransport } from '../../../src/agentvault/transport/http.js';
+import type { VaultTransport } from '../../../src/agentvault/transport/transport.js';
 import { PayerMiddleware } from '../../../src/agentvault/payer/payer.js';
 
 test('FetchPayerMiddleware leaves free responses untouched', async () => {

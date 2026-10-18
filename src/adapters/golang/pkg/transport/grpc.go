@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"google.golang.org/grpc"
@@ -65,8 +67,18 @@ func (transport *GrpcVaultTransport) Do(ctx context.Context, request TransportRe
 	if transport == nil || transport.connection == nil {
 		return TransportResponse{}, errors.New("AgentVault gRPC transport is not configured")
 	}
+	traceContext, err := newProducerTraceContext(request.Headers)
+	if err != nil {
+		return TransportResponse{}, err
+	}
+	wireHeaders := make(map[string]string, len(request.Headers))
+	for name, value := range request.Headers {
+		if !strings.EqualFold(name, "traceparent") && !strings.EqualFold(name, "tracestate") {
+			wireHeaders[name] = value
+		}
+	}
 	wire, err := json.Marshal(grpcWireRequest{Method: string(request.Method), Path: request.Path,
-		Headers: request.Headers, Body: base64.RawURLEncoding.EncodeToString(request.Body)})
+		Headers: wireHeaders, Body: base64.RawURLEncoding.EncodeToString(request.Body)})
 	if err != nil {
 		return TransportResponse{}, fmt.Errorf("encode AgentVault gRPC request: %w", err)
 	}
@@ -75,6 +87,17 @@ func (transport *GrpcVaultTransport) Do(ctx context.Context, request TransportRe
 	}
 	requestContext, cancel := context.WithTimeout(ctx, transport.config.RequestTimeout)
 	defer cancel()
+	requestContext = metadata.AppendToOutgoingContext(
+		requestContext,
+		"traceparent", traceContext.headers["traceparent"],
+	)
+	if tracestate := headerValue(traceContext.headers, "tracestate"); tracestate != "" {
+		requestContext = metadata.AppendToOutgoingContext(requestContext, "tracestate", tracestate)
+	}
+	slog.Info("calling AgentVault gRPC with W3C Trace Context",
+		"event.name", "agentvault.sdk.transport.grpc.produced",
+		"trace.id", traceContext.traceID, "span.id", traceContext.spanID,
+		"parent.id", traceContext.parentSpanID)
 	if transport.config.AuthguardBearer != "" {
 		requestContext = metadata.AppendToOutgoingContext(requestContext, "authorization", "Bearer "+transport.config.AuthguardBearer)
 	}

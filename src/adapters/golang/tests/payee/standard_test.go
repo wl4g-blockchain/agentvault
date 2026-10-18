@@ -21,10 +21,14 @@ func TestStandardPayeeMiddlewarePassesUnprotectedRoute(t *testing.T) {
 
 func TestStandardPayeeMiddlewareBypassesFreeToolOnProtectedMCPRoute(t *testing.T) {
 	next := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) })
-	middleware := NewStandardPayeeMiddleware(&PayeeMiddleware{}, NewStandardMCPToolRoute(
+	core := &PayeeMiddleware{}
+	middleware := NewStandardPayeeMiddleware(core, NewStandardMCPToolRoute(
 		"/mcp", "marketpulse.realtime_news", "scenario", "offer",
 		"mcp://marketpulse/realtime", "https://marketpulse.example",
 	))
+	if middleware.PayeeMiddleware != core {
+		t.Fatal("standard adapter does not embed the shared payee middleware")
+	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(
 		`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"marketpulse.yesterday_news"}}`,

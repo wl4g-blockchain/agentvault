@@ -28,8 +28,14 @@ runtime:
     clientId: agentvault-e2e
     consumerGroup: agentvault-e2e
     requestTimeout: 15s
+  grpc:
+    enabled: true
+    maxMessageBytes: 2097152
+    requestTimeout: 15s
   payer:
     enabled: true
+    walletSelection:
+      strategy: least_spent
     x402:
       enabled: true
       maxChallengeTtl: 5m
@@ -74,6 +80,10 @@ runtime:
     leaseTtl: 10s
     initialBackoff: 1s
     maxBackoff: 10s
+  walletBalanceSync:
+    enabled: true
+    interval: 2s
+    batchSize: 1000
 
 management:
   otel:

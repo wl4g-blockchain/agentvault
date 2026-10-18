@@ -1,5 +1,29 @@
 use serde::{Deserialize, Serialize};
 
+/// Deterministic wallet-pool selection used for outbound payments.
+///
+/// Both strategies are replay-safe: the same `run_id` resolves to the already
+/// persisted intent, and a pre-persistence retry uses the same request hash.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletSelectionStrategy {
+    /// Prefer the wallet with the least confirmed-plus-reserved daily spend.
+    #[default]
+    LeastSpent,
+    /// Spread runs by a stable hash of the immutable request and candidate.
+    StableRandom,
+}
+
+impl WalletSelectionStrategy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LeastSpent => "least_spent",
+            Self::StableRandom => "stable_random",
+        }
+    }
+}
+
 /// Canonical algorithm emitted by the built-in Ethereum EOA signer.
 pub const EVM_EOA_ALGORITHM: &str = "secp256k1";
 

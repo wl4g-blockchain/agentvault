@@ -136,8 +136,8 @@ async fn outbox_class_claim_does_not_lease_foreign_rows_and_replays_after_restar
     ] {
         sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
-             correlation_id, run_id, payload, status, attempt_count, available_at, created_at) \
-             VALUES (?1, 'payment_intent', 'intent-1', ?2, ?3, 'intent-1', ?1, '{}', 'pending', 0, 10, 10)",
+             run_id, payload, status, attempt_count, available_at, created_at) \
+             VALUES (?1, 'payment_intent', 'intent-1', ?2, ?3, ?1, '{}', 'pending', 0, 10, 10)",
         )
         .bind(id)
         .bind(event_type)
@@ -297,6 +297,14 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         updated_at: 3,
     };
     crate::storage::PolicyStorage::insert(&storage, &policy).await.unwrap();
+    let mut duplicate_policy = policy.clone();
+    duplicate_policy.id = "policy-duplicate".to_owned();
+    duplicate_policy.created_at += 1;
+    duplicate_policy.updated_at += 1;
+    assert!(matches!(
+        crate::storage::PolicyStorage::insert(&storage, &duplicate_policy).await,
+        Err(Error::PaymentConflict(_))
+    ));
     assert!(storage
         .has_enabled_wallet_binding(&scenario.id, &wallet.id)
         .await
@@ -320,6 +328,14 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         updated_at: 4,
     };
     crate::storage::OfferStorage::insert(&storage, &offer).await.unwrap();
+    let mut excessive_offer = offer.clone();
+    excessive_offer.id = "offer-excessive".to_owned();
+    excessive_offer.resource = "https://feed.example/excessive".to_owned();
+    excessive_offer.amount = Amount::new(101);
+    assert!(matches!(
+        crate::storage::OfferStorage::insert(&storage, &excessive_offer).await,
+        Err(Error::PaymentConflict(_))
+    ));
     assert_eq!(
         storage.resolve_resource(&scenario.id, &offer.resource).await.unwrap(),
         Some(offer.clone())
@@ -348,6 +364,25 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         &asset,
         &recipient,
     );
+    let mut excessive_intent = intent(
+        "intent-excessive",
+        "run-excessive",
+        &scenario.id,
+        &wallet.id,
+        &policy.id,
+        &asset,
+        &recipient,
+    );
+    excessive_intent.amount = Amount::new(101);
+    excessive_intent.reserved_amount = Amount::new(101);
+    assert!(matches!(
+        storage
+            .immediate(|connection| {
+                Box::pin(async move { super::payment::insert_intent(connection, &excessive_intent, None).await })
+            })
+            .await,
+        Err(Error::PaymentConflict(_))
+    ));
     let barrier = Arc::new(Barrier::new(3));
     let left_storage = storage.clone();
     let left_barrier = barrier.clone();
@@ -522,6 +557,34 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .unwrap();
     assert_eq!(snapshot.scenario_spent_and_reserved, Amount::new(60));
     assert_eq!(snapshot.wallet_spent_and_reserved, Amount::new(60));
+
+    let invalid_reversal = PaymentLedgerEntry {
+        id: "ledger-reversal-invalid".to_owned(),
+        entry_type: LedgerEntryType::Reversal,
+        direction: PaymentDirection::Outbound,
+        posting_key: "chain:one:reversal-invalid".to_owned(),
+        reversal_of: Some(ledger.id.clone()),
+        created_at: settled.updated_at + 1,
+        ..ledger.clone()
+    };
+    assert!(matches!(
+        storage.append(&invalid_reversal).await,
+        Err(Error::PaymentConflict(_))
+    ));
+
+    let reversal = PaymentLedgerEntry {
+        id: "ledger-reversal".to_owned(),
+        entry_type: LedgerEntryType::Reversal,
+        direction: PaymentDirection::Inbound,
+        posting_key: "chain:one:reversal".to_owned(),
+        reversal_of: Some(ledger.id.clone()),
+        created_at: settled.updated_at + 1,
+        ..ledger
+    };
+    assert!(matches!(
+        storage.append(&reversal).await.unwrap(),
+        IdempotentWrite::Inserted(_)
+    ));
 }
 
 async fn sign_fixture(

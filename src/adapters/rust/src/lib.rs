@@ -24,10 +24,10 @@ mod payee_standard;
 mod payer_core;
 #[path = "payer/standard.rs"]
 mod payer_standard;
+#[path = "transport/transport.rs"]
+mod transport_core;
 #[path = "transport/grpc.rs"]
 mod transport_grpc;
-#[path = "transport/http.rs"]
-mod transport_http;
 #[path = "transport/mqtt.rs"]
 mod transport_mqtt;
 
@@ -43,11 +43,10 @@ pub use payee_core::PayeeMiddleware;
 pub use payee_standard::{StandardPayeeMiddleware, StandardPayeeRequest};
 pub use payer_core::PayerMiddleware;
 pub use payer_standard::{PayerRequestExt, ReqwestPayerMiddleware};
-pub use transport_grpc::GrpcVaultTransport;
-pub use transport_http::{
-    HttpMethod, HttpVaultTransport, TransportError, TransportErrorKind, TransportRequest, TransportResponse,
-    VaultTransport,
+pub use transport_core::{
+    HttpMethod, TransportError, TransportErrorKind, TransportRequest, TransportResponse, VaultTransport,
 };
+pub use transport_grpc::GrpcVaultTransport;
 pub use transport_mqtt::MqttVaultTransport;
 
-pub(crate) use transport_http::{percent_encode, ApiClient};
+pub(crate) use transport_core::{percent_encode, ApiClient};

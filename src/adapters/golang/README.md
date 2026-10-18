@@ -21,7 +21,7 @@ response, err := client.Do(request)
 ```
 
 The transport is selected once at startup; handlers and Middleware code are
-unchanged between gRPC, MQTT, and AuthGuard-protected HTTP. DTOs never carry a
+unchanged between gRPC and MQTT. DTOs never carry a
 caller principal or `client_id`, and no SDK accepts private keys or arbitrary
 digests.
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PayerRequestContext, type AuthorizePaymentResponse } from '../../../src/agentvault/model/payer.js';
-import type { VaultTransport } from '../../../src/agentvault/transport/http.js';
+import type { VaultTransport } from '../../../src/agentvault/transport/transport.js';
 import { PayerMiddleware } from '../../../src/agentvault/payer/payer.js';
 
 test('PayerMiddleware retries the same immutable authorization while approval is pending', async () => {

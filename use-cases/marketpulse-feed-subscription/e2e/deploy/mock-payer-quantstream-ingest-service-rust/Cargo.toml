@@ -20,6 +20,8 @@ sse-stream = "0.2"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-cron-scheduler = "0.14"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
 
 [lints.rust]
 unsafe_code = "forbid"

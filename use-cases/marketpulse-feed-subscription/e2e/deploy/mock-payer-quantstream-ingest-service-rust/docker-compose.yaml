@@ -13,8 +13,8 @@ services:
     command: ["--once"]
     environment:
       MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}
-      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream}
-      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-market-ingestion}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_RUST_CLIENT_ID:-client-quantstream-rust}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_RUST_SCENARIO_ID:-scenario-quantstream-rust-market-ingestion}
       QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
       QUANTSTREAM_YESTERDAY_CRON: "${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 0 2 * * *}"
       QUANTSTREAM_REALTIME_CRON: "${E2E_QUANTSTREAM_REALTIME_CRON:-0 */1 * * * *}"
@@ -22,7 +22,7 @@ services:
       AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-emqx}
       AGENTVAULT_MQTT_PORT: "${E2E_QUANTSTREAM_MQTT_PORT:-1883}"
       AGENTVAULT_MQTT_TLS: "${E2E_QUANTSTREAM_MQTT_TLS:-false}"
-      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_MQTT_USERNAME:-quantstream-workload}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_RUST_MQTT_USERNAME:-quantstream-rust-workload}
       AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
       AGENTVAULT_MQTT_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}"
     volumes: ["quantstream-rust-data:/var/lib/quantstream"]

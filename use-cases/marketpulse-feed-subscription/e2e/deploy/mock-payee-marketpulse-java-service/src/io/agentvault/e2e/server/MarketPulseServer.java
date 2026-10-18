@@ -3,9 +3,14 @@ package io.agentvault.e2e.server;
 import io.agentvault.e2e.handler.FeedHandler;
 import io.agentvault.e2e.storage.FeedSQLiteStorage;
 import io.agentvault.sdk.AgentVault;
+import io.agentvault.sdk.config.Config.GrpcConfig;
+import io.agentvault.sdk.config.Config.MqttConfig;
 import io.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
-import io.agentvault.sdk.transport.HttpVaultTransport;
+import io.agentvault.sdk.transport.GrpcVaultTransport;
+import io.agentvault.sdk.transport.MqttVaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -30,11 +35,7 @@ public class MarketPulseServer {
     }
 
     @Bean
-    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware() {
-        String bearer = System.getenv("MARKETPULSE_AUTHGUARD_BEARER");
-        HttpVaultTransport transport = bearer == null || bearer.isBlank()
-                ? new HttpVaultTransport(required("AGENTVAULT_URL"))
-                : new HttpVaultTransport(required("AGENTVAULT_URL"), bearer);
+    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(VaultTransport transport) {
         var payee = new AgentVault(transport).payee();
         var route = SpringInterceptorPayeeMiddleware.Route.mcpTool(
                 "/mcp",
@@ -49,10 +50,50 @@ public class MarketPulseServer {
         return registration;
     }
 
+    @Bean(destroyMethod = "close")
+    VaultTransport payeeTransport() {
+        String transport = System.getenv().getOrDefault("AGENTVAULT_TRANSPORT", "mqtt").trim().toLowerCase();
+        if ("mqtt".equals(transport)) {
+            return new MqttVaultTransport(new MqttConfig(
+                    required("AGENTVAULT_MQTT_HOST"),
+                    integer("AGENTVAULT_MQTT_PORT"),
+                    bool("AGENTVAULT_MQTT_TLS"),
+                    required("AGENTVAULT_MQTT_USERNAME"),
+                    required("AGENTVAULT_MQTT_PASSWORD"),
+                    "marketpulse-java",
+                    required("AGENTVAULT_MQTT_CLIENT_ID"),
+                    Duration.ofSeconds(integer("AGENTVAULT_MQTT_TIMEOUT_SECONDS")),
+                    2 * 1024 * 1024));
+        }
+        if ("grpc".equals(transport)) {
+            return new GrpcVaultTransport(new GrpcConfig(
+                    required("AGENTVAULT_GRPC_ENDPOINT"),
+                    bool("AGENTVAULT_GRPC_TLS"),
+                    null,
+                    Duration.ofSeconds(integer("AGENTVAULT_GRPC_TIMEOUT_SECONDS")),
+                    2 * 1024 * 1024));
+        }
+        throw new IllegalStateException("AGENTVAULT_TRANSPORT must be mqtt or grpc");
+    }
+
     public static String required(String name) {
         String value = System.getenv(name);
         if (value == null || value.isBlank()) throw new IllegalStateException(name + " is required");
         return value;
+    }
+
+    private static int integer(String name) {
+        int value = Integer.parseInt(required(name));
+        if (value <= 0) throw new IllegalStateException(name + " must be positive");
+        return value;
+    }
+
+    private static boolean bool(String name) {
+        String value = System.getenv().getOrDefault(name, "false").trim().toLowerCase();
+        if (!"true".equals(value) && !"false".equals(value)) {
+            throw new IllegalStateException(name + " must be true or false");
+        }
+        return Boolean.parseBoolean(value);
     }
 
     static String bindHost(String bind) {

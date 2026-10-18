@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
@@ -55,14 +56,14 @@ type mqttWireRequest struct {
 type mqttRequestEnvelope struct {
 	Type          string          `json:"type"`
 	Version       int             `json:"version"`
-	CorrelationID string          `json:"correlationId"`
+	RequestSpanID string          `json:"requestSpanId"`
 	Request       mqttWireRequest `json:"request"`
 }
 
 type mqttResponseEnvelope struct {
 	Type          string            `json:"type"`
 	Version       int               `json:"version"`
-	CorrelationID string            `json:"correlationId"`
+	RequestSpanID string            `json:"requestSpanId"`
 	Status        int               `json:"status"`
 	Headers       map[string]string `json:"headers"`
 	Body          string            `json:"body"`
@@ -76,11 +77,16 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	if err != nil {
 		return TransportResponse{}, err
 	}
-	correlationID, err := randomCorrelationID()
+	traceContext, err := newProducerTraceContext(request.Headers)
 	if err != nil {
 		return TransportResponse{}, err
 	}
-	connectionID := transport.config.ConnectionPrefix + "-" + correlationID[:12]
+	requestSpanID := traceContext.spanID
+	slog.Info("publishing an AgentVault MQTT command with W3C Trace Context",
+		"event.name", "agentvault.sdk.transport.mqtt.produced",
+		"trace.id", traceContext.traceID, "span.id", traceContext.spanID,
+		"parent.id", traceContext.parentSpanID)
+	connectionID := transport.config.ConnectionPrefix + "-" + requestSpanID[:12]
 	scheme := "tcp"
 	if transport.config.TLS {
 		scheme = "ssl"
@@ -112,7 +118,7 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	}
 	defer client.Disconnect(100)
 
-	resultTopic := fmt.Sprintf("agentvault/v1/clients/%s/results/%s", transport.config.VaultClientID, correlationID)
+	resultTopic := fmt.Sprintf("agentvault/v1/clients/%s/results/%s", transport.config.VaultClientID, requestSpanID)
 	resultFilter := fmt.Sprintf("agentvault/v1/clients/%s/results/+", transport.config.VaultClientID)
 	commandTopic := fmt.Sprintf("agentvault/v1/clients/%s/commands/%s", transport.config.VaultClientID, operation.command)
 	results := make(chan mqttResponseEnvelope, 1)
@@ -154,11 +160,11 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	envelope := mqttRequestEnvelope{
 		Type:          operation.messageType,
 		Version:       1,
-		CorrelationID: correlationID,
+		RequestSpanID: requestSpanID,
 		Request: mqttWireRequest{
 			Method:  string(request.Method),
 			Path:    request.Path,
-			Headers: request.Headers,
+			Headers: traceContext.headers,
 			Body:    base64.RawURLEncoding.EncodeToString(request.Body),
 		},
 	}
@@ -184,7 +190,7 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	case err := <-errorsChannel:
 		return TransportResponse{}, err
 	case response := <-results:
-		if !mqttResponseTypeMatches(response.Type, response.Status, operation.responseType) || response.Version != 1 || response.CorrelationID != correlationID || response.Status < 100 || response.Status > 599 {
+		if !mqttResponseTypeMatches(response.Type, response.Status, operation.responseType) || response.Version != 1 || response.RequestSpanID != requestSpanID || response.Status < 100 || response.Status > 599 {
 			return TransportResponse{}, errors.New("mismatched AgentVault MQTT response")
 		}
 		body, err := base64.RawURLEncoding.DecodeString(response.Body)
@@ -248,12 +254,80 @@ func mqttOperationFor(request TransportRequest) (mqttOperation, error) {
 	return mqttOperation{}, errors.New("MQTT transport does not support this payment operation")
 }
 
-func randomCorrelationID() (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", fmt.Errorf("generate MQTT correlation id: %w", err)
+type producerTraceContext struct {
+	traceID      string
+	spanID       string
+	parentSpanID string
+	headers      map[string]string
+}
+
+func newProducerTraceContext(headers map[string]string) (producerTraceContext, error) {
+	traceID, parentSpanID, flags, valid := parseTraceparent(headerValue(headers, "traceparent"))
+	if !valid {
+		var err error
+		traceID, err = randomHex(16)
+		if err != nil {
+			return producerTraceContext{}, err
+		}
+		parentSpanID, flags = "", "01"
 	}
-	return hex.EncodeToString(buffer), nil
+	spanID, err := randomHex(8)
+	if err != nil {
+		return producerTraceContext{}, err
+	}
+	propagated := make(map[string]string, len(headers)+1)
+	for name, value := range headers {
+		propagated[strings.ToLower(name)] = value
+	}
+	propagated["traceparent"] = "00-" + traceID + "-" + spanID + "-" + flags
+	return producerTraceContext{
+		traceID: traceID, spanID: spanID, parentSpanID: parentSpanID, headers: propagated,
+	}, nil
+}
+
+func parseTraceparent(value string) (string, string, string, bool) {
+	fields := strings.Split(value, "-")
+	if len(fields) != 4 || fields[0] != "00" || !validLowerHex(fields[1], 32) ||
+		!validLowerHex(fields[2], 16) || !validLowerHex(fields[3], 2) ||
+		allZero(fields[1]) || allZero(fields[2]) {
+		return "", "", "", false
+	}
+	return fields[1], fields[2], fields[3], true
+}
+
+func validLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func allZero(value string) bool { return strings.Trim(value, "0") == "" }
+
+func headerValue(headers map[string]string, wanted string) string {
+	for name, value := range headers {
+		if strings.EqualFold(name, wanted) {
+			return value
+		}
+	}
+	return ""
+}
+
+func randomHex(size int) (string, error) {
+	buffer := make([]byte, size)
+	for {
+		if _, err := rand.Read(buffer); err != nil {
+			return "", fmt.Errorf("generate producer span context: %w", err)
+		}
+		if !allZero(hex.EncodeToString(buffer)) {
+			return hex.EncodeToString(buffer), nil
+		}
+	}
 }
 
 func validMQTTIdentifier(value string) bool {

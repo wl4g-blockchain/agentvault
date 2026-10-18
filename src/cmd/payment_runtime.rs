@@ -18,7 +18,7 @@ use crate::{
     controller::{GrpcController, LocalController, MqttController, ReadinessProbe},
     handler::job::{
         ApprovalExpirationJob, PaymentEvidenceRouter, ReconciliationConfig as JobReconciliationConfig,
-        ReconciliationEvidenceSource, ReconciliationJob,
+        ReconciliationEvidenceSource, ReconciliationJob, WalletBalanceSyncJob,
     },
     handler::{
         ApprovalHandler, ApprovalPrincipalAuthorizer, EvmEvidenceSource, EvmReceiptRegistry, EvmRpcBalanceSource,
@@ -26,7 +26,7 @@ use crate::{
         OutboundEvidenceDependencies, OutboundEvidenceHandler, OutboundSigningDependencies, OutboundSigningHandler,
         PaymentHandler, ProtocolRegistry, ScenarioHandler, SettlementDependencies, SettlementHandler,
         SettlementProviderConfig, SettlementProviderRegistry, StoredApprovalPrincipalAuthorizer, WalletBalanceRegistry,
-        WalletBalanceSource, X402FacilitatorProvider,
+        WalletBalanceSource, WalletBalanceSynchronizer, X402FacilitatorProvider,
     },
     protocol::{
         mpp::{MppAdapter, MppAsset},
@@ -36,12 +36,14 @@ use crate::{
     storage::{
         ApprovalStorage, ApproverStorage, ClientStorage, EventStorage, IStorage, LedgerStorage, OfferStorage,
         OutboxStorage, PaymentStorage, PolicyStorage, ScenarioStorage, SigningStorage, StorageFactory, StoragePorts,
-        WalletPaymentSigner, WalletStorage,
+        WalletBalanceStorage, WalletPaymentSigner, WalletStorage,
     },
     utils::secret::read_secret_ref,
     utils::secure_material::{Aes256GcmMaterialProtector, SensitiveMaterialProtector},
     Error,
 };
+
+use crate::model::AssetIdentity;
 
 use axum::Router;
 
@@ -56,6 +58,7 @@ pub(super) struct AssembledPaymentRuntime {
     pub mqtt: Option<MqttController>,
     pub cache_health: CacheHealthComponent,
     pub reconciliation: Option<ReconciliationComponent>,
+    pub wallet_balance_sync: Option<WalletBalanceSyncComponent>,
     pub approval_expiration: ApprovalExpirationComponent,
     pub storage_readiness: Arc<dyn ReadinessProbe>,
     pub resources: PaymentRuntimeResources,
@@ -157,6 +160,7 @@ async fn assemble_with_factories(
             interval: std::time::Duration::from_secs(30),
         },
         reconciliation: application.reconciliation,
+        wallet_balance_sync: application.wallet_balance_sync,
         approval_expiration: application.approval_expiration,
         storage_readiness: Arc::new(StorageReadinessProbe { storage }),
         resources: PaymentRuntimeResources {
@@ -263,6 +267,39 @@ pub(super) struct ReconciliationComponent {
     interval: std::time::Duration,
 }
 
+pub(super) struct WalletBalanceSyncComponent {
+    job: WalletBalanceSyncJob,
+    interval: std::time::Duration,
+}
+
+#[async_trait]
+impl RuntimeComponent for WalletBalanceSyncComponent {
+    fn name(&self) -> &'static str {
+        "managed-wallet balance synchronization"
+    }
+
+    async fn run(self: Box<Self>, mut shutdown: Shutdown) -> anyhow::Result<()> {
+        let mut interval = tokio::time::interval(self.interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                _ = interval.tick() => {
+                    let run = self.job.run_once().await.context("run managed-wallet balance synchronization")?;
+                    tracing::info!(
+                        event.name = "agentvault.wallet.balance_sync_completed",
+                        scanned = run.scanned,
+                        observed = run.observed,
+                        skipped = run.skipped,
+                        failed = run.failed,
+                        "managed-wallet balance synchronization completed"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl RuntimeComponent for ReconciliationComponent {
     fn name(&self) -> &'static str {
@@ -302,6 +339,7 @@ struct PaymentPorts {
     policies: Arc<dyn PolicyStorage>,
     offers: Arc<dyn OfferStorage>,
     wallets: Arc<dyn WalletStorage>,
+    wallet_balances: Arc<dyn WalletBalanceStorage>,
     payments: Arc<dyn PaymentStorage>,
     approvals: Arc<dyn ApprovalStorage>,
     events: Arc<dyn EventStorage>,
@@ -320,6 +358,7 @@ impl PaymentPorts {
             policies: ports.policies,
             offers: ports.offers,
             wallets: ports.wallets,
+            wallet_balances: ports.wallet_balances,
             payments: ports.payments,
             approvals: ports.approvals,
             events: ports.events,
@@ -334,6 +373,7 @@ impl PaymentPorts {
 struct BuiltPaymentApplication {
     api: Arc<PaymentApi>,
     reconciliation: Option<ReconciliationComponent>,
+    wallet_balance_sync: Option<WalletBalanceSyncComponent>,
     approval_expiration: ApprovalExpirationComponent,
 }
 
@@ -381,6 +421,7 @@ fn build_application(
         policies,
         offers,
         wallets,
+        wallet_balances,
         payments,
         approvals,
         events,
@@ -398,6 +439,7 @@ fn build_application(
         Arc::clone(&policies),
         Arc::clone(&payments),
         Arc::clone(&adapters.payer_protocols),
+        metrics.clone(),
     )?;
     let (approval_authorizer, approval_handler) = build_approval_services(
         config,
@@ -406,13 +448,7 @@ fn build_application(
         Arc::clone(&payments),
         Arc::clone(&adapters.material_protector),
     )?;
-    let offer_handler = Arc::new(OfferHandler::new(
-        Arc::clone(&scenarios),
-        Arc::clone(&offers),
-        Arc::clone(&policies),
-        Arc::clone(&wallets),
-        Arc::clone(&adapters.payee_protocols),
-    ));
+    let offer_handler = build_offer_handler(&scenarios, &offers, &policies, &wallets, &adapters.payee_protocols);
     let handlers = build_execution_handlers(
         config,
         ExecutionDependencies {
@@ -441,6 +477,13 @@ fn build_application(
         settlement_handler.clone(),
         Arc::clone(&outbound_evidence_handler),
     )?;
+    let wallet_balance_sync = build_wallet_balance_sync(
+        config,
+        Arc::clone(&wallets),
+        wallet_balances,
+        Arc::clone(&adapters.balances),
+        metrics.clone(),
+    )?;
     let approval_expiration = build_approval_expiration(config, Arc::clone(&approvals))?;
     let api = build_payment_api(PaymentApiDependencies {
         clients,
@@ -467,6 +510,7 @@ fn build_application(
     Ok(BuiltPaymentApplication {
         api,
         reconciliation,
+        wallet_balance_sync,
         approval_expiration,
     })
 }
@@ -481,6 +525,7 @@ fn build_payment_handler(
     policies: Arc<dyn PolicyStorage>,
     payments: Arc<dyn PaymentStorage>,
     protocols: Arc<ProtocolRegistry>,
+    metrics: AgentVaultMetrics,
 ) -> anyhow::Result<Arc<PaymentHandler>> {
     Ok(Arc::new(
         PaymentHandler::new(
@@ -489,8 +534,26 @@ fn build_payment_handler(
             payments,
             protocols,
             seconds(config.agentvault.approval.request_ttl, "approval request TTL")?,
+            config.agentvault.payer.wallet_selection.strategy,
+            metrics,
         )
         .context("build outbound payment handler")?,
+    ))
+}
+
+fn build_offer_handler(
+    scenarios: &Arc<ScenarioHandler>,
+    offers: &Arc<dyn OfferStorage>,
+    policies: &Arc<dyn PolicyStorage>,
+    wallets: &Arc<dyn WalletStorage>,
+    protocols: &Arc<ProtocolRegistry>,
+) -> Arc<OfferHandler> {
+    Arc::new(OfferHandler::new(
+        Arc::clone(scenarios),
+        Arc::clone(offers),
+        Arc::clone(policies),
+        Arc::clone(wallets),
+        Arc::clone(protocols),
     ))
 }
 
@@ -608,6 +671,55 @@ fn build_reconciliation(
         .context("build reconciliation job")?,
         interval: settings.interval,
     }))
+}
+
+fn build_wallet_balance_sync(
+    config: &AppConfig,
+    wallets: Arc<dyn WalletStorage>,
+    wallet_balances: Arc<dyn WalletBalanceStorage>,
+    sources: Arc<dyn WalletBalanceSource>,
+    metrics: AgentVaultMetrics,
+) -> anyhow::Result<Option<WalletBalanceSyncComponent>> {
+    let settings = &config.agentvault.wallet_balance_sync;
+    if !settings.enabled {
+        return Ok(None);
+    }
+    let synchronizer = Arc::new(
+        WalletBalanceSynchronizer::new(
+            wallets,
+            wallet_balances,
+            sources,
+            payer_balance_assets(config),
+            metrics,
+            u32::try_from(settings.batch_size).context("wallet balance sync batch size exceeds u32")?,
+        )
+        .context("build managed-wallet balance synchronizer")?,
+    );
+    Ok(Some(WalletBalanceSyncComponent {
+        job: WalletBalanceSyncJob::new(synchronizer),
+        interval: settings.interval,
+    }))
+}
+
+fn payer_balance_assets(config: &AppConfig) -> Vec<AssetIdentity> {
+    let mut assets = Vec::new();
+    if config.agentvault.payer.x402.enabled {
+        assets.extend(config.agentvault.payer.x402.assets.iter().map(|asset| AssetIdentity {
+            network: asset.network.clone(),
+            asset: asset.symbol.clone(),
+            token_contract: Some(asset.contract.clone()),
+            decimals: asset.decimals,
+        }));
+    }
+    if config.agentvault.payer.mpp.enabled {
+        assets.extend(config.agentvault.payer.mpp.assets.iter().map(|asset| AssetIdentity {
+            network: asset.network.clone(),
+            asset: asset.symbol.clone(),
+            token_contract: asset.token_contract.clone(),
+            decimals: asset.decimals,
+        }));
+    }
+    assets
 }
 
 fn reconciliation_worker_id(service_name: &str) -> String {

@@ -4,17 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.sun.net.httpserver.HttpServer;
 import io.agentvault.sdk.config.Config.PayerConfig;
-import io.agentvault.sdk.model.Base.VaultTransport;
+import io.agentvault.sdk.transport.VaultTransport;
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
-final class StandardPayerMiddlewareTest {
+final class SpringInterceptorPayerMiddlewareTest {
     @Test void createsTheSpringEcosystemAdapterFromTheRoleEntrypoint() {
         VaultTransport transport = new NoopTransport();
         var core = new PayerMiddleware(transport, PayerConfig.defaults("scenario-1"));
-        assertNotNull(core.standard());
-        assertNotNull(core.standard().client());
+        assertNotNull(core.spring());
+        assertNotNull(core.spring().client());
     }
 
     @Test void safeClientNeverFollowsRedirects() throws Exception {
@@ -33,7 +33,7 @@ final class StandardPayerMiddlewareTest {
         server.start();
         try {
             var core = new PayerMiddleware(new NoopTransport(), PayerConfig.defaults("scenario-1"));
-            int status = core.standard().client().get()
+            int status = core.spring().client().get()
                     .uri("http://127.0.0.1:" + server.getAddress().getPort() + "/start")
                     .exchange((_request, response) -> response.getStatusCode().value());
             assertEquals(302, status);

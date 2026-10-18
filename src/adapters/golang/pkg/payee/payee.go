@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
@@ -66,10 +67,16 @@ func (middleware *PayeeMiddleware) Challenge(ctx context.Context, operation mode
 }
 
 func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.PayeeOperation) (*model.ProtectionOutcome, error) {
+	slog.Info("payee middleware intercepted protected operation",
+		"event.name", "agentvault.sdk.payee.intercepted", "run.id", operation.RunID,
+		"scenario.id", operation.ScenarioID)
 	challenge, err := middleware.Challenge(ctx, operation)
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("payee middleware created payment challenge",
+		"event.name", "agentvault.sdk.payee.challenge_created", "run.id", operation.RunID,
+		"payment.challenge_hash", challenge.ChallengeHash)
 	if operation.CredentialPayload == nil {
 		return &model.ProtectionOutcome{Outcome: "payment_required", Challenge: challenge}, nil
 	}
@@ -97,6 +104,9 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	if err := validateVerificationBinding(operation, challenge, verification); err != nil {
 		return nil, err
 	}
+	slog.Info("payee middleware verified payment credential",
+		"event.name", "agentvault.sdk.payee.verified", "run.id", operation.RunID,
+		"payment.intent_id", verification.Intent.ID)
 	settlementContext, err := operation.SettlementContext()
 	if err != nil {
 		return nil, err
@@ -112,6 +122,9 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	if err := validateSettlementBinding(operation, verification, payment); err != nil {
 		return nil, err
 	}
+	slog.Info("payee middleware settled payment",
+		"event.name", "agentvault.sdk.payee.settled", "run.id", operation.RunID,
+		"payment.intent_id", payment.Intent.ID)
 	return &model.ProtectionOutcome{Outcome: "authorized", Payment: payment}, nil
 }
 

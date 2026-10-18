@@ -37,6 +37,21 @@ fn each_dialect_contains_only_the_canonical_init_pair() {
 }
 
 #[test]
+fn canonical_schema_contains_no_procedural_business_triggers() {
+    for (dialect, ddl) in [("PostgreSQL", POSTGRES_DDL), ("SQLite", SQLITE_DDL)] {
+        let normalized = ddl.to_ascii_uppercase();
+        assert!(
+            !normalized.contains("CREATE TRIGGER"),
+            "{dialect} business invariants must be enforced by explicit storage transactions"
+        );
+        assert!(
+            !normalized.contains("LANGUAGE PLPGSQL"),
+            "{dialect} canonical schema must not contain procedural business functions"
+        );
+    }
+}
+
+#[test]
 fn credential_replay_identity_is_unique_within_each_payment_direction() {
     for ddl in [POSTGRES_DDL, SQLITE_DDL] {
         let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
