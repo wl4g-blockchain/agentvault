@@ -282,7 +282,6 @@ fn signing_identity(asset: &AssetIdentity) -> OutboundSigningIdentity {
         scenario: PaymentScenario {
             id: "scenario-1".to_owned(),
             client_id: "client-1".to_owned(),
-            external_ref: "news-ingestion".to_owned(),
             name: "News ingestion".to_owned(),
             enabled: true,
             created_at: 3,

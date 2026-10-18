@@ -973,23 +973,7 @@ mod catalog {
                 let policy = policy.clone();
                 self.transaction(|connection| {
                     Box::pin(async move {
-                        // The policy row is always established before wallet rows are
-                        // locked. Every payment path uses the same policy -> wallet
-                        // order, preventing cross-aggregate deadlocks.
-                        insert_policy(connection, &policy).await?;
-                        lock_wallets(connection, &policy.wallet_ids).await?;
-                        validate_wallet_bindings(connection, &policy).await?;
-                        for wallet_id in &policy.wallet_ids {
-                            sqlx::query(
-                                "INSERT INTO pay_policy_wallet (policy_id, wallet_id, created_at) VALUES ($1, $2, $3)",
-                            )
-                            .bind(&policy.id)
-                            .bind(wallet_id)
-                            .bind(policy.created_at)
-                            .execute(&mut *connection)
-                            .await
-                            .map_err(|error| conflict(format!("payment policy wallet binding rejected: {error}")))?;
-                        }
+                        insert_policy_aggregate(connection, &policy).await?;
                         Ok(policy)
                     })
                 })
@@ -1097,7 +1081,7 @@ mod catalog {
             }
         }
 
-        fn validate_policy(policy: &PaymentPolicy) -> Result<()> {
+        pub(in crate::storage::postgres) fn validate_policy(policy: &PaymentPolicy) -> Result<()> {
             policy
                 .validate()
                 .map_err(|field| Error::InvalidRequest(format!("invalid payment policy {field}")))
@@ -1195,6 +1179,27 @@ mod catalog {
             .execute(connection)
             .await
             .map_err(|error| conflict(format!("payment policy insert rejected: {error}")))?;
+            Ok(())
+        }
+
+        pub(in crate::storage::postgres) async fn insert_policy_aggregate(
+            connection: &mut PgConnection,
+            policy: &PaymentPolicy,
+        ) -> Result<()> {
+            // Establish the policy before locking wallets. Every payment path
+            // uses the same policy -> wallet order, preventing deadlocks.
+            insert_policy(connection, policy).await?;
+            lock_wallets(connection, &policy.wallet_ids).await?;
+            validate_wallet_bindings(connection, policy).await?;
+            for wallet_id in &policy.wallet_ids {
+                sqlx::query("INSERT INTO pay_policy_wallet (policy_id, wallet_id, created_at) VALUES ($1, $2, $3)")
+                    .bind(&policy.id)
+                    .bind(wallet_id)
+                    .bind(policy.created_at)
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(|error| conflict(format!("payment policy wallet binding rejected: {error}")))?;
+            }
             Ok(())
         }
 
@@ -1399,8 +1404,8 @@ mod catalog {
         use async_trait::async_trait;
 
         use crate::{
-            model::PaymentScenario,
-            storage::{IdempotentWrite, Page, PageRequest, ScenarioStorage},
+            model::{PaymentPolicy, PaymentScenario},
+            storage::{IdempotentWrite, Page, PageRequest, ScenarioConfiguration, ScenarioStorage},
             Error, Result,
         };
 
@@ -1422,12 +1427,11 @@ mod catalog {
                         let inserted = postgres_insert!(
                             optional &mut *connection,
                             "INSERT INTO pay_scenario \
-                             (id, client_id, external_ref, name, enabled, created_at, updated_at) \
-                             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-                             ON CONFLICT (client_id, external_ref) DO NOTHING RETURNING *",
+                             (id, client_id, name, enabled, created_at, updated_at) \
+                             VALUES ($1, $2, $3, $4, $5, $6) \
+                             ON CONFLICT (id) DO NOTHING RETURNING *",
                             &scenario.id,
                             &scenario.client_id,
-                            &scenario.external_ref,
                             &scenario.name,
                             scenario.enabled,
                             scenario.created_at,
@@ -1440,9 +1444,8 @@ mod catalog {
                         }
                         let row = postgres_select!(
                             one &mut *connection,
-                            "SELECT * FROM pay_scenario WHERE client_id = $1 AND external_ref = $2 FOR SHARE",
-                            &scenario.client_id,
-                            &scenario.external_ref,
+                            "SELECT * FROM pay_scenario WHERE id = $1 FOR SHARE",
+                            &scenario.id,
                         )
                         .await
                         .map_err(|error| storage_error("load registered payment scenario", error))?;
@@ -1454,6 +1457,82 @@ mod catalog {
                                 "scenario registration key is already bound to different content",
                             ))
                         }
+                    })
+                })
+                .await
+            }
+
+            async fn register_with_policy(
+                &self,
+                scenario: &PaymentScenario,
+                policy: &PaymentPolicy,
+            ) -> Result<IdempotentWrite<ScenarioConfiguration>> {
+                scenario
+                    .validate()
+                    .map_err(|field| Error::InvalidRequest(format!("invalid payment scenario {field}")))?;
+                super::policy::validate_policy(policy)?;
+                if scenario.id != policy.scenario_id || scenario.created_at != policy.created_at {
+                    return Err(Error::InvalidRequest(
+                        "initial policy must belong to and be created with its scenario".to_owned(),
+                    ));
+                }
+                let scenario = scenario.clone();
+                let policy = policy.clone();
+                self.transaction(|connection| {
+                    Box::pin(async move {
+                        let inserted = postgres_insert!(
+                            optional &mut *connection,
+                            "INSERT INTO pay_scenario \
+                             (id, client_id, name, enabled, created_at, updated_at) \
+                             VALUES ($1, $2, $3, $4, $5, $6) \
+                             ON CONFLICT (id) DO NOTHING RETURNING *",
+                            &scenario.id,
+                            &scenario.client_id,
+                            &scenario.name,
+                            scenario.enabled,
+                            scenario.created_at,
+                            scenario.updated_at,
+                        )
+                        .await
+                        .map_err(|error| conflict(format!("payment scenario insert rejected: {error}")))?;
+                        let scenario_inserted = inserted.is_some();
+                        let registered_scenario = if let Some(row) = inserted {
+                            records::scenario(&row)?
+                        } else {
+                            let row = postgres_select!(
+                                one &mut *connection,
+                                "SELECT * FROM pay_scenario WHERE id = $1 FOR SHARE",
+                                &scenario.id,
+                            )
+                            .await
+                            .map_err(|error| storage_error("load registered payment scenario", error))?;
+                            records::scenario(&row)?
+                        };
+                        if !same_registration(&registered_scenario, &scenario) {
+                            return Err(conflict(
+                                "scenario registration key is already bound to different content",
+                            ));
+                        }
+
+                        if let Some(existing) = super::policy::load_policy_connection(connection, &policy.id).await? {
+                            if !same_policy_registration(&existing, &policy) {
+                                return Err(conflict("initial payment policy is already bound to different content"));
+                            }
+                            return Ok(IdempotentWrite::Replay(ScenarioConfiguration {
+                                scenario: registered_scenario,
+                                policy: existing,
+                            }));
+                        }
+                        if !scenario_inserted {
+                            return Err(conflict(
+                                "scenario already exists without the requested atomic initial policy",
+                            ));
+                        }
+                        super::policy::insert_policy_aggregate(connection, &policy).await?;
+                        Ok(IdempotentWrite::Inserted(ScenarioConfiguration {
+                            scenario: registered_scenario,
+                            policy,
+                        }))
                     })
                 })
                 .await
@@ -1476,22 +1555,6 @@ mod catalog {
                 )
                 .await
                 .map_err(|error| storage_error("get client payment scenario", error))?;
-                row.as_ref().map(records::scenario).transpose()
-            }
-
-            async fn find_by_external_ref(
-                &self,
-                client_id: &str,
-                external_ref: &str,
-            ) -> Result<Option<PaymentScenario>> {
-                let row = postgres_select!(
-                    optional self.pool(),
-                    "SELECT * FROM pay_scenario WHERE client_id = $1 AND external_ref = $2",
-                    client_id,
-                    external_ref,
-                )
-                .await
-                .map_err(|error| storage_error("find payment scenario external reference", error))?;
                 row.as_ref().map(records::scenario).transpose()
             }
 
@@ -1534,6 +1597,28 @@ mod catalog {
                         .map_err(|_| Error::Storage("negative payment scenario count".to_owned()))?,
                 })
             }
+        }
+
+        fn same_registration(stored: &PaymentScenario, requested: &PaymentScenario) -> bool {
+            stored.id == requested.id
+                && stored.client_id == requested.client_id
+                && stored.name == requested.name
+                && stored.enabled == requested.enabled
+        }
+
+        fn same_policy_registration(stored: &PaymentPolicy, requested: &PaymentPolicy) -> bool {
+            stored.id == requested.id
+                && stored.scenario_id == requested.scenario_id
+                && stored.wallet_ids == requested.wallet_ids
+                && stored.protocols == requested.protocols
+                && stored.networks == requested.networks
+                && stored.assets == requested.assets
+                && stored.budget_unit == requested.budget_unit
+                && stored.allowed_recipients == requested.allowed_recipients
+                && stored.allowed_origins == requested.allowed_origins
+                && stored.inbound_limits == requested.inbound_limits
+                && stored.outbound_limits == requested.outbound_limits
+                && stored.enabled == requested.enabled
         }
     }
 
@@ -4954,7 +5039,6 @@ pub(super) mod records {
         Ok(PaymentScenario {
             id: field(row, "id")?,
             client_id: field(row, "client_id")?,
-            external_ref: field(row, "external_ref")?,
             name: field(row, "name")?,
             enabled: field(row, "enabled")?,
             created_at: field(row, "created_at")?,
@@ -5554,7 +5638,7 @@ mod signing {
         lock_intent: bool,
     ) -> Result<Option<OutboundSigningIdentity>> {
         let query = if lock_intent {
-            "SELECT i.*, s.id AS joined_scenario_id, s.client_id AS joined_client_id, s.external_ref, \
+            "SELECT i.*, s.id AS joined_scenario_id, s.client_id AS joined_client_id, \
              s.name AS scenario_name, s.enabled AS scenario_enabled, s.created_at AS scenario_created_at, \
              s.updated_at AS scenario_updated_at, c.id AS joined_client_row_id, c.name AS client_name, \
              c.auth_principal, c.enabled AS client_enabled, c.created_at AS client_created_at, \
@@ -5562,7 +5646,7 @@ mod signing {
              JOIN pay_scenario s ON s.id = i.scenario_id JOIN pay_client c ON c.id = s.client_id \
              WHERE i.id = $1 AND c.auth_principal = $2 AND c.enabled = TRUE AND s.enabled = TRUE FOR UPDATE OF i"
         } else {
-            "SELECT i.*, s.id AS joined_scenario_id, s.client_id AS joined_client_id, s.external_ref, \
+            "SELECT i.*, s.id AS joined_scenario_id, s.client_id AS joined_client_id, \
              s.name AS scenario_name, s.enabled AS scenario_enabled, s.created_at AS scenario_created_at, \
              s.updated_at AS scenario_updated_at, c.id AS joined_client_row_id, c.name AS client_name, \
              c.auth_principal, c.enabled AS client_enabled, c.created_at AS client_created_at, \
@@ -5592,7 +5676,6 @@ mod signing {
         let scenario = crate::model::PaymentScenario {
             id: row.try_get("joined_scenario_id").map_err(decode_join)?,
             client_id: row.try_get("joined_client_id").map_err(decode_join)?,
-            external_ref: row.try_get("external_ref").map_err(decode_join)?,
             name: row.try_get("scenario_name").map_err(decode_join)?,
             enabled: row.try_get("scenario_enabled").map_err(decode_join)?,
             created_at: row.try_get("scenario_created_at").map_err(decode_join)?,

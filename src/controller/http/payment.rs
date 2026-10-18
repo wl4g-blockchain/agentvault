@@ -24,13 +24,15 @@ use crate::{
         VerifyIncomingPayment, WalletBalanceSource,
     },
     model::{
-        Amount, ApprovalDecisionKind, ApprovalRequest, AssetIdentity, LedgerEntryType, PaymentAuthorizationResult,
-        PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEventType, PaymentIntent, PaymentLedgerEntry,
-        PaymentOffer, PaymentReceipt, ReservationStatus,
+        Amount, ApprovalDecisionKind, ApprovalRequest, AssetIdentity, BudgetUnit, LedgerEntryType,
+        PaymentAuthorizationResult, PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEventType,
+        PaymentIntent, PaymentLedgerEntry, PaymentOffer, PaymentPolicy, PaymentPolicyLimits, PaymentReceipt,
+        PaymentScenario, PaymentStatus, ReservationStatus,
     },
     storage::{
-        ApprovalStorage, ClientStorage, EventStorage, LedgerQuery, LedgerStorage, OfferStorage, Page, PageRequest,
-        PaymentQuery, PaymentStorage, PolicyStorage, ScenarioStorage, WalletStorage,
+        ApprovalStorage, ClientStorage, EventStorage, IdempotentWrite, LedgerQuery, LedgerStorage, OfferStorage, Page,
+        PageRequest, PaymentQuery, PaymentStorage, PolicyStorage, ScenarioConfiguration, ScenarioStorage,
+        WalletStorage,
     },
     Error, Result,
 };
@@ -38,6 +40,7 @@ use crate::{
 use super::{ApiError, CallerPrincipal};
 
 const PAGE_SIZE: u32 = 1_000;
+const DEFAULT_PAGE_SIZE: u32 = 10;
 
 /// Dependencies for the transport-neutral payment application façade.
 pub struct PaymentApiDependencies {
@@ -616,10 +619,12 @@ fn parse_advertised_expiry(value: Option<&str>) -> Result<Option<i64>> {
 pub fn payment_router(api: Arc<PaymentApi>) -> Router {
     Router::new()
         .route("/admin/clients", get(list_clients))
-        .route("/admin/scenarios", get(list_scenarios))
+        .route("/admin/scenarios", get(list_scenarios).post(create_scenario))
         .route("/admin/policies", get(list_policies))
         .route("/admin/wallets", get(list_wallets))
         .route("/admin/offers", get(list_offers))
+        .route("/admin/payments", get(list_payments))
+        .route("/admin/ledger", get(list_ledger))
         .route("/payments/authorize", post(authorize_payment))
         .route("/payments/balance", get(get_balance))
         .route("/payments/{intent_id}", get(get_payment))
@@ -658,6 +663,22 @@ async fn list_scenarios(
     ))
 }
 
+async fn create_scenario(
+    State(api): State<Arc<PaymentApi>>,
+    _principal: CallerPrincipal,
+    Json(request): Json<CreateScenarioRequest>,
+) -> std::result::Result<Json<ScenarioConfiguration>, ApiError> {
+    let now = unix_time()?;
+    let (scenario, policy) = request.into_domain(now);
+    if api.clients.get(&scenario.client_id).await?.is_none() {
+        return Err(Error::NotFound(format!("payment client {}", scenario.client_id)).into());
+    }
+    let configuration = match api.scenario_store.register_with_policy(&scenario, &policy).await? {
+        IdempotentWrite::Inserted(configuration) | IdempotentWrite::Replay(configuration) => configuration,
+    };
+    Ok(Json(configuration))
+}
+
 async fn list_policies(
     State(api): State<Arc<PaymentApi>>,
     _principal: CallerPrincipal,
@@ -688,6 +709,22 @@ async fn list_offers(
             .list_for_scenario(&query.scenario_id, query.page.page()?)
             .await?,
     ))
+}
+
+async fn list_payments(
+    State(api): State<Arc<PaymentApi>>,
+    _principal: CallerPrincipal,
+    Query(query): Query<PaymentListQuery>,
+) -> std::result::Result<Json<Page<PaymentIntent>>, ApiError> {
+    Ok(Json(api.payments.list(&query.into_domain()?).await?))
+}
+
+async fn list_ledger(
+    State(api): State<Arc<PaymentApi>>,
+    _principal: CallerPrincipal,
+    Query(query): Query<LedgerListQuery>,
+) -> std::result::Result<Json<Page<PaymentLedgerEntry>>, ApiError> {
+    Ok(Json(api.ledger.list(&query.into_domain()?).await?))
 }
 
 async fn authorize_payment(
@@ -981,6 +1018,73 @@ struct ScenarioQuery {
     scenario_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateScenarioRequest {
+    id: String,
+    client_id: String,
+    name: String,
+    policy: InitialPolicyRequest,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialPolicyRequest {
+    id: String,
+    wallet_ids: Vec<String>,
+    protocols: Vec<String>,
+    networks: Vec<String>,
+    assets: Vec<AssetIdentity>,
+    budget_unit: BudgetUnit,
+    #[serde(default)]
+    allowed_recipients: Vec<String>,
+    #[serde(default)]
+    allowed_origins: Vec<String>,
+    #[serde(default)]
+    inbound_limits: Option<PaymentPolicyLimits>,
+    #[serde(default)]
+    outbound_limits: Option<PaymentPolicyLimits>,
+    #[serde(default = "enabled_by_default")]
+    enabled: bool,
+}
+
+const fn enabled_by_default() -> bool {
+    true
+}
+
+impl CreateScenarioRequest {
+    fn into_domain(self, now: i64) -> (PaymentScenario, PaymentPolicy) {
+        let mut wallet_ids = self.policy.wallet_ids;
+        wallet_ids.sort_unstable();
+        wallet_ids.dedup();
+        let scenario = PaymentScenario {
+            id: self.id,
+            client_id: self.client_id,
+            name: self.name,
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let policy = PaymentPolicy {
+            id: self.policy.id,
+            scenario_id: scenario.id.clone(),
+            wallet_ids,
+            protocols: self.policy.protocols,
+            networks: self.policy.networks,
+            assets: self.policy.assets,
+            budget_unit: self.policy.budget_unit,
+            allowed_recipients: self.policy.allowed_recipients,
+            allowed_origins: self.policy.allowed_origins,
+            inbound_limits: self.policy.inbound_limits,
+            outbound_limits: self.policy.outbound_limits,
+            enabled: self.policy.enabled,
+            created_at: now,
+            updated_at: now,
+        };
+        (scenario, policy)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 struct AdminPageQuery {
     offset: Option<u64>,
@@ -991,7 +1095,7 @@ impl AdminPageQuery {
     fn page(self) -> Result<PageRequest> {
         let page = PageRequest {
             offset: self.offset.unwrap_or(0),
-            limit: self.limit.unwrap_or(100),
+            limit: self.limit.unwrap_or(DEFAULT_PAGE_SIZE),
         };
         if page.limit == 0 || page.limit > PAGE_SIZE {
             return Err(Error::InvalidRequest(format!(
@@ -999,6 +1103,64 @@ impl AdminPageQuery {
             )));
         }
         Ok(page)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct PaymentListQuery {
+    scenario_id: Option<String>,
+    wallet_id: Option<String>,
+    run_id: Option<String>,
+    direction: Option<PaymentDirection>,
+    status: Option<PaymentStatus>,
+    from_created_at: Option<i64>,
+    to_created_at: Option<i64>,
+    #[serde(flatten)]
+    page: AdminPageQuery,
+}
+
+impl PaymentListQuery {
+    fn into_domain(self) -> Result<PaymentQuery> {
+        Ok(PaymentQuery {
+            scenario_id: self.scenario_id,
+            wallet_id: self.wallet_id,
+            run_id: self.run_id,
+            direction: self.direction,
+            status: self.status,
+            from_created_at: self.from_created_at,
+            to_created_at: self.to_created_at,
+            page: self.page.page()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct LedgerListQuery {
+    scenario_id: Option<String>,
+    wallet_id: Option<String>,
+    intent_id: Option<String>,
+    direction: Option<PaymentDirection>,
+    network: Option<String>,
+    asset: Option<String>,
+    from_effective_at: Option<i64>,
+    to_effective_at: Option<i64>,
+    #[serde(flatten)]
+    page: AdminPageQuery,
+}
+
+impl LedgerListQuery {
+    fn into_domain(self) -> Result<LedgerQuery> {
+        Ok(LedgerQuery {
+            scenario_id: self.scenario_id,
+            wallet_id: self.wallet_id,
+            intent_id: self.intent_id,
+            direction: self.direction,
+            network: self.network,
+            asset: self.asset,
+            from_effective_at: self.from_effective_at,
+            to_effective_at: self.to_effective_at,
+            page: self.page.page()?,
+        })
     }
 }
 
@@ -1059,7 +1221,7 @@ struct ApprovalQuery {
 }
 
 fn approval_page_request(query: &ApprovalQuery) -> Result<PageRequest> {
-    let limit = query.limit.unwrap_or(PAGE_SIZE);
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_SIZE);
     if limit == 0 || limit > PAGE_SIZE {
         return Err(Error::InvalidRequest(format!(
             "approval page limit must be between 1 and {PAGE_SIZE}"

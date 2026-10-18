@@ -58,8 +58,7 @@ fn challenge_received_event_retains_complete_public_challenge() {
         scenario: PaymentScenario {
             id: command.scenario_id.clone(),
             client_id: "client-1".to_owned(),
-            external_ref: "workflow-1".to_owned(),
-            name: "workflow".to_owned(),
+            name: "market data payments".to_owned(),
             enabled: true,
             created_at: 1,
             updated_at: 1,

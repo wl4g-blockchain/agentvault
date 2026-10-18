@@ -21,15 +21,15 @@ export function OverviewPage() {
         <div className="panel-title"><Route /><div><small>RESOURCE GRAPH</small><h2>Client → Scenario → Policy → Wallet</h2></div></div>
         <div className="flow-line"><span>Client</span><b>1:N</b><span>Scenario</span><b>1:N</b><span>Policy</span><b>1:N</b><span>Wallet</span></div>
         <p>Wallets may be shared through explicit policy associations; wallet-level hard limits aggregate that exposure.</p>
-        <Link className="text-link" to="/policies">Inspect policy surface →</Link>
+        <Link className="text-link" to="/scenarios">Manage Scenario wallet pools →</Link>
       </article>
       <article className="panel capability-card">
         <div className="panel-title"><RadioTower /><div><small>HTTP SURFACE</small><h2>{liveReads} operational capabilities</h2></div></div>
         <ul>
-          <li><span>Payment and receipt lookup</span><b>available</b></li>
+          <li><span>Payer and Payee transaction listing</span><b>available</b></li>
           <li><span>Pending approval decisions</span><b>available</b></li>
-          <li><span>Ledger row listing</span><em>not exposed</em></li>
-          <li><span>Resource CRUD</span><em>not exposed</em></li>
+          <li><span>Ledger and balance conservation</span><b>available</b></li>
+          <li><span>Scenario + wallet Policy creation</span><b>available</b></li>
         </ul>
       </article>
     </section>

@@ -27,6 +27,7 @@ class VerificationContextTest(unittest.TestCase):
 
         self.assertEqual(environment["E2E_AUDITOR_PAYER_LANGUAGE"], "rust")
         self.assertEqual(environment["E2E_AUDITOR_PAYEE_LANGUAGE"], "java")
+        self.assertEqual(environment["E2E_SDK_SCOPE"], "simple")
         self.assertEqual(environment["E2E_QUANTSTREAM_CLIENT_ID"], "client-quantstream-rust")
         self.assertEqual(
             environment["E2E_QUANTSTREAM_SCENARIO_ID"],

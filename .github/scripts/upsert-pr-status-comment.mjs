@@ -74,7 +74,7 @@ const renderCi = () => {
   ];
 
   if (phase === "started") {
-    details.push("- Status: ⏳ CI started: building dirty images, validating all SDKs, then running the real five-language Docker E2E.");
+    details.push("- Status: ⏳ CI started: building dirty images, validating all SDKs, then running the real Rust/Go simple Docker E2E matrix.");
     return details.join("\n");
   }
 
@@ -105,7 +105,7 @@ const renderCi = () => {
     return details.join("\n");
   }
 
-  details.push(`- Full MarketPulse/QuantStream Docker E2E: ${resultIcon(dockerE2eResult)} ${displayResult(dockerE2eResult)}`);
+  details.push(`- Rust/Go MarketPulse/QuantStream Docker E2E: ${resultIcon(dockerE2eResult)} ${displayResult(dockerE2eResult)}`);
   if (dockerE2eResult === "skipped") {
     details.push("  - E2E did not start because the build stage did not succeed.");
   } else if (dockerE2eResult === "cancelled") {

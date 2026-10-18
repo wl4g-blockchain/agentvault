@@ -1,5 +1,22 @@
 # AgentVault Helm Chart
 
+Templates follow workload ownership rather than Kubernetes-kind flat files:
+
+```text
+templates/
+├── platform/  # runtime ConfigMap, external/Kubernetes Secret projection, ServiceAccount
+├── server/    # AgentVault Deployment, API/management Services, NetworkPolicy, ServiceMonitor
+├── gateway/   # protected API/gRPC HTTPRoute
+├── web/       # Dashboard Deployment, Service and protected Route
+├── _helpers.tpl
+└── NOTES.txt
+```
+
+This is a packaging boundary only: the split does not change rendered object
+names, selectors, ports, routes, security context, checksums or conditions.
+`bootstrap/` remains outside templates because runtime Secrets must exist before
+the chart is installed; Helm never generates payment keys or stores their values.
+
 AuthGuard is a default-on umbrella dependency. The Gateway authenticates and
 authorizes HTTP requests, then delivers a signed `x-authguard-context` or a
 short-lived `x-authguard-scope-token` to the AgentVault workload adapter. The

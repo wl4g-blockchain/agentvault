@@ -45,7 +45,7 @@ pub use payment_handler::{AuthorizePayment, PaymentHandler};
 pub use policy_handler::{PolicyDecision, PolicyEngine, PolicyEvaluation, WalletBudget};
 pub use provisioning::{provision_from_path, ProvisioningReport};
 pub(crate) use scenario_handler::UNRESTRICTED_PRINCIPAL;
-pub use scenario_handler::{AccessContext, RegisterScenario, ScenarioHandler};
+pub use scenario_handler::{AccessContext, ScenarioHandler};
 
 pub(crate) use settlement_handler::{provider_verification_ref, ReconciliationProviderObservation};
 pub use settlement_handler::{

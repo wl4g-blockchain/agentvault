@@ -6,8 +6,11 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 from common.deploy.docker import (
+    AGENTVAULT_CHART,
+    AGENTVAULT_CONFIG_TEMPLATE,
     BUILD_PROXY_PREFIXES,
     _clean_compose_stdout,
+    _ensure_matrix_plan,
     _inherit_build_proxy_environment,
     _load_matrix_checkpoint,
     _parse_cast_address,
@@ -16,6 +19,10 @@ from common.deploy.docker import (
 
 
 class BuildProxyEnvironmentTest(unittest.TestCase):
+    def test_runtime_config_template_tracks_the_module_layered_chart(self) -> None:
+        relative = AGENTVAULT_CONFIG_TEMPLATE.removeprefix("templates/")
+        self.assertTrue((AGENTVAULT_CHART / "templates" / relative).is_file())
+
     def test_inherits_conventional_proxy_without_overriding_component_configuration(self) -> None:
         environment = {
             "HTTPS_PROXY": "http://127.0.0.1:8800",
@@ -57,6 +64,17 @@ class BuildProxyEnvironmentTest(unittest.TestCase):
 
 
 class MatrixCheckpointTest(unittest.TestCase):
+    def test_matrix_plan_prevents_cross_scope_resume(self) -> None:
+        with TemporaryDirectory() as directory:
+            plan = Path(directory) / "matrix-plan.json"
+            payload = _ensure_matrix_plan(plan, "simple")
+
+            self.assertEqual(payload["scope"], "simple")
+            self.assertEqual(len(payload["cases"]), 8)
+            self.assertEqual(_ensure_matrix_plan(plan, "simple"), payload)
+            with self.assertRaisesRegex(RuntimeError, "immutable resume plan"):
+                _ensure_matrix_plan(plan, "full")
+
     def test_restores_only_complete_evidence_for_the_exact_case(self) -> None:
         reports = {
             "s20_full.md": "full",

@@ -146,27 +146,43 @@ mod catalog {
 
     mod scenario {
         use async_trait::async_trait;
+        use serde::Serialize;
 
-        use crate::{model::PaymentScenario, Result};
+        use crate::{
+            model::{PaymentPolicy, PaymentScenario},
+            Result,
+        };
 
         use super::{IdempotentWrite, Page, PageRequest};
 
+        /// Atomically created Scenario configuration. Wallet membership belongs
+        /// to the initial Policy aggregate rather than being duplicated on the
+        /// Scenario row.
+        #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+        pub struct ScenarioConfiguration {
+            pub scenario: PaymentScenario,
+            pub policy: PaymentPolicy,
+        }
+
         #[async_trait]
         pub trait ScenarioStorage: Send + Sync {
-            /// Registers a scenario idempotently on `(client_id, external_ref)`.
+            /// Registers a scenario idempotently on its stable `id`.
             /// Different content under an existing key must return a conflict.
             async fn register(&self, scenario: &PaymentScenario) -> Result<IdempotentWrite<PaymentScenario>>;
+
+            /// Registers a Scenario and its initial multi-wallet Policy in one
+            /// database transaction. Replays must match both aggregates exactly;
+            /// partial configuration is never exposed to payment authorization.
+            async fn register_with_policy(
+                &self,
+                scenario: &PaymentScenario,
+                policy: &PaymentPolicy,
+            ) -> Result<IdempotentWrite<ScenarioConfiguration>>;
 
             async fn get(&self, scenario_id: &str) -> Result<Option<PaymentScenario>>;
 
             /// Ownership-aware lookup used after authenticating the calling client.
             async fn get_for_client(&self, client_id: &str, scenario_id: &str) -> Result<Option<PaymentScenario>>;
-
-            async fn find_by_external_ref(
-                &self,
-                client_id: &str,
-                external_ref: &str,
-            ) -> Result<Option<PaymentScenario>>;
 
             async fn set_enabled(&self, scenario_id: &str, enabled: bool, updated_at: i64) -> Result<PaymentScenario>;
 
@@ -507,7 +523,7 @@ mod catalog {
     pub use client::ClientStorage;
     pub use offer::OfferStorage;
     pub use policy::PolicyStorage;
-    pub use scenario::ScenarioStorage;
+    pub use scenario::{ScenarioConfiguration, ScenarioStorage};
     pub use wallet::{
         EncryptedWalletKeyVersion, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage, WalletCustody,
         WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
@@ -1418,7 +1434,7 @@ mod transaction {
 
 pub use catalog::{
     ApproverStorage, ClientStorage, EncryptedWalletKeyVersion, OfferStorage, PaymentWallet, PolicyStorage,
-    ScenarioStorage, WalletBalanceRecord, WalletBalanceStorage, WalletCustody, WalletKeyStatus,
+    ScenarioConfiguration, ScenarioStorage, WalletBalanceRecord, WalletBalanceStorage, WalletCustody, WalletKeyStatus,
     WalletProvisioningConfig, WalletStorage,
 };
 pub use signing::{
@@ -1656,7 +1672,7 @@ pub struct PageRequest {
 
 impl Default for PageRequest {
     fn default() -> Self {
-        Self { offset: 0, limit: 100 }
+        Self { offset: 0, limit: 10 }
     }
 }
 

@@ -13,6 +13,7 @@ from common.context import VerificationContext
 from common.deploy import create_deployer
 from common.project import DEPLOY_ROOT, REPORT_ROOT
 from common.report import ReportBook
+from common.sdk_matrix import SDK_SCOPES
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,8 @@ SCENARIOS = (
     Scenario("payer", "verifier.payer.s10_dependencies", "payer", "s10_dependencies.md", "start and verify payer dependencies"),
     Scenario("payee", "verifier.payee.s10_dependencies", "payee", "s10_dependencies.md", "start and verify payee dependencies"),
     Scenario("full", "verifier.payment.s20_full", "payment", "s20_full.md", "run one language through the complete payment flow"),
-    Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the complete five-language matrix"),
+    Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the selected SDK matrix scope"),
+    Scenario("web", "verifier.web.s40_dashboard", "web", "s40_dashboard.md", "render Matrix evidence through real Chromium Dashboard journeys"),
 )
 SCENARIO_BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}
 
@@ -70,7 +72,12 @@ def verifier(scenario: Scenario) -> Callable[[VerificationContext], str | dict[s
     return candidate
 
 
-def cleanup(timeout_seconds: float, deployer: str, matrix_workers: int = 2) -> None:
+def cleanup(
+    timeout_seconds: float,
+    deployer: str,
+    matrix_workers: int = 2,
+    e2e_sdk_scope: str = "simple",
+) -> None:
     for worker_slot in (None, *range(matrix_workers)):
         context = VerificationContext(
             run_id="cleanup",
@@ -85,6 +92,7 @@ def cleanup(timeout_seconds: float, deployer: str, matrix_workers: int = 2) -> N
             timeout_seconds=timeout_seconds,
             skip_build=True,
             reuse_build=True,
+            e2e_sdk_scope=e2e_sdk_scope,
             matrix_workers=matrix_workers,
             worker_slot=worker_slot,
         )
@@ -118,9 +126,20 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cleanup-after-run", action="store_true")
     result.add_argument("--matrix-workers", type=int, default=2, help="isolated matrix workers; maximum 2")
     result.add_argument(
+        "--e2e-sdk-scope",
+        choices=SDK_SCOPES,
+        default="simple",
+        help="SDK matrix: simple=Rust/Go 2x2x2 (default), full=five-language 5x5x2",
+    )
+    result.add_argument(
         "--resume-run",
         metavar="YYYYMMDDHHMMSS",
         help="resume an interrupted matrix from validated case checkpoints",
+    )
+    result.add_argument(
+        "--matrix-evidence-run",
+        metavar="YYYYMMDDHHMMSS",
+        help="completed Matrix report used by the Web screenshot scenario",
     )
     result.add_argument("--list", action="store_true", help="list scenarios and exit")
     return result
@@ -133,7 +152,7 @@ def main() -> None:
             print(f"{scenario.name:14} {scenario.description}")
         return
     if args.command == "cleanup" or args.cleanup:
-        cleanup(args.timeout, args.deployer, args.matrix_workers)
+        cleanup(args.timeout, args.deployer, args.matrix_workers, args.e2e_sdk_scope)
         print("E2E deployment removed")
         return
     if args.rounds < 1:
@@ -143,6 +162,8 @@ def main() -> None:
     if not 1 <= args.matrix_workers <= 2:
         raise SystemExit("--matrix-workers must be 1 or 2")
     scenarios = selected_scenarios(args.scenario)
+    if args.matrix_evidence_run and not re.fullmatch(r"[0-9]{14}", args.matrix_evidence_run):
+        raise SystemExit("--matrix-evidence-run must be a YYYYMMDDHHMMSS report directory")
     if args.resume_run:
         if not re.fullmatch(r"[0-9]{14}", args.resume_run):
             raise SystemExit("--resume-run must be a YYYYMMDDHHMMSS report directory")
@@ -171,7 +192,9 @@ def main() -> None:
                     timeout_seconds=args.timeout,
                     skip_build=args.skip_build,
                     reuse_build=args.reuse_build,
+                    e2e_sdk_scope=args.e2e_sdk_scope,
                     matrix_workers=args.matrix_workers,
+                    evidence_run_id=args.matrix_evidence_run,
                 )
                 output = verifier(scenario)(context)
                 if isinstance(output, dict):
@@ -195,7 +218,7 @@ def main() -> None:
         print(f"E2E scenarios passed; report={summary}")
     finally:
         if args.cleanup_after_run:
-            cleanup(args.timeout, args.deployer, args.matrix_workers)
+            cleanup(args.timeout, args.deployer, args.matrix_workers, args.e2e_sdk_scope)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,10 @@ class VerificationContext:
     timeout_seconds: float
     skip_build: bool
     reuse_build: bool
+    e2e_sdk_scope: str = "simple"
     matrix_workers: int = 2
     worker_slot: int | None = None
+    evidence_run_id: str | None = None
 
     def environment(self) -> dict[str, str]:
         payer = payer_identity(self.payer_language)
@@ -31,6 +33,7 @@ class VerificationContext:
             "E2E_RUNNER_SKIP_BUILD": "1" if self.skip_build else "0",
             "E2E_RUNNER_REUSE_BUILD": "1" if self.reuse_build else "0",
             "E2E_MATRIX_WORKERS": str(self.matrix_workers),
+            "E2E_SDK_SCOPE": self.e2e_sdk_scope,
             "E2E_WORKER_SLOT": "" if self.worker_slot is None else str(self.worker_slot),
             "E2E_RUNNER_PAYER_LANGUAGE": self.payer_language,
             "E2E_RUNNER_PAYEE_LANGUAGE": self.payee_language,

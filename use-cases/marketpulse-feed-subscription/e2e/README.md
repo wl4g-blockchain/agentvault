@@ -156,8 +156,10 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
-python3 runner.py -s matrix --matrix-workers 2
-python3 runner.py -s matrix --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
+python3 runner.py -s matrix --matrix-workers 2 # default simple: Rust/Go 2×2×2 = 8
+python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
+python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
+python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <completed-matrix-run>
 python3 runner.py cleanup
 ```
 
@@ -167,19 +169,29 @@ health checks, scenario selection, diagnostics and cleanup, and writes immutable
 are retained by default for manual inspection. Use `--cleanup-after-run` for an
 explicit teardown after a run, or `runner.py cleanup` later.
 
+The `web` scenario follows the AuthGuard browser-verifier pattern: it first
+validates that `s21`, `s22`, `s24` and `s30` contain the exact same completed
+cases for the requested SDK scope, then maps those immutable facts into same-origin API fixtures for
+the production Dashboard bundle. Real headless Chromium asserts and screenshots
+ten-row Payer/Payee pagination, full-fact Ledger conservation behind a ten-row
+view, a single-column scrolling dropdown with twelve Wallet options, and atomic
+Scenario + two-Wallet creation. This is intentionally evidence-backed UI verification; it
+does not pretend the isolated per-case databases are one production database.
+
 ## Full-flow acceptance evidence
 
 A payer/payee language-pair run fails unless it proves all of the following.
-`matrix` executes 5 Payers × 5 Payees × 2 signing transports = 50 isolated
-cases with two bounded workers by default: one owns all MQTT cases and one owns
-all gRPC cases. Each worker has a distinct Compose project, port range, runtime
+`matrix` defaults to `--e2e-sdk-scope simple`: Rust/Go Payers × Rust/Go Payees ×
+2 signing transports = 8 isolated cases. `--e2e-sdk-scope full` executes all
+5 × 5 × 2 = 50 cases. Two bounded workers are used by default: one owns all
+MQTT cases and one owns all gRPC cases. Each worker has a distinct Compose project, port range, runtime
 configuration, database volume and chain state; `--matrix-workers 1` provides a
 serial fallback.
 
 Every case writes an identity-bound checkpoint only after all five detailed
-verifiers pass. If the host or runner is interrupted, `--resume-run` validates
-those checkpoints, rejects mismatched/corrupt evidence, and executes only the
-remaining cases in the same immutable report directory.
+verifiers pass. The report also stores an immutable SDK scope/plan. If the host
+or runner is interrupted, `--resume-run` validates that plan and all checkpoints,
+rejects scope mismatch/corrupt evidence, and executes only the remaining cases.
 
 1. free MCP delivery and a genuine x402 v2 402 for the paid tool;
 2. two stable logical operations, including a delivery retry without a second

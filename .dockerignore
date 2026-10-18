@@ -9,5 +9,6 @@
 /run
 /secrets
 /.git
+docs/development
 etc/agentvault.local.yaml
 *.local.yaml

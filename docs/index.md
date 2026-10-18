@@ -54,7 +54,7 @@ PaymentClient 1 ── N PaymentScenario 1 ── N PaymentPolicy
 | 资源 | 语义 | 关键不变量 |
 |---|---|---|
 | Client | 注册的业务应用 | `auth_principal` 唯一绑定可信上游 Principal |
-| Scenario | Workflow/AgentFlow 的支付隔离边界 | 只属于一个 Client；创建后默认不能支付 |
+| Scenario | 业务支付隔离边界 | 只属于一个 Client；创建后默认不能支付 |
 | Policy | Scenario 的双向资金授权 | 只属于一个 Scenario；显式绑定一个或多个 Wallet |
 | Wallet | EOA 或只读外部收款地址 | 私钥版本化加密；可被多个 Policy 共享 |
 | Run | 一次逻辑业务执行 | `run_id` 是全链路唯一的业务幂等字段；在租户边界内由 `(scenario_id, run_id)` 唯一约束，不是授权主体 |
@@ -183,7 +183,7 @@ Canonical DDL **禁止业务 Trigger、存储过程和隐式副作用**。`CHECK
 6. 待审批投影携带原 Intent 的 `run_id`；管理员的独立 Principal 必须用该同一 Run 提交决策，UI/SDK 不得生成 decision key。一次性 Grant 在锁内消费并完成预算预留。
 7. 每次签名前重新检查 Policy、Wallet 生命周期、余额/Gas 和授权有效期；Adapter 生成 Intent-bound typed data，Signer 不接受调用方任意 Digest。
 8. SDK 收到签名凭据后重试原 MCP 请求，并把标准支付响应证据回传 AgentVault。
-9. RPC/Provider 确认交易和 Token Transfer 后，Intent、Event、Ledger、Outbox 在同一 SQL 事务内提交；Workflow 恢复。
+9. RPC/Provider 确认交易和 Token Transfer 后，Intent、Event、Ledger、Outbox 在同一 SQL 事务内提交；业务交付恢复。
 
 ## 7. Payee 流程
 
@@ -242,7 +242,7 @@ Challenge、Verify、Settle，并由 Axum、Gin、FastAPI/ASGI、Express、Sprin
 
 五种 Payer 配置只包含 `scenario_id` 与超时、审批轮询、重试等客户端行为参数；不得出现 Wallet、Policy、金额、资产、网络、收款人或商户 Origin 配置。SDK 授权 wire 只发送操作上下文和捕获的原始 Challenge，并校验返回 Intent 中由 AgentVault 选择的 Policy/Wallet 与签名凭据绑定完整。
 
-SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外公开 API 描述目录。Dashboard 位于 `web/`，只使用同源 Cookie/上下文，不保存 Bearer Token；它可读取 Client、Scenario、Policy、Wallet、Offer、Payment、Approval、Balance 和运行状态。资源创建和密钥注入继续走受控 Provisioning Manifest，前端不能接触私钥。
+SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外公开 API 描述目录。Dashboard 位于 `web/`，只使用同源 Cookie/上下文，不保存 Bearer Token。一级菜单按业务职责组织为 Payer 交易、Payee 交易、审批、余额与 Ledger、Client 身份归属、Scenario 治理和运行状态。所有可见列表默认按 10 条分页；守恒指标需要完整 Ledger 时在后台以有界批次读取，不能把当前页误当完整事实。Client 页面只读展示可信身份绑定及其 Scenario 关系，身份变更仍走受控 Provisioning；Scenario 不保存外部应用引用，其 `id` 就是唯一稳定配置身份。Scenario 创建会在一个服务端事务中写入 Scenario、初始 Policy 与勾选的多个 Wallet membership；Wallet 通过单列、限高、可滚动的多选下拉选择，任一 Wallet 无效则整体回滚，前端永远不能接触私钥。Policy、Wallet 等目录数据是治理表单的受控选项和详情，不拆成彼此割裂的 CRUD 页面。
 
 ## 11. 部署与真实 E2E
 
@@ -250,7 +250,7 @@ SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外�
 - `deploy/helm/agentvault/`：AuthGuard 为默认启用的 umbrella dependency，受保护 HTTPRoute 使用 `authguard.io/protected=true`；禁用后不创建受保护 Route，运营方必须明确暴露开放 Service。
 - `use-cases/marketpulse-feed-subscription/e2e/`：从零构建、部署和分层验证的真实案例。
 
-E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。Provisioning 为五个 Payer 分别建立 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 串行执行 5×5×2=50 个隔离 Case，并由 `s21` 至 `s24` 分别验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步链路以及十钱包精确 Token 余额守恒。当前资金断言覆盖 EVM/x402；Solana 在该案例中只验证真实节点健康，不宣称已完成 Solana 支付。
+E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。Provisioning 为五个 Payer 分别建立 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 默认以 `--e2e-sdk-scope simple` 执行 Rust/Go 2×2×2=8 个快速隔离 Case；发布验收显式使用 `--e2e-sdk-scope full` 执行 5×5×2=50 个 Case。`s21` 至 `s24` 按所选 scope 验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步链路及精确 Token 余额守恒。Web 场景校验同 scope 的不可变报告，再以报告派生的 API fixture 驱动真实 Chromium，截图验证每页最多 10 条的 Payer/Payee 列表、全部 Ledger 守恒、Client→Scenario 可信归属，以及 12 个候选 Wallet 的单列滚动多选下拉与双 Wallet 原子创建；它不会伪称隔离数据库是一个生产库。当前资金断言覆盖 EVM/x402；Solana 在该案例中只验证真实节点健康，不宣称已完成 Solana 支付。
 
 ## 12. 安全边界
 

@@ -255,7 +255,7 @@ jobs:
             echo "::warning title=AgentVault PR CI comment::Could not publish the CI status comment."
 
   e2e-docker:
-    name: Full MarketPulse Docker Compose E2E
+    name: Simple MarketPulse SDK Matrix E2E
     needs: build-and-test
     runs-on: ${{ vars.AGENTVAULT_E2E_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -307,10 +307,11 @@ jobs:
       - name: Pull immutable dirty runtime
         run: docker pull "${E2E_AGENTVAULT_IMAGE}"
 
-      - name: Run complete five-language E2E matrix
+      - name: Run default Rust and Go SDK E2E matrix
         run: |
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
-            --scenario matrix --reuse-build --cleanup-after-run --timeout 150m
+            --scenario matrix --e2e-sdk-scope simple \
+            --reuse-build --cleanup-after-run --timeout 150m
 
       - name: Capture E2E summary
         id: summary

@@ -4,12 +4,18 @@ import type {
   ApprovalPage,
   ApprovalRequest,
   BalanceQuery,
+  LedgerListInput,
+  LedgerPage,
   ManagementPage,
   ManagementResource,
   PaymentBalance,
   PaymentIntent,
+  PaymentListInput,
   PaymentOffer,
+  PaymentPage,
   PaymentReceipt,
+  ScenarioConfiguration,
+  ScenarioConfigurationInput,
 } from './types'
 
 export const API_ROOT = '/api/v1'
@@ -23,8 +29,9 @@ export const capabilities: ApiCapabilities = {
   approvalDecision: true,
   offerResolution: true,
   managementRead: true,
-  managementMutation: false,
-  ledgerListing: false,
+  managementMutation: true,
+  paymentListing: true,
+  ledgerListing: true,
   reconciliationControl: false,
 }
 
@@ -97,7 +104,7 @@ export const paymentApi = {
 }
 
 export const approvalApi = {
-  listPending(scenarioId: string, offset = 0, limit = 100) {
+  listPending(scenarioId: string, offset = 0, limit = 10) {
     return request<ApprovalPage>(`/approvals?${query({ scenario_id: scenarioId, status: 'pending', offset, limit })}`)
   },
 
@@ -134,13 +141,63 @@ export const offerApi = {
 }
 
 export const managementApi = {
-  list(resource: ManagementResource, parentId?: string, offset = 0, limit = 100) {
+  list(resource: ManagementResource, parentId?: string, offset = 0, limit = 10) {
     const parent = resource === 'scenarios'
       ? { client_id: parentId }
       : resource === 'policies'
         ? { scenario_id: parentId }
         : {}
     return request<ManagementPage>(`/admin/${resource}?${query({ ...parent, offset, limit })}`)
+  },
+
+  listPayments(input: PaymentListInput = {}) {
+    return request<PaymentPage>(`/admin/payments?${query({
+      scenario_id: input.scenario_id,
+      wallet_id: input.wallet_id,
+      run_id: input.run_id,
+      direction: input.direction,
+      status: input.status,
+      offset: input.offset ?? 0,
+      limit: input.limit ?? 10,
+    })}`)
+  },
+
+  listLedger(input: LedgerListInput = {}) {
+    return request<LedgerPage>(`/admin/ledger?${query({
+      scenario_id: input.scenario_id,
+      wallet_id: input.wallet_id,
+      intent_id: input.intent_id,
+      direction: input.direction,
+      network: input.network,
+      asset: input.asset,
+      offset: input.offset ?? 0,
+      limit: input.limit ?? 10,
+    })}`)
+  },
+
+  async listAllLedger(input: LedgerListInput = {}, maxItems = 10_000) {
+    const items: LedgerPage['items'] = []
+    let total = 0
+    do {
+      const remaining = maxItems - items.length
+      if (remaining <= 0) break
+      const page = await managementApi.listLedger({
+        ...input,
+        offset: items.length,
+        limit: Math.min(1_000, remaining),
+      })
+      total = page.total
+      items.push(...page.items)
+      if (page.items.length === 0) break
+    } while (items.length < total)
+    return { items, total, complete: items.length === total }
+  },
+
+  createScenario(input: ScenarioConfigurationInput) {
+    return request<ScenarioConfiguration>('/admin/scenarios', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
   },
 
   async health(signal?: AbortSignal) {

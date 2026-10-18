@@ -9,6 +9,9 @@ describe('DashboardLayout', () => {
 
     expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy()
     expect(screen.getByText(/Identity is established upstream by AuthGuard/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Payments' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Payer transactions' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Payee transactions' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Balances & ledger' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Clients' })).toBeTruthy()
   })
 })

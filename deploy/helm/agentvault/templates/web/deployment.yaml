@@ -28,17 +28,4 @@ spec:
           ports: [{ name: http, containerPort: 8080 }]
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "agentvault.fullname" . }}-web
-  labels:
-    {{- include "agentvault.labels" . | nindent 4 }}
-spec:
-  type: {{ .Values.web.service.type }}
-  selector:
-    {{- include "agentvault.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: web
-  ports: [{ name: http, port: {{ .Values.web.service.port }}, targetPort: http }]
 {{- end }}

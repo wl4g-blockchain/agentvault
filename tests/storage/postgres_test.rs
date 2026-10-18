@@ -257,7 +257,6 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     let scenario = PaymentScenario {
         id: unique("pg-scenario"),
         client_id: client.id.clone(),
-        external_ref: unique("pg-news-ingestion"),
         name: "PostgreSQL news ingestion".to_owned(),
         enabled: true,
         created_at: 1,
@@ -709,7 +708,6 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     let race_scenario = PaymentScenario {
         id: unique("pg-ledger-race-scenario"),
         client_id: client.id.clone(),
-        external_ref: unique("pg-ledger-race"),
         name: "PostgreSQL ledger race".to_owned(),
         enabled: true,
         created_at: 10,

@@ -42,6 +42,19 @@ export type PaymentIntent = {
   settled_at?: number
 }
 
+export type Page<T> = { items: T[]; total: number }
+export type PaymentPage = Page<PaymentIntent>
+
+export type PaymentListInput = {
+  scenario_id?: string
+  wallet_id?: string
+  run_id?: string
+  direction?: PaymentDirection
+  status?: PaymentStatus
+  offset?: number
+  limit?: number
+}
+
 export type PaymentReceipt = {
   intent_id: string
   scenario_id: string
@@ -91,6 +104,39 @@ export type PaymentBalance = {
   as_of: number
 }
 
+export type LedgerEntryType = 'payment' | 'fee' | 'refund' | 'deposit' | 'transfer' | 'reversal'
+
+export type PaymentLedgerEntry = {
+  id: string
+  intent_id?: string
+  scenario_id?: string
+  wallet_id: string
+  entry_type: LedgerEntryType
+  direction: PaymentDirection
+  asset: AssetIdentity
+  amount: Amount
+  posting_key: string
+  tx_hash?: string
+  settlement_ref?: string
+  effect_ref?: string
+  transfer_ref?: string
+  reversal_of?: string
+  effective_at: number
+  created_at: number
+}
+
+export type LedgerPage = Page<PaymentLedgerEntry>
+export type LedgerListInput = {
+  scenario_id?: string
+  wallet_id?: string
+  intent_id?: string
+  direction?: PaymentDirection
+  network?: string
+  asset?: string
+  offset?: number
+  limit?: number
+}
+
 export type PaymentOffer = {
   id: string
   scenario_id: string
@@ -123,8 +169,68 @@ export type ApprovalDecisionInput = {
   reason?: string
 }
 
+export type PaymentClient = {
+  id: string
+  name: string
+  auth_principal: string
+  enabled: boolean
+  created_at: number
+  updated_at: number
+}
+
+export type PaymentScenario = {
+  id: string
+  client_id: string
+  name: string
+  enabled: boolean
+  created_at: number
+  updated_at: number
+}
+
+export type Wallet = {
+  id: string
+  algorithm: string
+  address: string
+  public_key: string
+  created_at: number
+}
+
+export type PaymentPolicyLimits = {
+  max_per_payment: Amount
+  max_per_day: Amount
+  approval_threshold?: Amount
+  approval_enabled: boolean
+  approval_overage?: Amount
+}
+
+export type PaymentPolicy = {
+  id: string
+  scenario_id: string
+  wallet_ids: string[]
+  protocols: string[]
+  networks: string[]
+  assets: AssetIdentity[]
+  budget_unit: { asset: string; decimals: number }
+  allowed_recipients: string[]
+  allowed_origins: string[]
+  inbound_limits?: PaymentPolicyLimits
+  outbound_limits?: PaymentPolicyLimits
+  enabled: boolean
+  created_at: number
+  updated_at: number
+}
+
+export type ScenarioConfiguration = { scenario: PaymentScenario; policy: PaymentPolicy }
+export type ScenarioConfigurationInput = {
+  id: string
+  client_id: string
+  name: string
+  policy: Omit<PaymentPolicy, 'scenario_id' | 'created_at' | 'updated_at'>
+}
+
 export type ManagementResource = 'clients' | 'scenarios' | 'policies' | 'wallets'
-export type ManagementPage = { items: unknown[]; total: number }
+export type ManagementRecord = PaymentClient | PaymentScenario | PaymentPolicy | Wallet
+export type ManagementPage = Page<ManagementRecord>
 
 export type ApiCapabilities = {
   paymentLookup: true
@@ -134,7 +240,8 @@ export type ApiCapabilities = {
   approvalDecision: true
   offerResolution: true
   managementRead: true
-  managementMutation: false
-  ledgerListing: false
+  managementMutation: true
+  paymentListing: true
+  ledgerListing: true
   reconciliationControl: false
 }

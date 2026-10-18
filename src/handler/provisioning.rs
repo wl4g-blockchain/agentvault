@@ -63,7 +63,6 @@ struct ClientSpec {
 struct ScenarioSpec {
     id: String,
     client_id: String,
-    external_ref: String,
     name: String,
     #[serde(default = "default_true")]
     enabled: bool,
@@ -323,14 +322,6 @@ fn validate_manifest(manifest: &ProvisionManifest) -> Result<()> {
     unique(&manifest.scenarios, |item| item.id.as_str(), "scenario id")?;
     unique(&manifest.policies, |item| item.id.as_str(), "policy id")?;
     unique(&manifest.offers, |item| item.id.as_str(), "offer id")?;
-    let mut external_refs = BTreeSet::new();
-    for scenario in &manifest.scenarios {
-        if !external_refs.insert((&scenario.client_id, &scenario.external_ref)) {
-            return Err(Error::InvalidRequest(
-                "duplicate scenario client/external_ref in provisioning manifest".to_owned(),
-            ));
-        }
-    }
     let mut approvers = BTreeSet::new();
     for approver in &manifest.approvers {
         if !approvers.insert((&approver.scenario_id, &approver.auth_principal)) {
@@ -526,7 +517,6 @@ async fn provision_scenarios(
         let desired = PaymentScenario {
             id: spec.id,
             client_id: spec.client_id,
-            external_ref: spec.external_ref,
             name: spec.name,
             enabled: spec.enabled,
             created_at: *revision,
@@ -758,11 +748,7 @@ fn same_client(left: &PaymentClient, right: &PaymentClient) -> bool {
 }
 
 fn same_scenario(left: &PaymentScenario, right: &PaymentScenario) -> bool {
-    left.id == right.id
-        && left.client_id == right.client_id
-        && left.external_ref == right.external_ref
-        && left.name == right.name
-        && left.enabled == right.enabled
+    left.id == right.id && left.client_id == right.client_id && left.name == right.name && left.enabled == right.enabled
 }
 
 fn same_wallet(left: &Wallet, right: &Wallet) -> bool {

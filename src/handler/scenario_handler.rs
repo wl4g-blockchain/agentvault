@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use uuid::Uuid;
-
 use crate::{
     model::{PaymentClient, PaymentScenario},
-    storage::{ClientStorage, IdempotentWrite, ScenarioStorage},
+    storage::{ClientStorage, ScenarioStorage},
     Error, Result,
 };
 
@@ -18,12 +16,6 @@ pub struct AccessContext {
     pub principal: String,
     pub client: PaymentClient,
     pub scenario: PaymentScenario,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegisterScenario {
-    pub external_ref: String,
-    pub name: String,
 }
 
 /// Enforces principal -> client -> scenario ownership for every payment use
@@ -77,35 +69,6 @@ impl ScenarioHandler {
             client,
             scenario,
         })
-    }
-
-    /// Registers a scenario for the authenticated client. The operation grants
-    /// no wallet permission; an enabled policy must be created separately.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when authentication fails, scenario fields are invalid,
-    /// or the idempotent registration cannot be persisted.
-    pub async fn register(
-        &self,
-        principal: &str,
-        request: &RegisterScenario,
-        now: i64,
-    ) -> Result<IdempotentWrite<PaymentScenario>> {
-        let client = self.authenticated_client(principal).await?;
-        let scenario = PaymentScenario {
-            id: Uuid::new_v4().to_string(),
-            client_id: client.id,
-            external_ref: request.external_ref.clone(),
-            name: request.name.clone(),
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-        };
-        scenario
-            .validate()
-            .map_err(|field| Error::InvalidRequest(format!("invalid payment scenario field: {field}")))?;
-        self.scenarios.register(&scenario).await
     }
 
     async fn authenticated_client(&self, principal: &str) -> Result<PaymentClient> {

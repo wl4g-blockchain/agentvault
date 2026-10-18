@@ -143,12 +143,10 @@ CREATE TABLE pay_client (
 CREATE TABLE pay_scenario (
     id                  TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
     client_id           TEXT NOT NULL REFERENCES pay_client(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    external_ref        TEXT NOT NULL CHECK (length(trim(external_ref)) > 0),
     name                TEXT NOT NULL CHECK (length(trim(name)) > 0),
     enabled             BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          BIGINT NOT NULL CHECK (created_at >= 0),
-    updated_at          BIGINT NOT NULL CHECK (updated_at >= created_at),
-    UNIQUE (client_id, external_ref)
+    updated_at          BIGINT NOT NULL CHECK (updated_at >= created_at)
 );
 
 CREATE INDEX ix_pay_scenario_client_enabled

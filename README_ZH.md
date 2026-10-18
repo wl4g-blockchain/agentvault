@@ -75,6 +75,9 @@ Dashboard：
 
 ```bash
 (cd web && npm ci && npm test && npm run build)
+(cd use-cases/marketpulse-feed-subscription/e2e && \
+  python3 runner.py -s web --e2e-sdk-scope full \
+  --matrix-evidence-run <已完成的Matrix运行目录>)
 ```
 
 ## 部署
@@ -108,7 +111,9 @@ python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payer
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payee
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s full \
   --payer-language rust --payee-language rust
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix # simple：8 组
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix \
+  --e2e-sdk-scope full # full：50 组
 ```
 
 当前 E2E 的资金断言是 EVM 上的 x402 exact；Solana 使用真实节点验证依赖健康，不宣称已经完成 Solana 支付。

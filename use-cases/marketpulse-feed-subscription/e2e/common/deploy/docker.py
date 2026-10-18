@@ -16,11 +16,11 @@ from common.context import VerificationContext
 from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
 from common.project import E2E_ROOT, REPOSITORY_ROOT
+from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
 
 
-TRANSPORTS = ("mqtt", "grpc")
 MATRIX_REPORTS = frozenset({
     "s20_full.md", "s21_payer_signing.md", "s22_payee_settlement.md",
     "s23_balance_sync.md", "s24_gateway_balance.md",
@@ -30,6 +30,7 @@ COMPOSE_FILE = E2E_ROOT / "docker-compose.yaml"
 RUNTIME_ROOT = E2E_ROOT / "reports" / ".runtime"
 AGENTVAULT_CHART = REPOSITORY_ROOT / "deploy" / "helm" / "agentvault"
 AGENTVAULT_VALUES = E2E_ROOT / "common" / "agentvault-values.yaml"
+AGENTVAULT_CONFIG_TEMPLATE = "templates/platform/runtime-config-map.yaml"
 TOKEN_CONTRACT = "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 PAYEE_ADDRESS = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
 
@@ -109,6 +110,33 @@ def _load_matrix_checkpoint(target: Path, name: str) -> dict[str, str] | None:
     if any(not isinstance(outputs[key], str) or not outputs[key].strip() for key in MATRIX_REPORTS):
         raise RuntimeError(f"matrix checkpoint evidence is empty: {target}")
     return {str(key): str(value) for key, value in outputs.items()}
+
+
+def _ensure_matrix_plan(target: Path, scope: str) -> dict[str, Any]:
+    plan = {
+        "scope": scope,
+        "languages": list(matrix_languages(scope)),
+        "transports": list(TRANSPORTS),
+        "cases": [case.name for case in matrix_cases(scope)],
+    }
+    if target.is_file():
+        try:
+            stored = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"invalid matrix plan {target}: {error}") from error
+        if stored != plan:
+            raise RuntimeError(
+                f"matrix scope does not match the immutable resume plan: "
+                f"requested={scope}, stored={stored.get('scope') if isinstance(stored, dict) else 'invalid'}"
+            )
+        return plan
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(target)
+    return plan
+
+
 COMPOSE_PROVIDER_PREFIX = ">>>> Executing external compose provider "
 
 
@@ -221,7 +249,7 @@ class DockerE2EDeployer(E2EDeployer):
         rendered = self._run(
             [
                 "helm", "template", "agentvault-e2e", str(AGENTVAULT_CHART),
-                "-f", str(AGENTVAULT_VALUES), "--show-only", "templates/configmap.yaml",
+                "-f", str(AGENTVAULT_VALUES), "--show-only", AGENTVAULT_CONFIG_TEMPLATE,
             ]
         )
         marker = "  agentvault.yaml: |\n"
@@ -484,14 +512,14 @@ class DockerE2EDeployer(E2EDeployer):
             arguments.append("--pull")
         self._full(payer, payee, *arguments, *targets)
 
-    def _build_matrix_images(self) -> None:
+    def _build_matrix_images(self, languages: tuple[str, ...]) -> None:
         if self.context.skip_build:
             return
         self._target_budget()
         targets = [
             "agentvault", "admin-ui",
-            *(f"marketpulse-{language}" for language in LANGUAGES),
-            *(f"quantstream-{language}" for language in LANGUAGES),
+            *(f"marketpulse-{language}" for language in languages),
+            *(f"quantstream-{language}" for language in languages),
         ]
         arguments = ["build"]
         if not self.context.reuse_build:
@@ -835,8 +863,16 @@ class DockerE2EDeployer(E2EDeployer):
 
     def matrix(self) -> dict[str, str]:
         RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+        scope = self.context.e2e_sdk_scope
+        languages = matrix_languages(scope)
+        selected_cases = matrix_cases(scope)
+        total = len(selected_cases)
+        _ensure_matrix_plan(
+            self.context.report_root / "payment" / "matrix-plan.json",
+            scope,
+        )
         progress_path = RUNTIME_ROOT / "matrix-progress.log"
-        progress_path.write_text("matrix 0/50 initialized\n", encoding="utf-8")
+        progress_path.write_text(f"matrix scope={scope} 0/{total} initialized\n", encoding="utf-8")
         progress_lock = threading.Lock()
         stop = threading.Event()
 
@@ -862,10 +898,8 @@ class DockerE2EDeployer(E2EDeployer):
             return _load_matrix_checkpoint(target, name)
 
         cases = [
-            (transport_index * 25 + payer_index * 5 + payee_index + 1, transport, payer, payee)
-            for transport_index, transport in enumerate(TRANSPORTS)
-            for payer_index, payer in enumerate(LANGUAGES)
-            for payee_index, payee in enumerate(LANGUAGES)
+            (case_number, case.transport, case.payer, case.payee)
+            for case_number, case in enumerate(selected_cases, 1)
         ]
         completed: list[tuple[int, str, dict[str, str]]] = []
         pending: list[tuple[int, str, str, str]] = []
@@ -876,7 +910,7 @@ class DockerE2EDeployer(E2EDeployer):
                 pending.append((case_number, transport, payer, payee))
             else:
                 completed.append((case_number, name, outputs))
-        progress(f"matrix resume: restored {len(completed)}/50 validated checkpoints")
+        progress(f"matrix scope={scope} resume: restored {len(completed)}/{total} validated checkpoints")
 
         workers = min(self.context.matrix_workers, len(TRANSPORTS))
         groups: list[list[tuple[int, str, str, str]]] = [[] for _ in range(workers)]
@@ -885,7 +919,7 @@ class DockerE2EDeployer(E2EDeployer):
             groups[transport_index % workers].append(case)
 
         self.cleanup()
-        self._build_matrix_images()
+        self._build_matrix_images(languages)
 
         def run_group(
             worker_slot: int,
@@ -906,7 +940,7 @@ class DockerE2EDeployer(E2EDeployer):
                 if stop.is_set():
                     break
                 progress(
-                    f"matrix case {case_number}/50 start: payer={payer} payee={payee} "
+                    f"matrix scope={scope} case {case_number}/{total} start: payer={payer} payee={payee} "
                     f"transport={transport} worker={worker_slot + 1}",
                 )
                 case_context = replace(
@@ -927,13 +961,16 @@ class DockerE2EDeployer(E2EDeployer):
                 except BaseException as error:
                     stop.set()
                     progress(
-                        f"matrix case {case_number}/50 failed: payer={payer} payee={payee} "
+                        f"matrix scope={scope} case {case_number}/{total} failed: payer={payer} payee={payee} "
                         f"transport={transport} worker={worker_slot + 1} error={error!r}",
                     )
                     raise
                 finally:
                     case.cleanup()
-                progress(f"matrix case {case_number}/50 passed: {name} worker={worker_slot + 1}")
+                progress(
+                    f"matrix scope={scope} case {case_number}/{total} passed: "
+                    f"{name} worker={worker_slot + 1}"
+                )
                 worker._wait_host_capacity()
             return completed
 
@@ -951,8 +988,10 @@ class DockerE2EDeployer(E2EDeployer):
         if failure is not None:
             raise failure
         completed.sort(key=lambda item: item[0])
-        if len(completed) != 50:
-            raise RuntimeError(f"cross-language/transport matrix completed only {len(completed)} of 50 cases")
+        if len(completed) != total:
+            raise RuntimeError(
+                f"SDK matrix scope={scope} completed only {len(completed)} of {total} cases"
+            )
         details: dict[str, list[str]] = {
             "s21_payer_signing.md": [],
             "s22_payee_settlement.md": [],
@@ -965,7 +1004,10 @@ class DockerE2EDeployer(E2EDeployer):
             for report, entries in details.items():
                 entries.append(f"[{name}]\n{outputs[report]}")
         return {
-            "s30_matrix.md": "passed 50/50 isolated cases\n\n" + "\n".join(passed),
+            "s30_matrix.md": (
+                f"scope={scope} languages={','.join(languages)} transports={','.join(TRANSPORTS)}\n"
+                f"passed {total}/{total} isolated cases\n\n" + "\n".join(passed)
+            ),
             **{report: "\n\n".join(entries) for report, entries in details.items()},
         }
 

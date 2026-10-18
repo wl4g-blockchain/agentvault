@@ -148,7 +148,7 @@ async fn sqlite_provisioning_is_idempotent_encrypted_and_drift_safe() {
             "max_per_payment": "100", "max_per_day": "1000"
         }],
         "scenarios": [{
-            "id": "scenario", "client_id": "client", "external_ref": "news-ingestion",
+            "id": "scenario", "client_id": "client",
             "name": "News ingestion"
         }],
         "policies": [{

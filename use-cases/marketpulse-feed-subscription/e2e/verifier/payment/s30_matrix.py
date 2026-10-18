@@ -1,25 +1,35 @@
 from __future__ import annotations
 
+import re
+
 from common.context import VerificationContext
 from common.deploy import create_deployer
+from common.sdk_matrix import matrix_cases
 
 
 def verify(context: VerificationContext) -> dict[str, str]:
     reports = create_deployer(context).matrix()
     evidence = reports.get("s30_matrix.md", "")
-    expected = {
-        f"payer={payer} payee={payee} transport={transport}"
-        for transport in ("mqtt", "grpc")
-        for payer in ("rust", "go", "python", "typescript", "java")
-        for payee in ("rust", "go", "python", "typescript", "java")
-    }
-    missing = sorted(case for case in expected if case not in evidence)
-    if "passed 50/50 isolated cases" not in evidence or missing:
-        raise RuntimeError(f"matrix evidence is incomplete; missing={missing}")
+    cases = matrix_cases(context.e2e_sdk_scope)
+    expected = {case.name for case in cases}
+    total = len(cases)
+    reported = {line for line in evidence.splitlines() if line.startswith("payer=")}
+    if f"scope={context.e2e_sdk_scope} " not in evidence:
+        raise RuntimeError(f"matrix evidence omitted scope={context.e2e_sdk_scope}")
+    if f"passed {total}/{total} isolated cases" not in evidence or reported != expected:
+        raise RuntimeError(
+            f"matrix evidence does not match scope={context.e2e_sdk_scope}; "
+            f"missing={sorted(expected - reported)}, extra={sorted(reported - expected)}"
+        )
     for report in ("s21_payer_signing.md", "s22_payee_settlement.md",
                    "s23_balance_sync.md", "s24_gateway_balance.md"):
         detail = reports.get(report, "")
-        missing_details = sorted(case for case in expected if f"[{case}]" not in detail)
-        if missing_details:
-            raise RuntimeError(f"matrix did not preserve all 50 {report} verifications: {missing_details}")
+        detailed_cases = re.findall(r"^\[(payer=.*)\]$", detail, re.MULTILINE)
+        detailed_set = set(detailed_cases)
+        if len(detailed_cases) != total or detailed_set != expected:
+            raise RuntimeError(
+                f"matrix scope={context.e2e_sdk_scope} did not preserve all "
+                f"{total} {report} verifications: missing={sorted(expected - detailed_set)}, "
+                f"extra={sorted(detailed_set - expected)}"
+            )
     return reports

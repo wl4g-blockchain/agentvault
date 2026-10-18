@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn admin_pages_are_bounded_and_default_to_one_hundred_rows() {
+fn admin_pages_are_bounded_and_default_to_ten_rows() {
     assert_eq!(AdminPageQuery::default().page().unwrap(), PageRequest::default());
     assert!(AdminPageQuery {
         offset: None,
@@ -15,6 +15,73 @@ fn admin_pages_are_bounded_and_default_to_one_hundred_rows() {
     }
     .page()
     .is_err());
+}
+
+#[test]
+fn admin_payment_and_ledger_queries_preserve_financial_filters() {
+    let payments = PaymentListQuery {
+        scenario_id: Some("scenario-1".to_owned()),
+        direction: Some(PaymentDirection::Outbound),
+        status: Some(PaymentStatus::Settled),
+        page: AdminPageQuery {
+            offset: Some(25),
+            limit: Some(50),
+        },
+        ..PaymentListQuery::default()
+    }
+    .into_domain()
+    .expect("payment query");
+    assert_eq!(payments.scenario_id.as_deref(), Some("scenario-1"));
+    assert_eq!(payments.direction, Some(PaymentDirection::Outbound));
+    assert_eq!(payments.status, Some(PaymentStatus::Settled));
+    assert_eq!(payments.page, PageRequest { offset: 25, limit: 50 });
+
+    let ledger = LedgerListQuery {
+        wallet_id: Some("wallet-1".to_owned()),
+        asset: Some("USDC".to_owned()),
+        page: AdminPageQuery {
+            offset: Some(10),
+            limit: Some(20),
+        },
+        ..LedgerListQuery::default()
+    }
+    .into_domain()
+    .expect("ledger query");
+    assert_eq!(ledger.wallet_id.as_deref(), Some("wallet-1"));
+    assert_eq!(ledger.asset.as_deref(), Some("USDC"));
+    assert_eq!(ledger.page, PageRequest { offset: 10, limit: 20 });
+}
+
+#[test]
+fn scenario_creation_normalizes_multi_wallet_policy_membership() {
+    let request = CreateScenarioRequest {
+        id: "scenario-1".to_owned(),
+        client_id: "client-1".to_owned(),
+        name: "Market data payments".to_owned(),
+        policy: InitialPolicyRequest {
+            id: "policy-1".to_owned(),
+            wallet_ids: vec!["wallet-b".to_owned(), "wallet-a".to_owned(), "wallet-b".to_owned()],
+            protocols: vec!["x402".to_owned()],
+            networks: vec!["eip155:31337".to_owned()],
+            assets: vec![asset()],
+            budget_unit: asset().budget_unit(),
+            allowed_recipients: Vec::new(),
+            allowed_origins: Vec::new(),
+            inbound_limits: None,
+            outbound_limits: Some(crate::model::PaymentPolicyLimits {
+                max_per_payment: Amount::new(10),
+                max_per_day: Amount::new(100),
+                approval_threshold: None,
+                approval_enabled: true,
+                approval_overage: None,
+            }),
+            enabled: true,
+        },
+    };
+    let (scenario, policy) = request.into_domain(123);
+    assert_eq!(scenario.created_at, 123);
+    assert_eq!(policy.scenario_id, scenario.id);
+    assert_eq!(policy.wallet_ids, ["wallet-a", "wallet-b"]);
 }
 
 #[test]
@@ -76,7 +143,15 @@ fn authorization_request_rejects_caller_selected_wallet_and_payment_projection()
         }
     });
     assert!(serde_json::from_value::<AuthorizePaymentRequest>(base.clone()).is_ok());
-    for field in ["wallet_id", "policy_id", "asset", "amount", "recipient", "protocol"] {
+    for field in [
+        "client_id",
+        "wallet_id",
+        "policy_id",
+        "asset",
+        "amount",
+        "recipient",
+        "protocol",
+    ] {
         let mut request = base.clone();
         request[field] = json!("caller-selected");
         assert!(
@@ -162,6 +237,17 @@ fn approval_page_query_is_bounded_and_preserves_offset() {
         ..query
     };
     assert!(matches!(approval_page_request(&invalid), Err(Error::InvalidRequest(_))));
+
+    let default = ApprovalQuery {
+        scenario_id: "scenario-1".to_owned(),
+        status: Some("pending".to_owned()),
+        offset: None,
+        limit: None,
+    };
+    assert_eq!(
+        approval_page_request(&default).expect("default page"),
+        PageRequest::default()
+    );
 }
 
 #[test]

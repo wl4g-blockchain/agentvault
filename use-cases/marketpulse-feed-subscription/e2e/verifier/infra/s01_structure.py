@@ -19,6 +19,7 @@ REQUIRED = (
     "verifier/payment/s23_balance_sync.py",
     "verifier/payment/s24_gateway_balance.py",
     "verifier/payment/s30_matrix.py",
+    "verifier/web/s40_dashboard.py",
     "deploy/anvil/docker-compose.yaml",
     "deploy/solana/docker-compose.yaml",
     "deploy/facilitator/docker-compose.yaml",

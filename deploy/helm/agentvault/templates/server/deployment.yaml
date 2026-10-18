@@ -16,7 +16,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/platform/runtime-config-map.yaml") . | sha256sum }}
         checksum/secrets: {{ .Values.secrets | toJson | sha256sum }}
         {{- if eq $provider "vault" }}
         {{- include "agentvault.vaultAnnotations" . | nindent 8 }}

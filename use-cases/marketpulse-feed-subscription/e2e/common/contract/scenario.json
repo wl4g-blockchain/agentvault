@@ -77,13 +77,13 @@
   "scenarios": [
     {
       "id": "scenario-marketpulse-feed", "client_id": "client-marketpulse",
-      "external_ref": "real-time-news-sales", "name": "MarketPulse paid real-time feed"
+      "name": "MarketPulse paid real-time feed"
     },
-    {"id": "scenario-quantstream-rust-market-ingestion", "client_id": "client-quantstream-rust", "external_ref": "rust-market-news-ingestion", "name": "QuantStream Rust market news ingestion"},
-    {"id": "scenario-quantstream-go-market-ingestion", "client_id": "client-quantstream-go", "external_ref": "go-market-news-ingestion", "name": "QuantStream Go market news ingestion"},
-    {"id": "scenario-quantstream-python-market-ingestion", "client_id": "client-quantstream-python", "external_ref": "python-market-news-ingestion", "name": "QuantStream Python market news ingestion"},
-    {"id": "scenario-quantstream-typescript-market-ingestion", "client_id": "client-quantstream-typescript", "external_ref": "typescript-market-news-ingestion", "name": "QuantStream TypeScript market news ingestion"},
-    {"id": "scenario-quantstream-java-market-ingestion", "client_id": "client-quantstream-java", "external_ref": "java-market-news-ingestion", "name": "QuantStream Java market news ingestion"}
+    {"id": "scenario-quantstream-rust-market-ingestion", "client_id": "client-quantstream-rust", "name": "QuantStream Rust market news ingestion"},
+    {"id": "scenario-quantstream-go-market-ingestion", "client_id": "client-quantstream-go", "name": "QuantStream Go market news ingestion"},
+    {"id": "scenario-quantstream-python-market-ingestion", "client_id": "client-quantstream-python", "name": "QuantStream Python market news ingestion"},
+    {"id": "scenario-quantstream-typescript-market-ingestion", "client_id": "client-quantstream-typescript", "name": "QuantStream TypeScript market news ingestion"},
+    {"id": "scenario-quantstream-java-market-ingestion", "client_id": "client-quantstream-java", "name": "QuantStream Java market news ingestion"}
   ],
   "policies": [
     {

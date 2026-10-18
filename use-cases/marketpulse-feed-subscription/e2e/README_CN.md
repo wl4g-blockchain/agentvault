@@ -138,8 +138,10 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
-python3 runner.py -s matrix --matrix-workers 2
-python3 runner.py -s matrix --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
+python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2 = 8
+python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
+python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
+python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <已完成的Matrix运行目录>
 python3 runner.py cleanup
 ```
 
@@ -149,16 +151,24 @@ python3 runner.py cleanup
 保留以便人工验收和诊断；需要自动回收时显式加 `--cleanup-after-run`，之后回收则
 运行 `runner.py cleanup`。
 
+`web` 场景沿用 AuthGuard 的浏览器验证模式：先确认 `s21`、`s22`、`s24`、`s30`
+包含所选 SDK scope 下完全相同的已完成 Matrix Case，再把不可变报告事实映射成生产 Dashboard
+同源 API fixture。真实无头 Chromium 会断言并截图 Payer/Payee 每页 10 条及跨页、
+10 条可见 Ledger 背后的完整事实守恒、含 12 个 Wallet 的单列滚动多选下拉，以及
+Scenario + 两个 Wallet 的原子创建。该场景明确是报告证据驱动的
+UI 验收，不会把相互隔离的 Case 数据库伪装成一个生产数据库。
+
 ## Full Flow 必须提供的证据
 
-每次 Full Flow 明确选择一组付款/收款语言和一种签名传输；`matrix` 默认以两个
-有界 Worker 执行 5 个 Payer × 5 个 Payee × MQTT/gRPC = 50 个相互隔离的组合：
-一个 Worker 专属 MQTT，另一个专属 gRPC。两个 Worker 使用不同 Compose Project、
+每次 Full Flow 明确选择一组付款/收款语言和一种签名传输；`matrix` 默认使用
+`--e2e-sdk-scope simple`，执行 Rust/Go Payer × Rust/Go Payee × MQTT/gRPC = 8 个
+相互隔离的组合；`--e2e-sdk-scope full` 才执行完整 5×5×2 = 50 组。默认两个
+有界 Worker：一个专属 MQTT，另一个专属 gRPC。两个 Worker 使用不同 Compose Project、
 端口段、运行时配置、数据库卷与链状态；`--matrix-workers 1` 可显式串行运行。
 
-每个 Case 只有在五份详细验证全部通过后才写入绑定 Case 身份的 Checkpoint。宿主机或
-Runner 中断后，`--resume-run` 会校验既有 Checkpoint，拒绝身份不匹配或损坏的证据，
-并只执行同一不可变报告目录中尚未完成的 Case。
+每个 Case 只有在五份详细验证全部通过后才写入绑定 Case 身份的 Checkpoint，报告目录
+还会保存不可变 SDK scope/plan。宿主机或 Runner 中断后，`--resume-run` 会同时校验
+plan 与既有 Checkpoint，拒绝 scope/身份不匹配或损坏证据，只执行尚未完成的 Case。
 
 1. 免费 MCP 真实交付，收费 Tool 首次返回真正的 x402 v2 402；
 2. 两个稳定逻辑操作，且交付重试不会二次授权或更换 Credential；
