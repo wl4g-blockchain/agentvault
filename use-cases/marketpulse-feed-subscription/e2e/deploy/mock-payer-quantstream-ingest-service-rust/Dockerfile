@@ -6,9 +6,9 @@ COPY src/adapters/rust /build/src/adapters/rust
 COPY src/adapters/proto /build/src/adapters/proto
 COPY use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust
 WORKDIR /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust/target \
+RUN --mount=type=cache,id=quantstream-rust-cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=quantstream-rust-cargo-git,sharing=locked,target=/usr/local/cargo/git \
+    --mount=type=cache,id=quantstream-rust-target,sharing=locked,target=/build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust/target \
     cargo build --release --locked \
     && install -m 0755 target/release/quantstream-ingestor-rust /quantstream-ingestor-rust
 

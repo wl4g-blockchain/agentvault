@@ -21,6 +21,7 @@ from common.deploy.docker import (
     _parse_cast_address,
     _parse_cast_uint,
 )
+from common.project import E2E_ROOT
 
 
 class BuildProxyEnvironmentTest(unittest.TestCase):
@@ -114,6 +115,21 @@ class BuildBoundaryTest(unittest.TestCase):
             "quantstream-rust",
             "quantstream-go",
         )
+
+    def test_parallel_rust_builds_use_isolated_locked_caches(self) -> None:
+        dockerfiles = {
+            "marketpulse-rust": E2E_ROOT / "deploy" / "mock-payee-marketpulse-rust-service" / "Dockerfile",
+            "quantstream-rust": E2E_ROOT / "deploy" / "mock-payer-quantstream-ingest-service-rust" / "Dockerfile",
+        }
+        cache_names = ("cargo-registry", "cargo-git", "target")
+        for service, dockerfile in dockerfiles.items():
+            contents = dockerfile.read_text(encoding="utf-8")
+            for cache_name in cache_names:
+                self.assertIn(
+                    f"id={service}-{cache_name},sharing=locked",
+                    contents,
+                    f"{service} must isolate its writable {cache_name} cache",
+                )
 
 
 class MatrixCheckpointTest(unittest.TestCase):

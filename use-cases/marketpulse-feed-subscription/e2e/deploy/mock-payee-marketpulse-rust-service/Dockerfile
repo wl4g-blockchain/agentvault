@@ -6,9 +6,9 @@ COPY src/adapters/rust /build/src/adapters/rust
 COPY src/adapters/proto /build/src/adapters/proto
 COPY use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service
 WORKDIR /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service/target \
+RUN --mount=type=cache,id=marketpulse-rust-cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=marketpulse-rust-cargo-git,sharing=locked,target=/usr/local/cargo/git \
+    --mount=type=cache,id=marketpulse-rust-target,sharing=locked,target=/build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service/target \
     cargo build --release --locked \
     && install -m 0755 target/release/mock-payee-marketpulse-rust-service /mock-payee-marketpulse-rust-service
 
