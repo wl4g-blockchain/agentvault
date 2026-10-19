@@ -293,7 +293,8 @@ class DockerE2EDeployer(E2EDeployer):
         command = [*self.compose, "down", "--volumes", "--remove-orphans"]
         first = execute(command, E2E_ROOT, self.environment, 180)
         inventory = self._owned_container_inventory()
-        if not inventory:
+        volumes = self._owned_volumes()
+        if first.returncode == 0 and not inventory and not volumes:
             return first.stdout.strip()
 
         # Every service shares Anvil's network namespace. Podman Compose can
@@ -310,18 +311,34 @@ class DockerE2EDeployer(E2EDeployer):
             removal_output.append(removed.stdout)
 
         second = execute(command, E2E_ROOT, self.environment, 180)
+        volume_output = self._remove_owned_volumes()
         for _ in range(20):
-            if not self._owned_containers():
+            if not self._owned_containers() and not self._owned_volumes():
                 break
             time.sleep(0.25)
-        remaining = self._owned_containers()
+        remaining_containers = self._owned_containers()
+        remaining_volumes = self._owned_volumes()
+        if remaining_containers or remaining_volumes:
+            raise RuntimeError(
+                f"E2E cleanup left owned containers {remaining_containers} and volumes {remaining_volumes}:\n"
+                + first.stdout[-4096:] + "\n" + "".join(removal_output)[-4096:] + "\n"
+                + second.stdout[-4096:] + "\n" + volume_output[-4096:]
+            )
+        return (first.stdout + "".join(removal_output) + second.stdout + volume_output).strip()
+
+    def _remove_owned_volumes(self) -> str:
+        volumes = self._owned_volumes()
+        if not volumes:
+            return ""
+        if volumes == ["<volume inventory unavailable>"]:
+            raise RuntimeError("E2E cleanup could not inventory its owned volumes")
+        status, output = self._try([*self.docker, "volume", "rm", "--force", *volumes], 60)
+        remaining = self._owned_volumes()
         if remaining:
             raise RuntimeError(
-                f"E2E cleanup left owned containers {remaining}:\n"
-                + first.stdout[-4096:] + "\n" + "".join(removal_output)[-4096:] + "\n"
-                + second.stdout[-4096:]
+                f"E2E cleanup could not remove owned volumes {remaining}; exit={status}:\n{output[-4096:]}"
             )
-        return (first.stdout + "".join(removal_output) + second.stdout).strip()
+        return output
 
     def _owned_container_inventory(self) -> list[tuple[str, str, str]]:
         status, output = self._try([
@@ -366,6 +383,19 @@ class DockerE2EDeployer(E2EDeployer):
         ])
         if status != 0:
             return ["<container inventory unavailable>"]
+        return [line.strip() for line in output.splitlines() if line.strip()]
+
+    def _owned_volumes(self) -> list[str]:
+        status, output = self._try([
+            *self.docker,
+            "volume",
+            "ls",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={self.project}",
+        ])
+        if status != 0:
+            return ["<volume inventory unavailable>"]
         return [line.strip() for line in output.splitlines() if line.strip()]
 
     def smoke(self, role: str) -> str:

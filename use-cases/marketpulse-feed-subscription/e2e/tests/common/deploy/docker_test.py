@@ -180,6 +180,29 @@ class FacilitatorRuntimeEvidenceTest(unittest.TestCase):
             deployer._facilitator_capabilities()
 
 
+class CleanupIsolationTest(unittest.TestCase):
+    def test_removes_only_volumes_owned_by_the_compose_project(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._owned_volumes = Mock(side_effect=[["agentvault-e2e-w1_postgres-data"], []])
+        deployer._try = Mock(return_value=(0, "removed\n"))
+
+        output = deployer._remove_owned_volumes()
+
+        self.assertEqual(output, "removed\n")
+        deployer._try.assert_called_once_with(
+            ["docker", "volume", "rm", "--force", "agentvault-e2e-w1_postgres-data"],
+            60,
+        )
+
+    def test_reports_owned_volume_inventory_failures(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer._owned_volumes = Mock(return_value=["<volume inventory unavailable>"])
+
+        with self.assertRaisesRegex(RuntimeError, "could not inventory"):
+            deployer._remove_owned_volumes()
+
+
 class MatrixCheckpointTest(unittest.TestCase):
     def test_matrix_plan_prevents_cross_scope_resume(self) -> None:
         with TemporaryDirectory() as directory:
