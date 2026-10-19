@@ -398,15 +398,22 @@ class DockerE2EDeployer(E2EDeployer):
         self._compose(profiles, "exec", "-T", "emqx", "/opt/emqx/bin/emqx", "ctl", "status")
         self._wait_http(self._url("E2E_JAEGER_UI_PORT"), 5)
         if role == "payee":
-            _, _, raw = self._http(self._url("E2E_FACILITATOR_PORT", "/supported"))
-            encoded = json.dumps(json.loads(raw))
-            if "eip155:31337" not in encoded or "exact" not in encoded:
-                raise RuntimeError("facilitator does not advertise x402 exact on eip155:31337")
+            self._facilitator_capabilities()
         else:
             output = self._compose(profiles, "ps", "facilitator")
             if "Up" in output:
                 raise RuntimeError("payer profile unexpectedly started the facilitator")
         return f"dependency {role} smoke passed; real Anvil, Solana, PostgreSQL, EMQX and Jaeger are healthy"
+
+    def _facilitator_capabilities(self) -> str:
+        status, _, raw = self._http(self._url("E2E_FACILITATOR_PORT", "/supported"))
+        try:
+            encoded = json.dumps(json.loads(raw), sort_keys=True)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("facilitator returned invalid /supported JSON") from error
+        if status != 200 or "eip155:31337" not in encoded or "exact" not in encoded:
+            raise RuntimeError("facilitator does not advertise x402 exact on eip155:31337")
+        return encoded
 
     def _url(self, port_name: str, path: str = "/") -> str:
         return f"http://127.0.0.1:{self.environment[port_name]}{path}"
@@ -888,6 +895,7 @@ class DockerE2EDeployer(E2EDeployer):
                     payee_language,
                     automatic_logs + "\n" + approval_logs,
                 ),
+                runtime={"facilitator": self._facilitator_capabilities()},
             )
             from verifier.payment import s21_payer_signing, s22_payee_settlement, s23_balance_sync, s24_gateway_balance
 

@@ -16,6 +16,7 @@ class FullFlowEvidence:
     initial_balances: dict[str, int]
     final_balances: dict[str, int]
     logs: dict[str, str]
+    runtime: dict[str, str]
 
 
 class E2EDeployer(ABC):

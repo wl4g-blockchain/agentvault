@@ -33,7 +33,7 @@ def _require_bound(logs: str, event: str, *identities: str) -> None:
 def verify_evidence(evidence: FullFlowEvidence) -> str:
     payee_logs = evidence.logs.get("payee", "")
     vault_logs = evidence.logs.get("agentvault", "")
-    facilitator_logs = evidence.logs.get("facilitator", "")
+    facilitator_runtime = evidence.runtime.get("facilitator", "")
     missing = [event for event in PAYEE_EVENTS if event not in payee_logs]
     if missing:
         raise RuntimeError("payee evidence omitted events: " + ", ".join(missing))
@@ -66,8 +66,8 @@ def verify_evidence(evidence: FullFlowEvidence) -> str:
         _require_bound(vault_logs, "agentvault.facilitator.settle.completed", run_id)
     if evidence.audit.get("paid_deliveries") != 2 or evidence.audit.get("merchant_delivery_status") != "delivered":
         raise RuntimeError("MarketPulse released data without two durable settled deliveries")
-    if not facilitator_logs.strip():
-        raise RuntimeError("real Facilitator produced no runtime evidence")
+    if "eip155:31337" not in facilitator_runtime or "exact" not in facilitator_runtime:
+        raise RuntimeError("real Facilitator did not expose the required runtime capabilities")
     return (
         f"verified {evidence.payee_language} PayeeMiddleware: each run is bound across intercept -> challenge -> "
         f"real Facilitator verify -> settle -> resource release; runs={','.join(run_ids)} "

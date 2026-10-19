@@ -153,6 +153,33 @@ class ApprovalContainerDiagnosticsTest(unittest.TestCase):
         deployer._try.assert_called_once()
 
 
+class FacilitatorRuntimeEvidenceTest(unittest.TestCase):
+    def test_canonicalizes_supported_exact_chain_capabilities(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.environment = {"E2E_FACILITATOR_PORT": "38085"}
+        deployer._http = Mock(return_value=(200, {}, '{"schemes":["exact"],"chains":["eip155:31337"]}'))
+
+        capabilities = deployer._facilitator_capabilities()
+
+        self.assertEqual(capabilities, '{"chains": ["eip155:31337"], "schemes": ["exact"]}')
+
+    def test_rejects_missing_required_capability(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.environment = {"E2E_FACILITATOR_PORT": "38085"}
+        deployer._http = Mock(return_value=(200, {}, '{"chains":["eip155:31337"]}'))
+
+        with self.assertRaisesRegex(RuntimeError, "does not advertise"):
+            deployer._facilitator_capabilities()
+
+    def test_rejects_invalid_supported_json(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.environment = {"E2E_FACILITATOR_PORT": "38085"}
+        deployer._http = Mock(return_value=(200, {}, "not-json"))
+
+        with self.assertRaisesRegex(RuntimeError, "invalid /supported JSON"):
+            deployer._facilitator_capabilities()
+
+
 class MatrixCheckpointTest(unittest.TestCase):
     def test_matrix_plan_prevents_cross_scope_resume(self) -> None:
         with TemporaryDirectory() as directory:
