@@ -3351,7 +3351,7 @@ mod payment {
         model::{
             payment_recipients_match, Amount, ApprovalRequest, BudgetUnit, PaymentChallenge, PaymentCredential,
             PaymentDirection, PaymentEvent, PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentStatus,
-            ReservationStatus,
+            ReservationStatus, MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS,
         },
         storage::{
             AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
@@ -4663,7 +4663,16 @@ mod payment {
         .await
         .map_err(|error| storage_error("count wallet scenario sharing", error))?;
 
-        assert_no_future_ledger(connection, scenario_id, wallet_id, direction, budget_unit, now).await?;
+        let latest_effective_at = now.saturating_add(MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS);
+        assert_no_ledger_beyond_future_skew(
+            connection,
+            scenario_id,
+            wallet_id,
+            direction,
+            budget_unit,
+            latest_effective_at,
+        )
+        .await?;
         assert_consumed_intents_have_ledger(connection, scenario_id, wallet_id, direction, budget_unit).await?;
 
         let scenario_reserved = load_amounts(
@@ -4692,7 +4701,7 @@ mod payment {
             direction,
             budget_unit,
             day_started_at,
-            now,
+            latest_effective_at,
         )
         .await?;
         let wallet_confirmed = load_ledger_amounts(
@@ -4703,7 +4712,7 @@ mod payment {
             direction,
             budget_unit,
             day_started_at,
-            now,
+            latest_effective_at,
         )
         .await?;
 
@@ -4747,7 +4756,7 @@ mod payment {
         direction: PaymentDirection,
         unit: &BudgetUnit,
         day_started_at: i64,
-        now: i64,
+        latest_effective_at: i64,
     ) -> Result<Amount> {
         let values: Vec<String> = sqlx::query_scalar(sql)
             .bind(scope_id)
@@ -4755,7 +4764,7 @@ mod payment {
             .bind(&unit.asset)
             .bind(i16::from(unit.decimals))
             .bind(day_started_at)
-            .bind(now)
+            .bind(latest_effective_at)
             .fetch_all(connection)
             .await
             .map_err(|error| storage_error("load confirmed ledger amounts", error))?;
@@ -4778,13 +4787,13 @@ mod payment {
             .ok_or_else(|| Error::Storage(format!("{scope} payment usage overflowed u128")))
     }
 
-    async fn assert_no_future_ledger(
+    async fn assert_no_ledger_beyond_future_skew(
         connection: &mut PgConnection,
         scenario_id: &str,
         wallet_id: &str,
         direction: PaymentDirection,
         unit: &BudgetUnit,
-        now: i64,
+        latest_effective_at: i64,
     ) -> Result<()> {
         let count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pay_ledger WHERE (scenario_id = $1 OR wallet_id = $2) AND direction = $3 \
@@ -4795,13 +4804,13 @@ mod payment {
         .bind(direction.as_str())
         .bind(&unit.asset)
         .bind(i16::from(unit.decimals))
-        .bind(now)
+        .bind(latest_effective_at)
         .fetch_one(connection)
         .await
         .map_err(|error| storage_error("verify ledger effective times", error))?;
         if count != 0 {
             return Err(Error::Storage(
-                "future-effective ledger facts make the current budget ambiguous".to_owned(),
+                "ledger effective time exceeds the bounded future-skew window".to_owned(),
             ));
         }
         Ok(())

@@ -580,7 +580,9 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     settled.tx_hash = Some(unique("0xpg-settlement"));
     settled.updated_at += 1;
     settled.next_reconcile_at = None;
-    settled.settled_at = Some(settled.updated_at);
+    let observed_at = settled.updated_at;
+    let effective_at = observed_at + 30;
+    settled.settled_at = Some(effective_at);
     let ledger = PaymentLedgerEntry {
         id: unique("pg-ledger"),
         intent_id: Some(settled.id.clone()),
@@ -596,8 +598,8 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         effect_ref: None,
         transfer_ref: None,
         reversal_of: None,
-        effective_at: settled.updated_at,
-        created_at: settled.updated_at,
+        effective_at,
+        created_at: observed_at,
     };
     let outbox = OutboxMessage {
         id: unique("pg-outbox"),
@@ -652,7 +654,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
             PaymentDirection::Outbound,
             &unit,
             0,
-            settled.updated_at,
+            observed_at,
         )
         .await
         .unwrap();
@@ -683,7 +685,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
             PaymentDirection::Outbound,
             &unit,
             0,
-            settled.updated_at,
+            observed_at,
         )
         .await
         .unwrap();

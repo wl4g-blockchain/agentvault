@@ -16,6 +16,9 @@ pub use approval::{
 pub use client::PaymentClient;
 pub use event::{PaymentEvent, PaymentEventType};
 pub use ledger::{settlement_posting_key, LedgerEntryType, PaymentLedgerEntry};
+pub(crate) use ledger::{
+    MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS, MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS,
+};
 pub use offer::PaymentOffer;
 pub use payment::{
     Amount, AssetIdentity, BudgetUnit, PaymentAuthorizationResult, PaymentChallenge, PaymentCredential,

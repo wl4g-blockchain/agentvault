@@ -3,6 +3,14 @@ use sha2::{Digest as _, Sha256};
 
 use super::payment::{Amount, AssetIdentity, PaymentDirection};
 
+// The official x402 EVM client backdates EIP-3009 authorizations by ten
+// minutes. Conversely, consensus and RPC propagation can expose a trusted
+// block timestamp slightly ahead of the observing application wall clock.
+// Settlement validation and budget aggregation must share these bounds so a
+// valid ledger fact cannot temporarily make its own wallet unusable.
+pub(crate) const MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS: i64 = 10 * 60;
+pub(crate) const MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS: i64 = 60;
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LedgerEntryType {

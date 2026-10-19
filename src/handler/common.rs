@@ -1,14 +1,9 @@
 use reqwest::Url;
 
-use crate::{Error, Result};
-
-// The official x402 EVM client backdates EIP-3009 authorizations by ten
-// minutes. A confirmed block timestamp may therefore legitimately precede
-// the application wall clock that created the local intent. Conversely, EVM
-// consensus and RPC propagation can expose a block timestamp slightly ahead
-// of a request-start timestamp. Keep both tolerances explicit and bounded.
-const MAX_EFFECTIVE_TIME_PAST_SKEW_SECONDS: i64 = 10 * 60;
-const MAX_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS: i64 = 60;
+use crate::{
+    model::{MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS, MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS},
+    Error, Result,
+};
 
 /// Validates bounded identifiers accepted by payment application commands.
 pub(super) fn validate_identifier(field: &str, value: &str) -> Result<()> {
@@ -47,8 +42,8 @@ pub(super) const fn utc_day_start(now: i64) -> i64 {
 /// Transaction identity, amount, recipient, and authorization-window checks
 /// remain the responsibility of the evidence adapter that produced it.
 pub(super) fn validate_trusted_effective_time(created_at: i64, effective_at: i64, observed_at: i64) -> Result<()> {
-    let earliest = created_at.saturating_sub(MAX_EFFECTIVE_TIME_PAST_SKEW_SECONDS);
-    let latest = observed_at.saturating_add(MAX_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS);
+    let earliest = created_at.saturating_sub(MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS);
+    let latest = observed_at.saturating_add(MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS);
     if effective_at < 0 || effective_at < earliest || effective_at > latest {
         return Err(Error::Settlement(
             "trusted settlement effective time exceeds bounded clock skew".to_owned(),

@@ -1092,12 +1092,16 @@ mod transaction {
 
             /// Returns usage in `budget_unit`: all matching `direction` reservations,
             /// without a `created_at` cutoff, plus confirmed same-direction ledger
-            /// facts where `day_started_at <= effective_at <= now`. Scenario usage
+            /// facts where `day_started_at <= effective_at <= now + bounded trusted
+            /// settlement clock skew`. Scenario usage
             /// spans every current or historical policy (and wallet) for `scenario_id`;
             /// policy rotation must never reset it. Wallet usage spans every scenario. A complete
-            /// [`crate::model::AssetIdentity`] must never be the grouping key. Future
-            /// effective times, or any matching `consumed` intent without its durable
-            /// same-direction ledger fact, are invariant violations and must fail closed.
+            /// [`crate::model::AssetIdentity`] must never be the grouping key. Effective
+            /// times beyond the shared trusted-settlement clock-skew bound, or any
+            /// matching `consumed` intent without its durable same-direction ledger fact,
+            /// are invariant violations and must fail closed. Facts inside the bound are
+            /// included immediately so confirmed spending cannot bypass a budget while
+            /// the application clock catches up.
             async fn budget_snapshot(
                 &self,
                 scenario_id: &str,

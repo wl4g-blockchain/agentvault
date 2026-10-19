@@ -625,7 +625,9 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
     settled.settled_amount = settled.amount;
     settled.tx_hash = Some("0xsettlement".to_owned());
     settled.updated_at += 1;
-    settled.settled_at = Some(settled.updated_at);
+    let observed_at = settled.updated_at;
+    let effective_at = observed_at + 30;
+    settled.settled_at = Some(effective_at);
     let ledger = PaymentLedgerEntry {
         id: "ledger-1".to_owned(),
         intent_id: Some(settled.id.clone()),
@@ -641,8 +643,8 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         effect_ref: None,
         transfer_ref: None,
         reversal_of: None,
-        effective_at: settled.updated_at,
-        created_at: settled.updated_at,
+        effective_at,
+        created_at: observed_at,
     };
     storage
         .commit_settlement(SettlementWrite {
@@ -665,7 +667,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
             PaymentDirection::Outbound,
             &unit,
             0,
-            settled.updated_at,
+            observed_at,
         )
         .await
         .unwrap();
@@ -698,6 +700,39 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
     assert!(matches!(
         storage.append(&reversal).await.unwrap(),
         IdempotentWrite::Inserted(_)
+    ));
+
+    let excessive_future = PaymentLedgerEntry {
+        id: "ledger-excessive-future".to_owned(),
+        intent_id: None,
+        scenario_id: Some(scenario.id.clone()),
+        wallet_id: wallet.id.clone(),
+        entry_type: LedgerEntryType::Payment,
+        direction: PaymentDirection::Outbound,
+        asset,
+        amount: Amount::new(1),
+        posting_key: "chain:excessive-future".to_owned(),
+        tx_hash: Some("0xexcessivefuture".to_owned()),
+        settlement_ref: None,
+        effect_ref: None,
+        transfer_ref: None,
+        reversal_of: None,
+        effective_at: observed_at + 61,
+        created_at: observed_at,
+    };
+    storage.append(&excessive_future).await.unwrap();
+    assert!(matches!(
+        storage
+            .budget_snapshot(
+                &scenario.id,
+                &wallet.id,
+                PaymentDirection::Outbound,
+                &unit,
+                0,
+                observed_at,
+            )
+            .await,
+        Err(Error::Storage(reason)) if reason.contains("bounded future-skew window")
     ));
 }
 
