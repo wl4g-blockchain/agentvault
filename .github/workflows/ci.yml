@@ -313,6 +313,9 @@ jobs:
         run: docker pull "${E2E_AGENTVAULT_IMAGE}"
 
       - name: Run default Rust and Go SDK E2E matrix
+        env:
+          # Compose 2.38.2 does not forward network.host to Buildx Bake 0.38.
+          COMPOSE_BAKE: "false"
         run: |
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
             --scenario matrix --e2e-sdk-scope simple \
