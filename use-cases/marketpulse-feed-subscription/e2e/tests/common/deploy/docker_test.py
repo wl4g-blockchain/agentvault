@@ -132,6 +132,27 @@ class BuildBoundaryTest(unittest.TestCase):
                 )
 
 
+class ApprovalContainerDiagnosticsTest(unittest.TestCase):
+    def test_reports_logs_when_ingestor_exits_before_approval(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._try = Mock(side_effect=[(0, "exited|17\n"), (0, "authorization failed\n")])
+
+        evidence = deployer._stopped_container_evidence("approval-ingestor")
+
+        self.assertIn("state='exited|17'", evidence)
+        self.assertIn("authorization failed", evidence)
+        self.assertEqual(deployer._try.call_count, 2)
+
+    def test_ignores_running_ingestor(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._try = Mock(return_value=(0, "running|0\n"))
+
+        self.assertIsNone(deployer._stopped_container_evidence("approval-ingestor"))
+        deployer._try.assert_called_once()
+
+
 class MatrixCheckpointTest(unittest.TestCase):
     def test_matrix_plan_prevents_cross_scope_resume(self) -> None:
         with TemporaryDirectory() as directory:

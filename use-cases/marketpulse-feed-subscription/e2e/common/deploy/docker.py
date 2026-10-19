@@ -640,6 +640,7 @@ class DockerE2EDeployer(E2EDeployer):
         approval: dict[str, Any] | None = None
         last_status = 0
         last_raw = ""
+        stopped_evidence: str | None = None
         for _ in range(45):
             status, _, raw = self._http(endpoint, headers={"authorization": f"Bearer {token}"})
             last_status, last_raw = status, raw
@@ -648,6 +649,9 @@ class DockerE2EDeployer(E2EDeployer):
                 if len(items) == 1:
                     approval = items[0]
                     break
+            stopped_evidence = self._stopped_container_evidence(container)
+            if stopped_evidence is not None:
+                break
             time.sleep(1)
         if approval is None or approval.get("requestedAmount") != "1000000":
             pending = self._sql(
@@ -658,7 +662,8 @@ class DockerE2EDeployer(E2EDeployer):
             )
             raise RuntimeError(
                 "Admin UI did not expose the expected pending approval; "
-                f"status={last_status} response={last_raw[:2048]!r} database={pending!r}"
+                f"status={last_status} response={last_raw[:2048]!r} database={pending!r} "
+                f"ingestor={stopped_evidence or 'still running'}"
             )
         approval_id = str(approval.get("approvalId", ""))
         intent_id = str(approval.get("intentId", ""))
@@ -676,6 +681,23 @@ class DockerE2EDeployer(E2EDeployer):
             raise RuntimeError(f"approved ingestor exited with code {exit_code}\n{logs}")
         self._run([*self.docker, "rm", container], 30)
         return f"approval {approval_id} for intent {intent_id} was consumed through the business Admin UI\n{logs}"
+
+    def _stopped_container_evidence(self, container: str) -> str | None:
+        status, raw_state = self._try([
+            *self.docker,
+            "inspect",
+            "--format",
+            "{{.State.Status}}|{{.State.ExitCode}}",
+            container,
+        ], 10)
+        if status != 0:
+            return None
+        state = raw_state.strip()
+        lifecycle = state.partition("|")[0]
+        if lifecycle not in {"dead", "exited"}:
+            return None
+        logs_status, logs = self._try([*self.docker, "logs", container], 30)
+        return f"state={state!r} logs_status={logs_status} logs={logs[-4096:]!r}"
 
     def _audit(self, payer: str, payee: str) -> dict[str, Any]:
         output = self._full(payer, payee, "run", "-T", "--rm", "--no-deps", "e2e-auditor")
