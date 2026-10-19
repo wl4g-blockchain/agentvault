@@ -20,6 +20,12 @@ fn assert_aes_uuid_envelope(version: &EncryptedWalletKeyVersion) {
     assert!(parse_uuid_nonce(&version.key_nonce).is_ok());
 }
 
+async fn assert_provisioned_key_is_active(storage: &SqliteStorage, version: &EncryptedWalletKeyVersion) {
+    let client = ClientStorage::get(storage, "client").await.unwrap().unwrap();
+    assert_eq!(version.activated_at, client.created_at);
+    assert!(version.activated_at <= time::OffsetDateTime::now_utc().unix_timestamp());
+}
+
 #[test]
 fn rejects_duplicate_authority_and_unversioned_manifests() {
     let duplicate = r#"{
@@ -203,6 +209,7 @@ async fn sqlite_provisioning_is_idempotent_encrypted_and_drift_safe() {
     assert_eq!(stored_wallet.max_per_day, Some(Amount::from(1000_u128)));
     let versions = storage.list_key_versions("wallet").await.unwrap();
     assert_eq!(versions.len(), 1);
+    assert_provisioned_key_is_active(&storage, &versions[0]).await;
     assert_aes_uuid_envelope(&versions[0]);
     assert_ne!(versions[0].key_ciphertext, private_key);
     assert_ne!(versions[0].wrapped_data_key, private_key);

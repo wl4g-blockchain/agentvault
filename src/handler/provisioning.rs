@@ -449,27 +449,27 @@ fn provisioning_ports(storage: StoragePorts, local_keys: Arc<dyn WalletKeyManage
 }
 
 async fn apply_manifest(ports: &ProvisioningPorts, manifest: ProvisionManifest) -> Result<ProvisioningReport> {
-    let mut revision = time::OffsetDateTime::now_utc().unix_timestamp();
-    if revision < 0 {
+    let provisioned_at = time::OffsetDateTime::now_utc().unix_timestamp();
+    if provisioned_at < 0 {
         return Err(Error::InvalidTransition(
             "provisioning requires a non-negative UTC timestamp".to_owned(),
         ));
     }
     let mut report = ProvisioningReport::default();
 
-    provision_clients(ports, manifest.clients, &mut revision, &mut report).await?;
-    provision_wallets(ports, manifest.wallets, &mut revision, &mut report).await?;
-    provision_scenarios(ports, manifest.scenarios, &mut revision, &mut report).await?;
-    provision_policies(ports, manifest.policies, &mut revision, &mut report).await?;
-    provision_offers(ports, manifest.offers, &mut revision, &mut report).await?;
-    provision_approvers(ports, manifest.approvers, &mut revision, &mut report).await?;
+    provision_clients(ports, manifest.clients, provisioned_at, &mut report).await?;
+    provision_wallets(ports, manifest.wallets, provisioned_at, &mut report).await?;
+    provision_scenarios(ports, manifest.scenarios, provisioned_at, &mut report).await?;
+    provision_policies(ports, manifest.policies, provisioned_at, &mut report).await?;
+    provision_offers(ports, manifest.offers, provisioned_at, &mut report).await?;
+    provision_approvers(ports, manifest.approvers, provisioned_at, &mut report).await?;
     Ok(report)
 }
 
 async fn provision_clients(
     ports: &ProvisioningPorts,
     specs: Vec<ClientSpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
@@ -478,8 +478,8 @@ async fn provision_clients(
             name: spec.name,
             auth_principal: spec.auth_principal,
             enabled: spec.enabled,
-            created_at: *revision,
-            updated_at: *revision,
+            created_at: provisioned_at,
+            updated_at: provisioned_at,
         };
         match ports.clients.get(&desired.id).await? {
             Some(existing) if same_client(&existing, &desired) => report.reused(),
@@ -489,7 +489,6 @@ async fn provision_clients(
                 report.created();
             }
         }
-        *revision = next_revision(*revision)?;
     }
     Ok(())
 }
@@ -497,12 +496,11 @@ async fn provision_clients(
 async fn provision_wallets(
     ports: &ProvisioningPorts,
     specs: Vec<WalletSpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
-        provision_wallet(ports, spec, *revision, report).await?;
-        *revision = next_revision(*revision)?;
+        provision_wallet(ports, spec, provisioned_at, report).await?;
     }
     Ok(())
 }
@@ -510,7 +508,7 @@ async fn provision_wallets(
 async fn provision_scenarios(
     ports: &ProvisioningPorts,
     specs: Vec<ScenarioSpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
@@ -519,8 +517,8 @@ async fn provision_scenarios(
             client_id: spec.client_id,
             name: spec.name,
             enabled: spec.enabled,
-            created_at: *revision,
-            updated_at: *revision,
+            created_at: provisioned_at,
+            updated_at: provisioned_at,
         };
         match ports.scenarios.get(&desired.id).await? {
             Some(existing) if same_scenario(&existing, &desired) => report.reused(),
@@ -530,7 +528,6 @@ async fn provision_scenarios(
                 report.created();
             }
         }
-        *revision = next_revision(*revision)?;
     }
     Ok(())
 }
@@ -538,7 +535,7 @@ async fn provision_scenarios(
 async fn provision_policies(
     ports: &ProvisioningPorts,
     specs: Vec<PolicySpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
@@ -555,8 +552,8 @@ async fn provision_policies(
             inbound_limits: spec.inbound_limits,
             outbound_limits: spec.outbound_limits,
             enabled: spec.enabled,
-            created_at: *revision,
-            updated_at: *revision,
+            created_at: provisioned_at,
+            updated_at: provisioned_at,
         };
         desired
             .validate()
@@ -569,7 +566,6 @@ async fn provision_policies(
                 report.created();
             }
         }
-        *revision = next_revision(*revision)?;
     }
     Ok(())
 }
@@ -577,7 +573,7 @@ async fn provision_policies(
 async fn provision_offers(
     ports: &ProvisioningPorts,
     specs: Vec<OfferSpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
@@ -591,8 +587,8 @@ async fn provision_offers(
             amount: spec.amount,
             wallet_id: spec.wallet_id,
             enabled: spec.enabled,
-            created_at: *revision,
-            updated_at: *revision,
+            created_at: provisioned_at,
+            updated_at: provisioned_at,
         };
         desired
             .validate()
@@ -605,7 +601,6 @@ async fn provision_offers(
                 report.created();
             }
         }
-        *revision = next_revision(*revision)?;
     }
     Ok(())
 }
@@ -613,7 +608,7 @@ async fn provision_offers(
 async fn provision_approvers(
     ports: &ProvisioningPorts,
     specs: Vec<ApproverSpec>,
-    revision: &mut i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
     for spec in specs {
@@ -621,8 +616,8 @@ async fn provision_approvers(
             scenario_id: spec.scenario_id,
             auth_principal: spec.auth_principal,
             enabled: spec.enabled,
-            created_at: *revision,
-            updated_at: *revision,
+            created_at: provisioned_at,
+            updated_at: provisioned_at,
         };
         match ports
             .approvers
@@ -641,7 +636,6 @@ async fn provision_approvers(
                 report.created();
             }
         }
-        *revision = next_revision(*revision)?;
     }
     Ok(())
 }
@@ -649,10 +643,10 @@ async fn provision_approvers(
 async fn provision_wallet(
     ports: &ProvisioningPorts,
     spec: WalletSpec,
-    revision: i64,
+    provisioned_at: i64,
     report: &mut ProvisioningReport,
 ) -> Result<()> {
-    let (expected, private_key) = wallet_material(&spec, revision)?;
+    let (expected, private_key) = wallet_material(&spec, provisioned_at)?;
     if let Some(existing) = ports.wallets.get_payment_wallet(&spec.id).await? {
         if !same_wallet(&existing.wallet, &expected)
             || existing.custody != wallet_custody(&spec.source)
@@ -680,7 +674,7 @@ async fn provision_wallet(
                 .ok_or_else(|| Error::InvalidTransition("local wallet provisioning key is unavailable".to_owned()))?;
             ports
                 .local_keys
-                .create_local(&spec.id, &private_key, &config, revision)
+                .create_local(&spec.id, &private_key, &config, provisioned_at)
                 .await?;
         }
         WalletSource::External { .. } => {
@@ -776,12 +770,6 @@ fn drift(kind: &str, id: &str) -> Error {
     Error::PaymentConflict(format!(
         "provisioned {kind} {id} exists with different authoritative content"
     ))
-}
-
-fn next_revision(current: i64) -> Result<i64> {
-    current
-        .checked_add(1)
-        .ok_or_else(|| Error::InvalidTransition("provisioning timestamp overflow".to_owned()))
 }
 
 #[cfg(test)]
