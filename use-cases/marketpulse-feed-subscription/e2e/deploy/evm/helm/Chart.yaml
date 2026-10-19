@@ -1,0 +1,7 @@
+apiVersion: v2
+name: evm-fixture
+description: MarketPulse subscription E2E evm-fixture component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+

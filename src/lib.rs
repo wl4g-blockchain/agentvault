@@ -1,23 +1,24 @@
-pub mod api;
+pub mod apm;
+pub mod cache;
+pub mod cmd;
 pub mod config;
-pub mod crypto;
-pub mod error;
-mod framing;
-pub mod history;
-pub mod management;
+pub mod controller;
+pub mod handler;
 pub mod model;
-pub mod observability;
 pub mod protocol;
-mod secret;
-pub mod server;
-pub mod service;
-pub mod signer;
-pub mod store;
-pub mod transport;
+pub mod storage;
+pub mod utils;
 
-pub use config::{AppConfig, Config};
-pub use error::{Error, Result};
-pub use server::AgentVaultServer;
-pub use service::{PaymentSignService, WalletService};
-pub use signer::{IPaymentSigner, LocalPaymentSigner, MqttPaymentSigner};
-pub use store::EncryptedFileStore;
+#[allow(clippy::default_trait_access, clippy::doc_markdown)]
+pub(crate) mod authguard_access_wire {
+    tonic::include_proto!("authguard.access.v1");
+}
+
+#[allow(clippy::default_trait_access, clippy::doc_markdown)]
+pub(crate) mod grpc_wire {
+    tonic::include_proto!("agentvault.transport.v1");
+}
+
+pub use cmd::AgentVaultServer;
+pub use config::AppConfig;
+pub use utils::{Error, Result};

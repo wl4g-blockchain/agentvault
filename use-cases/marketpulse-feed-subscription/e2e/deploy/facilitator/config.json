@@ -1,0 +1,21 @@
+{
+  "port": 8085,
+  "host": "0.0.0.0",
+  "chains": {
+    "eip155:31337": {
+      "_comment": "Local anvil — needs verifier contract deployed",
+      "eip1559": false,
+      "flashblocks": false,
+      "signers": [
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      ],
+      "rpc": [
+        { "http": "http://127.0.0.1:8545", "rate_limit": 1000 }
+      ]
+    }
+  },
+  "schemes": [
+    { "id": "v1-eip155-exact", "chains": "eip155:31337" },
+    { "id": "v2-eip155-exact", "chains": "eip155:31337" }
+  ]
+}

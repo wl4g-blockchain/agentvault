@@ -1,0 +1,7 @@
+apiVersion: v2
+name: emqx
+description: MarketPulse subscription E2E emqx component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+

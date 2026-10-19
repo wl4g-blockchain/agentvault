@@ -1,0 +1,47 @@
+workload:
+  kind: Job
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Never
+image:
+  repository: "quantstream-ingestor-java-e2e"
+  tag: "local"
+  pullPolicy: IfNotPresent
+command: []
+args:
+  - "--once"
+env:
+  MARKETPULSE_URL: "http://marketpulse:8081/mcp"
+  QUANTSTREAM_CLIENT_ID: "client-quantstream-java"
+  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-java-market-ingestion"
+  AGENTVAULT_MQTT_HOST: "emqx"
+  AGENTVAULT_MQTT_PORT: "1883"
+  AGENTVAULT_MQTT_TLS: "false"
+  AGENTVAULT_MQTT_USERNAME: "quantstream-java-workload"
+  QUANTSTREAM_DATABASE: "/var/lib/quantstream/ingestion.sqlite3"
+secret:
+  name: marketpulse-e2e-secrets
+  env:
+    AGENTVAULT_MQTT_PASSWORD: "mqtt-workload-password"
+ports: []
+service:
+  enabled: false
+probe:
+  enabled: false
+  type: tcp
+  path: "/"
+  port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: true
+  mountPath: "/var/lib/quantstream"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }

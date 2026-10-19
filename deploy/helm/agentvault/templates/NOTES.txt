@@ -1,0 +1,17 @@
+AgentVault is installed with AuthGuard protection: {{ include "agentvault.authguardEnabled" . }}.
+{{- if eq (include "agentvault.authguardEnabled" .) "true" }}
+HTTP API traffic enters through Gateway {{ .Values.routes.gatewayName }}; the
+AgentVault Service remains ClusterIP and consumes signed x-authguard-context.
+{{- else }}
+AuthGuard is disabled. AgentVault performs no HTTP identity check. Explicitly
+choose service.type=LoadBalancer/NodePort only for a trusted open network.
+{{- end }}
+
+MQTT never traverses the HTTP Gateway. Configure broker authentication/ACLs and
+register every MQTT client_id in AgentVault's durable Client/Scenario mapping.
+
+AgentVault secret provider: {{ include "agentvault.secretsProvider" . }}.
+{{- if and (eq (include "agentvault.secretsProvider" .) "kubernetes") (not .Values.secrets.kubernetes.existingSecret) }}
+WARNING: secrets.kubernetes.existingSecret is empty. AgentVault fails closed
+when its PostgreSQL URL or cryptographic key material cannot be resolved.
+{{- end }}

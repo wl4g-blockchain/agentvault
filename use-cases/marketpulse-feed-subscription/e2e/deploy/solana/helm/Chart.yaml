@@ -1,0 +1,7 @@
+apiVersion: v2
+name: solana-validator
+description: MarketPulse subscription E2E solana-validator component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+

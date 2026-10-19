@@ -1,0 +1,130 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/emqx_emqx"
+  tag: "5.5.0-elixir-amd64"
+  pullPolicy: IfNotPresent
+command: []
+args: []
+env:
+  EMQX_AUTHORIZATION__NO_MATCH: "deny"
+  EMQX_AUTHORIZATION__DENY_ACTION: "ignore"
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: mqtt, containerPort: 1883, servicePort: 1883 }
+  - { name: dashboard, containerPort: 18083, servicePort: 18083 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 1883
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: true
+  key: acl.conf
+  mountPath: "/opt/emqx/etc/acl.conf"
+  content: |
+    %% AgentVault server: receive commands for registered clients and publish results/events.
+    {allow, {username, "agentvault-vault"}, subscribe, [
+      "agentvault/v1/clients/+/commands/authorize",
+      "agentvault/v1/clients/+/commands/outbound-response",
+      "agentvault/v1/clients/+/commands/resolve-offer",
+      "agentvault/v1/clients/+/commands/create-challenge",
+      "agentvault/v1/clients/+/commands/verify-payment",
+      "agentvault/v1/clients/+/commands/settle-payment",
+      "agentvault/v1/clients/+/approvers/+/decisions"
+    ]}.
+    {allow, {username, "agentvault-vault"}, publish, [
+      "agentvault/v1/clients/+/results/+",
+      "agentvault/v1/clients/+/approvals/required",
+      "agentvault/v1/clients/+/approvers/+/results/+",
+      "agentvault/v1/clients/+/payments/events/+"
+    ]}.
+    
+    %% Five Payer workloads and approvers have mutually exclusive client trees.
+    {allow, {username, "quantstream-rust-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-rust/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-rust/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-rust-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-rust/results/+"
+    ]}.
+    {allow, {username, "quantstream-rust-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-rust/approvers/principal-quantstream-rust-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-rust-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-rust/approvals/required",
+      "agentvault/v1/clients/client-quantstream-rust/approvers/principal-quantstream-rust-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-go-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-go/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-go/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-go-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-go/results/+"
+    ]}.
+    {allow, {username, "quantstream-go-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-go/approvers/principal-quantstream-go-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-go-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-go/approvals/required",
+      "agentvault/v1/clients/client-quantstream-go/approvers/principal-quantstream-go-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-python-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-python/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-python/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-python-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-python/results/+"
+    ]}.
+    {allow, {username, "quantstream-python-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-python/approvers/principal-quantstream-python-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-python-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-python/approvals/required",
+      "agentvault/v1/clients/client-quantstream-python/approvers/principal-quantstream-python-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-typescript-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-typescript/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-typescript/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-typescript-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-typescript/results/+"
+    ]}.
+    {allow, {username, "quantstream-typescript-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-typescript/approvers/principal-quantstream-typescript-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-typescript-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-typescript/approvals/required",
+      "agentvault/v1/clients/client-quantstream-typescript/approvers/principal-quantstream-typescript-admin/results/+"
+    ]}.
+    {allow, {username, "quantstream-java-workload"}, publish, [
+      "agentvault/v1/clients/client-quantstream-java/commands/authorize",
+      "agentvault/v1/clients/client-quantstream-java/commands/outbound-response"
+    ]}.
+    {allow, {username, "quantstream-java-workload"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-java/results/+"
+    ]}.
+    {allow, {username, "quantstream-java-approver"}, publish, [
+      "agentvault/v1/clients/client-quantstream-java/approvers/principal-quantstream-java-admin/decisions"
+    ]}.
+    {allow, {username, "quantstream-java-approver"}, subscribe, [
+      "agentvault/v1/clients/client-quantstream-java/approvals/required",
+      "agentvault/v1/clients/client-quantstream-java/approvers/principal-quantstream-java-admin/results/+"
+    ]}.
+    
+    {deny, all}.
+persistence:
+  enabled: true
+  mountPath: "/opt/emqx/data"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }

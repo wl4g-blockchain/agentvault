@@ -1,0 +1,609 @@
+# The local stack deliberately keeps plaintext control-plane links on loopback.
+# Independent containers share Anvil's network namespace so the production
+# loopback-only safeguards remain enabled; a real deployment must use TLS.
+x-agentvault-environment: &agentvault-environment
+  AGENTVAULT_STORAGE_POSTGRES_URL: postgres://agentvault:${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}@127.0.0.1:5432/agentvault
+  AGENTVAULT_WALLET_KEK_V1: ${E2E_AGENTVAULT_WALLET_KEK:-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE}
+  AGENTVAULT_RECOVERY_KEY_V1: ${E2E_AGENTVAULT_RECOVERY_KEY:-AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI}
+  AGENTVAULT_APPROVAL_JWT_KEY_V1: ${E2E_AGENTVAULT_APPROVAL_KEY:-AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM}
+  AGENTVAULT_MQTT_PASSWORD: ${E2E_AGENTVAULT_MQTT_PASSWORD:-agentvault-e2e-vault}
+  AGENTVAULT_QUANTSTREAM_RUST_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+  AGENTVAULT_QUANTSTREAM_RUST_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+  AGENTVAULT_QUANTSTREAM_GO_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
+  AGENTVAULT_QUANTSTREAM_GO_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
+  AGENTVAULT_QUANTSTREAM_PYTHON_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
+  AGENTVAULT_QUANTSTREAM_PYTHON_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
+  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
+  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
+  AGENTVAULT_QUANTSTREAM_JAVA_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
+  AGENTVAULT_QUANTSTREAM_JAVA_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
+  RUST_LOG: ${E2E_AGENTVAULT_LOG:-info}
+
+x-quantstream-environment: &quantstream-environment
+  MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://127.0.0.1:8081/mcp}
+  QUANTSTREAM_YESTERDAY_CRON: ${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 0 2 * * *}
+  QUANTSTREAM_REALTIME_CRON: ${E2E_QUANTSTREAM_REALTIME_CRON:-0 */1 * * * *}
+  AGENTVAULT_APPROVAL_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_APPROVAL_TIMEOUT_SECONDS:-45}
+  AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
+  AGENTVAULT_GRPC_ENDPOINT: ${E2E_QUANTSTREAM_GRPC_ENDPOINT:-127.0.0.1:50051}
+  AGENTVAULT_GRPC_TLS: ${E2E_QUANTSTREAM_GRPC_TLS:-false}
+  AGENTVAULT_GRPC_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_GRPC_TIMEOUT_SECONDS:-15}
+  AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-127.0.0.1}
+  AGENTVAULT_MQTT_PORT: ${E2E_QUANTSTREAM_MQTT_PORT:-1883}
+  AGENTVAULT_MQTT_TLS: ${E2E_QUANTSTREAM_MQTT_TLS:-false}
+  AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}
+
+x-marketpulse-environment: &marketpulse-environment
+  MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
+  AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
+  AGENTVAULT_GRPC_ENDPOINT: ${E2E_MARKETPULSE_GRPC_ENDPOINT:-127.0.0.1:50051}
+  AGENTVAULT_GRPC_TLS: ${E2E_MARKETPULSE_GRPC_TLS:-false}
+  AGENTVAULT_GRPC_TIMEOUT_SECONDS: ${E2E_MARKETPULSE_GRPC_TIMEOUT_SECONDS:-15}
+  AGENTVAULT_MQTT_HOST: ${E2E_MARKETPULSE_MQTT_HOST:-127.0.0.1}
+  AGENTVAULT_MQTT_PORT: ${E2E_MARKETPULSE_MQTT_PORT:-1883}
+  AGENTVAULT_MQTT_TLS: ${E2E_MARKETPULSE_MQTT_TLS:-false}
+  AGENTVAULT_MQTT_USERNAME: ${E2E_MARKETPULSE_MQTT_USERNAME:-marketpulse-payee}
+  AGENTVAULT_MQTT_PASSWORD: ${E2E_MARKETPULSE_MQTT_PASSWORD:-agentvault-e2e-payee}
+  AGENTVAULT_MQTT_CLIENT_ID: ${E2E_MARKETPULSE_MQTT_CLIENT_ID:-client-marketpulse}
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_MARKETPULSE_MQTT_TIMEOUT_SECONDS:-15}
+  MARKETPULSE_SCENARIO_ID: ${E2E_MARKETPULSE_SCENARIO_ID:-scenario-marketpulse-feed}
+  MARKETPULSE_OFFER_ID: ${E2E_MARKETPULSE_OFFER_ID:-offer-realtime-news}
+  MARKETPULSE_RESOURCE_URL: ${E2E_MARKETPULSE_RESOURCE_URL:-http://127.0.0.1:8081/mcp}
+  MARKETPULSE_ORIGIN: ${E2E_MARKETPULSE_ORIGIN:-http://127.0.0.1:8081}
+  MARKETPULSE_DATABASE: ${E2E_MARKETPULSE_DATABASE:-/var/lib/marketpulse/marketpulse.sqlite3}
+  MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION: ${E2E_MARKETPULSE_ALLOW_FAILURE_INJECTION:-true}
+
+x-agentvault-build-proxy-args: &agentvault-build-proxy-args
+  HTTPS_PROXY: ${E2E_AGENTVAULT_BUILD_HTTPS_PROXY:-}
+  HTTP_PROXY: ${E2E_AGENTVAULT_BUILD_HTTP_PROXY:-}
+  NO_PROXY: ${E2E_AGENTVAULT_BUILD_NO_PROXY:-127.0.0.1,localhost}
+
+x-marketpulse-build-proxy-args: &marketpulse-build-proxy-args
+  HTTPS_PROXY: ${E2E_MARKETPULSE_BUILD_HTTPS_PROXY:-}
+  HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}
+  NO_PROXY: ${E2E_MARKETPULSE_BUILD_NO_PROXY:-127.0.0.1,localhost}
+
+x-quantstream-build-proxy-args: &quantstream-build-proxy-args
+  HTTPS_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTPS_PROXY:-}
+  HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
+  NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
+
+x-quantstream-ui-build-proxy-args: &quantstream-ui-build-proxy-args
+  HTTPS_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTPS_PROXY:-}
+  HTTP_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTP_PROXY:-}
+  NO_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_NO_PROXY:-127.0.0.1,localhost}
+
+x-agentvault-build: &agentvault-build
+  context: ../../..
+  dockerfile: Dockerfile
+  network: host
+  args:
+    <<: *agentvault-build-proxy-args
+    BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+    RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+
+services:
+  # Network namespace anchor and EVM node. Host bindings for colocated E2E
+  # processes live here because Compose forbids ports with network_mode.
+  anvil:
+    profiles: ["payer", "payee"]
+    image: ${E2E_ANVIL_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/foundry_anvil:1.7.1}
+    command:
+      - --host=0.0.0.0
+      - --port=8545
+      - --accounts=10
+      - --balance=10000
+      - --chain-id=31337
+    ports:
+      - "127.0.0.1:${E2E_POSTGRES_PORT:-25432}:5432"
+      - "127.0.0.1:${E2E_EMQX_MQTT_PORT:-28883}:1883"
+      - "127.0.0.1:${E2E_EMQX_DASHBOARD_PORT:-38084}:18083"
+      - "127.0.0.1:${E2E_JAEGER_UI_PORT:-26686}:16686"
+      - "127.0.0.1:${E2E_JAEGER_OTLP_GRPC_PORT:-24317}:4317"
+      - "127.0.0.1:${E2E_JAEGER_OTLP_HTTP_PORT:-24318}:4318"
+      - "127.0.0.1:${E2E_ANVIL_PORT:-28545}:8545"
+      - "127.0.0.1:${E2E_AGENTVAULT_PORT:-38080}:8080"
+      - "127.0.0.1:${E2E_AGENTVAULT_MGMT_PORT:-39091}:9091"
+      - "127.0.0.1:${E2E_MARKETPULSE_PORT:-38081}:8081"
+      - "127.0.0.1:${E2E_QUANTSTREAM_UI_PORT:-38083}:8086"
+      - "127.0.0.1:${E2E_FACILITATOR_PORT:-38085}:8085"
+    healthcheck:
+      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["infra"]
+    image: ${E2E_POSTGRES_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/pgvector_pgvector:pg16}
+    network_mode: service:anvil
+    environment:
+      POSTGRES_USER: agentvault
+      POSTGRES_PASSWORD: ${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}
+      POSTGRES_DB: agentvault
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentvault -d agentvault"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  emqx:
+    profiles: ["infra"]
+    image: ${E2E_EMQX_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/emqx_emqx:5.5.0-elixir-amd64}
+    network_mode: service:anvil
+    environment:
+      EMQX_NODE__NAME: emqx@127.0.0.1
+      EMQX_NODE__COOKIE: ${E2E_EMQX_COOKIE:-agentvault-e2e-cookie}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${E2E_EMQX_DASHBOARD_PASSWORD:-agentvault-e2e-dashboard}
+      EMQX_AUTHORIZATION__NO_MATCH: deny
+      EMQX_AUTHORIZATION__DENY_ACTION: ignore
+    volumes:
+      - ./deploy/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+      - emqx-data:/opt/emqx/data
+    # Two isolated matrix workers may run concurrently on a four-core host.
+    # EMQX is control-plane infrastructure here; cap it so broker probes cannot
+    # starve the payer/payee processes during simultaneous stack startup.
+    cpus: "0.35"
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  jaeger:
+    profiles: ["infra"]
+    image: ${E2E_JAEGER_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/jaegertracing_all-in-one:1.76.0}
+    network_mode: service:anvil
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:14269/"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  evm-fixture:
+    profiles: ["payer", "payee"]
+    image: ${E2E_EVM_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/foundry_anvil:1.7.1}
+    network_mode: service:anvil
+    entrypoint: ["/usr/bin/bash", "/fixture/deploy.sh"]
+    environment:
+      E2E_EVM_RPC_URL: ${E2E_EVM_RPC_URL:-http://127.0.0.1:8545}
+      E2E_EVM_DEPLOYER_PRIVATE_KEY: ${E2E_EVM_DEPLOYER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
+      E2E_EVM_RUST_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+      E2E_EVM_RUST_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+      E2E_EVM_GO_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
+      E2E_EVM_GO_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
+      E2E_EVM_PYTHON_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
+      E2E_EVM_PYTHON_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
+      E2E_EVM_TYPESCRIPT_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
+      E2E_EVM_TYPESCRIPT_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
+      E2E_EVM_JAVA_PRIMARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
+      E2E_EVM_JAVA_SECONDARY_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
+      E2E_EVM_USDC_ADDRESS: ${E2E_EVM_USDC_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}
+      E2E_EVM_PAYER_INITIAL_USDC: "${E2E_EVM_PAYER_INITIAL_USDC:-1000000000000}"
+    volumes:
+      - ./deploy/evm:/fixture:ro
+    depends_on:
+      anvil:
+        condition: service_healthy
+    restart: "no"
+
+  solana:
+    profiles: ["payer", "payee"]
+    image: ${E2E_SOLANA_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/anza_solana:3.1.14}
+    command:
+      - --rpc-port=8899
+      - --faucet-port=8900
+      - --ledger=/tmp/solana-ledger
+      - --reset
+    ports:
+      - "127.0.0.1:${E2E_SOLANA_RPC_PORT:-28899}:8899"
+      - "127.0.0.1:${E2E_SOLANA_FAUCET_PORT:-28900}:8900"
+    tmpfs:
+      - /tmp/solana-ledger:size=512m
+    # Agave 3.x uses io_uring for its ledger. The local Podman/Docker default
+    # seccomp profile blocks those syscalls, so this node alone gets an
+    # unconfined seccomp profile. It holds no production credentials.
+    security_opt:
+      - seccomp=unconfined
+    # Agave's proof-of-history loop otherwise consumes an entire host core
+    # while this E2E is validating the EVM/x402 path. Keep the real node
+    # available without starving AgentVault, EMQX, or language builds.
+    cpus: "0.45"
+    healthcheck:
+      test: ["CMD", "solana", "cluster-version", "--url", "http://127.0.0.1:8899"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: "no"
+
+  facilitator:
+    profiles: ["payee"]
+    image: ${E2E_FACILITATOR_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/x402_facilitator:1.4.9}
+    network_mode: service:anvil
+    environment:
+      FACILITATOR_PRIVATE_KEY: ${E2E_FACILITATOR_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
+      RUST_LOG: ${E2E_FACILITATOR_LOG:-info}
+    volumes:
+      - ./deploy/facilitator/config.json:/app/config.json:ro
+    depends_on:
+      anvil:
+        condition: service_healthy
+      evm-fixture:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8085;
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          head -n 1 <&3 | grep -q ' 200 '
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  agentvault-provision:
+    profiles: ["apps"]
+    image: ${E2E_AGENTVAULT_IMAGE:-agentvault-e2e:local}
+    build: *agentvault-build
+    network_mode: service:anvil
+    command: ["--config", "/etc/agentvault/e2e.yaml", "provision", "--manifest", "/etc/agentvault/provision.json"]
+    environment: *agentvault-environment
+    volumes:
+      - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
+      - ./common/contract/scenario.json:/etc/agentvault/provision.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      evm-fixture:
+        condition: service_completed_successfully
+    restart: "no"
+
+  agentvault:
+    profiles: ["apps"]
+    image: ${E2E_AGENTVAULT_IMAGE:-agentvault-e2e:local}
+    build: *agentvault-build
+    network_mode: service:anvil
+    command: ["--config", "/etc/agentvault/e2e.yaml", "serve"]
+    environment: *agentvault-environment
+    volumes:
+      - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
+    depends_on:
+      agentvault-provision:
+        condition: service_completed_successfully
+      emqx:
+        condition: service_healthy
+      facilitator:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9091/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+    restart: unless-stopped
+
+  marketpulse-rust:
+    profiles: ["payee-rust"]
+    image: ${E2E_MARKETPULSE_RUST_IMAGE:-marketpulse-rust-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service/Dockerfile
+      network: host
+      args:
+        <<: *marketpulse-build-proxy-args
+        E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+    network_mode: service:anvil
+    environment: *marketpulse-environment
+    volumes:
+      - marketpulse-rust-data:/var/lib/marketpulse
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  marketpulse-go:
+    profiles: ["payee-go"]
+    image: ${E2E_MARKETPULSE_GOLANG_IMAGE:-marketpulse-go-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-golang-service/Dockerfile
+      network: host
+      args:
+        <<: *marketpulse-build-proxy-args
+        E2E_MARKETPULSE_GOLANG_BUILD_IMAGE: ${E2E_MARKETPULSE_GOLANG_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/golang:1.26-alpine}
+        E2E_MARKETPULSE_GOLANG_RUNTIME_IMAGE: ${E2E_MARKETPULSE_GOLANG_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/alpine:3.21}
+    network_mode: service:anvil
+    environment: *marketpulse-environment
+    volumes:
+      - marketpulse-go-data:/var/lib/marketpulse
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  marketpulse-python:
+    profiles: ["payee-python"]
+    image: ${E2E_MARKETPULSE_PYTHON_IMAGE:-marketpulse-python-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-python-service/Dockerfile
+      network: host
+      args:
+        <<: *marketpulse-build-proxy-args
+        E2E_MARKETPULSE_PYTHON_BUILD_IMAGE: ${E2E_MARKETPULSE_PYTHON_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+    network_mode: service:anvil
+    environment: *marketpulse-environment
+    volumes:
+      - marketpulse-python-data:/var/lib/marketpulse
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  marketpulse-typescript:
+    profiles: ["payee-typescript"]
+    image: ${E2E_MARKETPULSE_TYPESCRIPT_IMAGE:-marketpulse-typescript-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-typescript-service/Dockerfile
+      network: host
+      args:
+        <<: *marketpulse-build-proxy-args
+        E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+    network_mode: service:anvil
+    environment: *marketpulse-environment
+    volumes:
+      - marketpulse-typescript-data:/var/lib/marketpulse
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  marketpulse-java:
+    profiles: ["payee-java"]
+    image: ${E2E_MARKETPULSE_JAVA_IMAGE:-marketpulse-java-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-java-service/Dockerfile
+      network: host
+      args:
+        <<: *marketpulse-build-proxy-args
+        E2E_MARKETPULSE_JAVA_BUILD_IMAGE: ${E2E_MARKETPULSE_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
+        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+    network_mode: service:anvil
+    environment: *marketpulse-environment
+    volumes:
+      - marketpulse-java-data:/var/lib/marketpulse
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  admin-ui:
+    profiles: ["apps"]
+    image: ${E2E_QUANTSTREAM_UI_IMAGE:-quantstream-admin-ui-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-ui/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-ui-build-proxy-args
+        E2E_QUANTSTREAM_UI_BUILD_IMAGE: ${E2E_QUANTSTREAM_UI_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+    network_mode: service:anvil
+    environment:
+      QUANTSTREAM_UI_HOST: ${E2E_QUANTSTREAM_UI_BIND_HOST:-0.0.0.0}
+      QUANTSTREAM_UI_PORT: ${E2E_QUANTSTREAM_UI_BIND_PORT:-8086}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_CLIENT_ID:-client-quantstream-rust}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_SCENARIO_ID:-scenario-quantstream-rust-market-ingestion}
+      QUANTSTREAM_APPROVER_PRINCIPAL: ${E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL:-principal-quantstream-rust-admin}
+      QUANTSTREAM_ADMIN_UI_TOKEN: ${E2E_QUANTSTREAM_UI_TOKEN:-quantstream-e2e-ui-token-0000000000000000001}
+      AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_QUANTSTREAM_UI_MQTT_TIMEOUT_SECONDS:-15}
+      AGENTVAULT_MQTT_URL: ${E2E_QUANTSTREAM_UI_MQTT_URL:-mqtt://127.0.0.1:1883}
+      AGENTVAULT_MQTT_APPROVER_USERNAME: ${E2E_QUANTSTREAM_UI_MQTT_USERNAME:-quantstream-rust-approver}
+      AGENTVAULT_MQTT_APPROVER_PASSWORD: ${E2E_QUANTSTREAM_UI_MQTT_PASSWORD:-agentvault-e2e-approver}
+      AGENTVAULT_URL: ${E2E_QUANTSTREAM_UI_AGENTVAULT_URL:-http://127.0.0.1:8080/api/v1}
+    depends_on:
+      agentvault:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  quantstream-rust:
+    profiles: ["ingestor-rust"]
+    image: ${E2E_QUANTSTREAM_RUST_IMAGE:-quantstream-ingestor-rust-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-build-proxy-args
+        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+    network_mode: service:anvil
+    environment:
+      <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_RUST_CLIENT_ID:-client-quantstream-rust}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_RUST_SCENARIO_ID:-scenario-quantstream-rust-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_RUST_MQTT_USERNAME:-quantstream-rust-workload}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+    volumes:
+      - quantstream-rust-data:/var/lib/quantstream
+    command: ["--once"]
+    restart: "no"
+
+  quantstream-go:
+    profiles: ["ingestor-go"]
+    image: ${E2E_QUANTSTREAM_GOLANG_IMAGE:-quantstream-ingestor-go-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-golang/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-build-proxy-args
+        E2E_QUANTSTREAM_GOLANG_BUILD_IMAGE: ${E2E_QUANTSTREAM_GOLANG_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/golang:1.26-alpine}
+        E2E_QUANTSTREAM_GOLANG_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_GOLANG_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/alpine:3.21}
+    network_mode: service:anvil
+    environment:
+      <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_GO_CLIENT_ID:-client-quantstream-go}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_GO_SCENARIO_ID:-scenario-quantstream-go-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_GO_MQTT_USERNAME:-quantstream-go-workload}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+    volumes:
+      - quantstream-go-data:/var/lib/quantstream
+    command: ["--once"]
+    restart: "no"
+
+  quantstream-python:
+    profiles: ["ingestor-python"]
+    image: ${E2E_QUANTSTREAM_PYTHON_IMAGE:-quantstream-ingestor-python-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-python/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-build-proxy-args
+        E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE: ${E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+    network_mode: service:anvil
+    environment:
+      <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_PYTHON_CLIENT_ID:-client-quantstream-python}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_PYTHON_SCENARIO_ID:-scenario-quantstream-python-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_PYTHON_MQTT_USERNAME:-quantstream-python-workload}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+    volumes:
+      - quantstream-python-data:/var/lib/quantstream
+    command: ["--once"]
+    restart: "no"
+
+  quantstream-typescript:
+    profiles: ["ingestor-typescript"]
+    image: ${E2E_QUANTSTREAM_TYPESCRIPT_IMAGE:-quantstream-ingestor-typescript-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-build-proxy-args
+        E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+    network_mode: service:anvil
+    environment:
+      <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_TYPESCRIPT_CLIENT_ID:-client-quantstream-typescript}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_TYPESCRIPT_SCENARIO_ID:-scenario-quantstream-typescript-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_TYPESCRIPT_MQTT_USERNAME:-quantstream-typescript-workload}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+    volumes:
+      - quantstream-typescript-data:/var/lib/quantstream
+    command: ["--once"]
+    restart: "no"
+
+  quantstream-java:
+    profiles: ["ingestor-java"]
+    image: ${E2E_QUANTSTREAM_JAVA_IMAGE:-quantstream-ingestor-java-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-java/Dockerfile
+      network: host
+      args:
+        <<: *quantstream-build-proxy-args
+        E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+    network_mode: service:anvil
+    environment:
+      <<: *quantstream-environment
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_JAVA_CLIENT_ID:-client-quantstream-java}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_JAVA_SCENARIO_ID:-scenario-quantstream-java-market-ingestion}
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_JAVA_MQTT_USERNAME:-quantstream-java-workload}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+    volumes:
+      - quantstream-java-data:/var/lib/quantstream
+    command: ["--once"]
+    restart: "no"
+
+  e2e-auditor:
+    profiles: ["apps"]
+    image: ${E2E_AUDITOR_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+    user: "65532:65532"
+    network_mode: service:anvil
+    entrypoint: ["python", "/audit/assert_full.py"]
+    environment:
+      E2E_PAYER_LANGUAGE: ${E2E_AUDITOR_PAYER_LANGUAGE:-rust}
+      E2E_PAYEE_LANGUAGE: ${E2E_AUDITOR_PAYEE_LANGUAGE:-rust}
+    volumes:
+      - ./verifier/payment/assert_full.py:/audit/assert_full.py:ro
+      - marketpulse-rust-data:/evidence/marketpulse-rust:ro
+      - marketpulse-go-data:/evidence/marketpulse-go:ro
+      - marketpulse-python-data:/evidence/marketpulse-python:ro
+      - marketpulse-typescript-data:/evidence/marketpulse-typescript:ro
+      - marketpulse-java-data:/evidence/marketpulse-java:ro
+      - quantstream-rust-data:/evidence/quantstream-rust:ro
+      - quantstream-go-data:/evidence/quantstream-go:ro
+      - quantstream-python-data:/evidence/quantstream-python:ro
+      - quantstream-typescript-data:/evidence/quantstream-typescript:ro
+      - quantstream-java-data:/evidence/quantstream-java:ro
+    restart: "no"
+
+volumes:
+  postgres-data:
+  emqx-data:
+  marketpulse-rust-data:
+  marketpulse-go-data:
+  marketpulse-python-data:
+  marketpulse-typescript-data:
+  marketpulse-java-data:
+  quantstream-rust-data:
+  quantstream-go-data:
+  quantstream-python-data:
+  quantstream-typescript-data:
+  quantstream-java-data:

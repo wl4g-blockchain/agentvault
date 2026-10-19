@@ -1,0 +1,4 @@
+-- AgentVault does not install implicit tenants, wallets, policies, offers, or
+-- credentials. Operators provision those records through the typed bootstrap
+-- command so ownership, encrypted key material, and limits are committed by
+-- the same application invariants used at runtime.

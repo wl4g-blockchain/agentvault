@@ -1,0 +1,24 @@
+services:
+  emqx:
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/emqx_emqx:5.5.0-elixir-amd64
+    environment:
+      EMQX_NODE__NAME: emqx@127.0.0.1
+      EMQX_NODE__COOKIE: ${E2E_EMQX_COOKIE:-agentvault-e2e-cookie}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${E2E_EMQX_DASHBOARD_PASSWORD:-agentvault-e2e-dashboard}
+      EMQX_AUTHORIZATION__NO_MATCH: deny
+      EMQX_AUTHORIZATION__DENY_ACTION: ignore
+    ports:
+      - "127.0.0.1:${E2E_EMQX_MQTT_PORT:-28883}:1883"
+      - "127.0.0.1:${E2E_EMQX_DASHBOARD_PORT:-38084}:18083"
+    volumes:
+      - ./acl.conf:/opt/emqx/etc/acl.conf:ro
+      - emqx-data:/opt/emqx/data
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+volumes:
+  emqx-data: {}

@@ -1,0 +1,88 @@
+# AuthGuard owns HTTP authentication and authorization. Secrets are supplied by
+# .env through the standard AUTHGUARD__... reflected configuration keys.
+server:
+  service_name: authguard-authz
+  host: 0.0.0.0
+  port: 8080
+  scope_port: 8081
+  shutdown_timeout: 15s
+  request: { max_message_bytes: 1048576, timeout: 5s }
+  response: { max_message_bytes: 1048576 }
+  performance: { worker_threads: 2, max_in_flight_requests: 4096 }
+  deployment: { replica_count: 1 }
+
+secrets: { env_file: "" }
+logging: { mode: JSON, level: info,tower_http=info }
+mgmt:
+  enabled: true
+  host: 0.0.0.0
+  port: 9091
+  context_path: /
+  health: { liveness_path: /healthz, readiness_path: /readyz }
+  metrics: { enabled: true, path: /metrics }
+  otel: { enabled: false, endpoint: "", protocol: grpc, timeout: 5s, sample_rate: 1.0 }
+
+authn:
+  challengeTtl: 5m
+  providers: {}
+  applications:
+    agentvault:
+      hosts: [localhost, agentvault.local]
+      displayName: AgentVault
+      logo: /mark.svg
+      returnUris: [http://localhost:8080/**, https://agentvault.local/**]
+  standalone:
+    enabled: false
+    issuer: authguard:standalone
+    credentialEncryptionKey: ""
+    password: { minLength: 12 }
+    totp: { enabled: false, issuer: AgentVault, digits: 6, stepSeconds: 30, skew: 1 }
+    webauthn: { enabled: false, rpId: "", rpOrigin: "", rpName: AgentVault }
+  wallet: { enabled: false, domain: "", uri: "", statement: Sign in to AgentVault, rpcTimeout: 5s, chains: { eip155: {}, solana: [], bip122: {} } }
+  accountLinking: { strategy: explicit, authoritativeProviders: [], allowLink: {} }
+  token: { issuer: authguard-authn, audience: authguard, ttl: 5m, privateKey: "", privateKeyB64: "", privateKeyFile: "" }
+
+authz:
+  api: { enabled: true, host: 0.0.0.0, port: 9090, token: "" }
+  identity:
+    token_header: authorization
+    principal_id_claim: principal_id
+    principal_kind_claim: principal_kind
+    groups_claim: authguard_group_ids
+  scope_delivery:
+    direct_urn_limit: 32
+    max_direct_header_bytes: 8192
+    direct_context_hmac_key: ""
+    context_ttl: 30s
+    scope_token_ttl: 30s
+  principal_discovery: { keycloak: [], ldap: [], custom: [], scim: { enabled: false, discovery_id: corporate-scim, issuer: "" } }
+  resign: { enabled: false, max_ttl: 60s, private_key_b64: "" }
+
+storage:
+  provider: Postgres
+  bootstrap_policy: null
+  sqlite: { url: sqlite:///tmp/authguard.db, max_connections: 1, connect_timeout: 5s }
+  postgres:
+    url: postgresql://authguard-postgres:5432/authguard?sslmode=disable
+    username: authguard
+    password: ""
+    max_connections: 20
+    min_connections: 0
+    connect_timeout: 5s
+    idle_timeout: 10m
+    validate_on_acquire: true
+
+cache:
+  provider: Redis
+  memory: { initial_capacity: 32, max_capacity: 65535, ttl: 1h, eviction_policy: LRU }
+  redis:
+    nodes: [redis://authguard-redis:6379]
+    username: default
+    password: ""
+    key_prefix: authguard
+    connection_timeout: 3s
+    response_timeout: 6s
+    retries: 8
+    max_retry_wait: 65s
+    min_retry_wait: 1280ms
+    read_from_replica: false

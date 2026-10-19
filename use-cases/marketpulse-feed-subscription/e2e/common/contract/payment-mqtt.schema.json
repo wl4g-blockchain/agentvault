@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentvault.example/schemas/payment-mqtt-v1.json",
+  "title": "AgentVault payment MQTT envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/sdkCommand" },
+    { "$ref": "#/$defs/sdkResult" },
+    { "$ref": "#/$defs/approvalRequired" },
+    { "$ref": "#/$defs/approvalDecision" },
+    { "$ref": "#/$defs/approvalDecisionResult" }
+  ],
+  "$defs": {
+    "headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "commandHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content-type", "traceparent"],
+      "properties": {
+        "accept": { "const": "application/json" },
+        "content-type": { "const": "application/json" },
+        "traceparent": {
+          "type": "string",
+          "pattern": "^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$"
+        }
+      }
+    },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "headers", "body"],
+      "properties": {
+        "method": { "const": "POST" },
+        "path": {
+          "anyOf": [
+            { "enum": [
+              "/api/v1/payments/authorize",
+              "/api/v1/offers/resolve",
+              "/api/v1/payee/challenges",
+              "/api/v1/payee/verify",
+              "/api/v1/payee/settle"
+            ] },
+            { "type": "string", "pattern": "^/api/v1/payments/[A-Za-z0-9._-]+/outbound-response$" }
+          ]
+        },
+        "headers": { "$ref": "#/$defs/commandHeaders" },
+        "body": {
+          "type": "string",
+          "description": "Base64url without padding of the canonical HTTP request body"
+        }
+      }
+    },
+    "sdkCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "requestSpanId", "request"],
+      "properties": {
+        "type": { "enum": [
+          "payment.authorize",
+          "payment.outbound_response",
+          "payment.resolve_offer",
+          "payment.create_challenge",
+          "payment.verify",
+          "payment.settle"
+        ] },
+        "version": { "const": 1 },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
+        "request": { "$ref": "#/$defs/httpRequest" }
+      }
+    },
+    "sdkResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "requestSpanId", "status", "headers", "body"],
+      "properties": {
+        "type": { "enum": [
+          "payment.authorization_result",
+          "payment.outbound_response_result",
+          "payment.offer_resolved",
+          "payment.challenge_created",
+          "payment.verification_result",
+          "payment.settlement_result",
+          "payment.error"
+        ] },
+        "version": { "const": 1 },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "headers": { "$ref": "#/$defs/headers" },
+        "body": {
+          "type": "string",
+          "description": "Base64url without padding of the canonical HTTP response body"
+        }
+      }
+    },
+    "approvalRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "approvalId", "intentId", "runId", "scenarioId", "expiresAt"],
+      "properties": {
+        "type": { "const": "payment.approval_required" },
+        "version": { "const": 1 },
+        "approvalId": { "type": "string" },
+        "intentId": { "type": "string" },
+        "runId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$" },
+        "scenarioId": { "type": "string" },
+        "requestedAmount": { "type": "string", "pattern": "^[0-9]+$" },
+        "asset": { "type": "string" },
+        "expiresAt": { "type": "integer" }
+      }
+    },
+    "approvalDecision": {
+      "type": "object",
+      "description": "Published only on clients/{client}/approvers/{principal}/decisions; both identities come from the broker-authorized topic, never this payload.",
+      "additionalProperties": false,
+      "required": ["type", "version", "requestSpanId", "request"],
+      "properties": {
+        "type": { "const": "payment.approval_decision" },
+        "version": { "const": 1 },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "path", "headers", "body"],
+          "properties": {
+            "method": { "const": "POST" },
+            "path": { "type": "string", "pattern": "^/api/v1/approvals/[A-Za-z0-9._-]+/decision$" },
+            "headers": { "$ref": "#/$defs/commandHeaders" },
+            "body": { "type": "string" }
+          }
+        }
+      }
+    },
+    "approvalDecisionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "requestSpanId", "status", "headers", "body"],
+      "properties": {
+        "type": { "const": "payment.approval_decision_result" },
+        "version": { "const": 1 },
+        "requestSpanId": { "type": "string", "pattern": "^(?!0{16}$)[0-9a-f]{16}$" },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "headers": { "$ref": "#/$defs/headers" },
+        "body": { "type": "string" }
+      }
+    }
+  }
+}

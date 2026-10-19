@@ -1,0 +1,42 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "registry.cn-shenzhen.aliyuncs.com/wl4g/pgvector_pgvector"
+  tag: "pg16"
+  pullPolicy: IfNotPresent
+command: []
+args: []
+env:
+  POSTGRES_USER: "agentvault"
+  POSTGRES_DB: "agentvault"
+secret:
+  name: marketpulse-e2e-secrets
+  env:
+    POSTGRES_PASSWORD: "postgres-password"
+ports:
+  - { name: postgres, containerPort: 5432, servicePort: 5432 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 5432
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: true
+  mountPath: "/var/lib/postgresql/data"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+

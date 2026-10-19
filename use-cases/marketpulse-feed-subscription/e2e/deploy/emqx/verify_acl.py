@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Tiny dependency-free MQTT 3.1.1 probe for password auth and tenant ACLs."""
+
+from __future__ import annotations
+
+import os
+import socket
+import struct
+import time
+
+
+HOST = os.environ.get("MQTT_HOST", "127.0.0.1")
+PORT = int(os.environ.get("MQTT_PORT", "28883"))
+WORKLOAD_PASSWORD = os.environ["MQTT_WORKLOAD_PASSWORD"]
+WORKLOAD_USERNAME = os.environ["MQTT_WORKLOAD_USERNAME"]
+APPROVER_PASSWORD = os.environ["MQTT_APPROVER_PASSWORD"]
+APPROVER_USERNAME = os.environ["MQTT_APPROVER_USERNAME"]
+VAULT_PASSWORD = os.environ["MQTT_VAULT_PASSWORD"]
+PAYEE_PASSWORD = os.environ["MQTT_PAYEE_PASSWORD"]
+CLIENT_ID = os.environ["MQTT_CLIENT_ID"]
+APPROVER_PRINCIPAL = os.environ["MQTT_APPROVER_PRINCIPAL"]
+PREFIX = "agentvault/v1/clients"
+CONSUMER_GROUP = os.environ.get("MQTT_CONSUMER_GROUP", "agentvault-e2e")
+OTHER_CLIENT_ID = next(
+    value for value in (
+        "client-quantstream-rust", "client-quantstream-go", "client-quantstream-python",
+        "client-quantstream-typescript", "client-quantstream-java",
+    ) if value != CLIENT_ID
+)
+OWN = f"{PREFIX}/{CLIENT_ID}/commands/authorize"
+CROSS = f"{PREFIX}/{OTHER_CLIENT_ID}/commands/authorize"
+DECISION = f"{PREFIX}/{CLIENT_ID}/approvers/{APPROVER_PRINCIPAL}/decisions"
+CROSS_DECISION = f"{PREFIX}/{OTHER_CLIENT_ID}/approvers/principal-forbidden/decisions"
+RESULT = f"{PREFIX}/{CLIENT_ID}/results/acl-roundtrip"
+PAYEE_COMMAND = f"{PREFIX}/client-marketpulse/commands/create-challenge"
+PAYEE_RESULT = f"{PREFIX}/client-marketpulse/results/acl-roundtrip"
+APPROVAL = f"{PREFIX}/{CLIENT_ID}/approvals/required"
+PAYMENT_EVENT = f"{PREFIX}/{CLIENT_ID}/payments/events/+"
+COMMAND_FILTERS = [
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/authorize",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/outbound-response",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/resolve-offer",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/create-challenge",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/verify-payment",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/settle-payment",
+]
+
+
+def variable_length(value: int) -> bytes:
+    encoded = bytearray()
+    while True:
+        digit = value % 128
+        value //= 128
+        if value:
+            digit |= 0x80
+        encoded.append(digit)
+        if not value:
+            return bytes(encoded)
+
+
+def utf8(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return struct.pack("!H", len(raw)) + raw
+
+
+def packet(kind: int, flags: int, payload: bytes) -> bytes:
+    return bytes([(kind << 4) | flags]) + variable_length(len(payload)) + payload
+
+
+def read_packet(connection: socket.socket, timeout: float = 2.0) -> tuple[int, bytes]:
+    connection.settimeout(timeout)
+    first = connection.recv(1)
+    if not first:
+        raise RuntimeError("broker closed the MQTT connection")
+    multiplier = 1
+    length = 0
+    while True:
+        digit = connection.recv(1)[0]
+        length += (digit & 127) * multiplier
+        if digit & 128 == 0:
+            break
+        multiplier *= 128
+    body = bytearray()
+    while len(body) < length:
+        body.extend(connection.recv(length - len(body)))
+    return first[0] >> 4, bytes(body)
+
+
+def connect(client_id: str, username: str, password: str, accepted: bool = True) -> socket.socket:
+    connection = socket.create_connection((HOST, PORT), timeout=3)
+    variable = utf8("MQTT") + bytes([4, 0xC2]) + struct.pack("!H", 15)
+    payload = utf8(client_id) + utf8(username) + utf8(password)
+    connection.sendall(packet(1, 0, variable + payload))
+    kind, body = read_packet(connection)
+    if kind != 2 or len(body) != 2:
+        raise RuntimeError("broker returned a malformed CONNACK")
+    if accepted and body[1] != 0:
+        raise RuntimeError(f"valid MQTT credentials were rejected ({body[1]})")
+    if not accepted and body[1] == 0:
+        raise RuntimeError("invalid MQTT password was accepted")
+    if not accepted:
+        connection.close()
+    return connection
+
+
+def subscribe(connection: socket.socket, topic: str, packet_id: int, accepted: bool = True) -> None:
+    payload = struct.pack("!H", packet_id) + utf8(topic) + bytes([1])
+    connection.sendall(packet(8, 2, payload))
+    kind, body = read_packet(connection)
+    expected = b"\x01" if accepted else b"\x80"
+    if kind != 9 or body[:2] != struct.pack("!H", packet_id) or body[2:] != expected:
+        outcome = "authorized" if accepted else "unauthorized"
+        raise RuntimeError(f"{outcome} MQTT subscription had an unexpected SUBACK")
+
+
+def publish(connection: socket.socket, topic: str, message: bytes, packet_id: int) -> None:
+    payload = utf8(topic) + struct.pack("!H", packet_id) + message
+    connection.sendall(packet(3, 2, payload))
+    kind, body = read_packet(connection)
+    if kind != 4 or body != struct.pack("!H", packet_id):
+        raise RuntimeError("QoS1 publish did not receive PUBACK")
+
+
+def receive_publish(connection: socket.socket, expected: bytes, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            kind, body = read_packet(connection, deadline - time.monotonic())
+        except (TimeoutError, socket.timeout):
+            return False
+        if kind != 3:
+            continue
+        topic_length = struct.unpack("!H", body[:2])[0]
+        offset = 2 + topic_length
+        packet_id = body[offset : offset + 2]
+        payload = body[offset + 2 :]
+        connection.sendall(packet(4, 0, packet_id))
+        if payload == expected:
+            return True
+    return False
+
+
+connect("bad-password-probe", WORKLOAD_USERNAME, "definitely-wrong", accepted=False)
+vault = connect("vault-acl-probe", "agentvault-vault", VAULT_PASSWORD)
+for packet_id, topic in enumerate(COMMAND_FILTERS, start=1):
+    subscribe(vault, topic, packet_id)
+subscribe(vault, f"$share/{CONSUMER_GROUP}/{PREFIX}/+/approvers/+/decisions", 20)
+workload = connect("workload-acl-probe", WORKLOAD_USERNAME, WORKLOAD_PASSWORD)
+subscribe(workload, f"{PREFIX}/{CLIENT_ID}/results/+", 1)
+subscribe(workload, APPROVAL, 2, accepted=False)
+subscribe(workload, PAYMENT_EVENT, 3, accepted=False)
+own_marker = b"allowed-own-client"
+publish(workload, OWN, own_marker, 3)
+if not receive_publish(vault, own_marker, 2.0):
+    raise RuntimeError("authorized client-scoped publish was not delivered")
+cross_marker = b"must-not-cross-client"
+publish(workload, CROSS, cross_marker, 4)
+if receive_publish(vault, cross_marker, 1.0):
+    raise RuntimeError("cross-client MQTT publish bypassed the ACL")
+forged_decision_marker = b"workload-must-not-approve"
+publish(workload, DECISION, forged_decision_marker, 5)
+if receive_publish(vault, forged_decision_marker, 1.0):
+    raise RuntimeError("workload MQTT identity published an approval decision")
+approver = connect("approver-acl-probe", APPROVER_USERNAME, APPROVER_PASSWORD)
+subscribe(approver, APPROVAL, 7)
+decision_marker = b"allowed-registered-approver"
+publish(approver, DECISION, decision_marker, 6)
+if not receive_publish(vault, decision_marker, 2.0):
+    raise RuntimeError("registered approver decision was not delivered")
+cross_decision_marker = b"approver-must-not-cross-client"
+publish(approver, CROSS_DECISION, cross_decision_marker, 8)
+if receive_publish(vault, cross_decision_marker, 1.0):
+    raise RuntimeError("approver MQTT identity crossed its client boundary")
+result_marker = b"allowed-vault-result"
+publish(vault, RESULT, result_marker, 30)
+if not receive_publish(workload, result_marker, 2.0):
+    raise RuntimeError("AgentVault result was not delivered to its client workload")
+payee = connect("payee-acl-probe", "marketpulse-payee", PAYEE_PASSWORD)
+subscribe(payee, f"{PREFIX}/client-marketpulse/results/+", 40)
+payee_marker = b"allowed-marketpulse-payee"
+publish(payee, PAYEE_COMMAND, payee_marker, 41)
+if not receive_publish(vault, payee_marker, 2.0):
+    raise RuntimeError("MarketPulse Payee command was not delivered to AgentVault")
+payee_cross_marker = b"payee-must-not-cross-client"
+publish(payee, OWN, payee_cross_marker, 42)
+if receive_publish(vault, payee_cross_marker, 1.0):
+    raise RuntimeError("MarketPulse Payee crossed its client boundary")
+payee_result_marker = b"allowed-marketpulse-result"
+publish(vault, PAYEE_RESULT, payee_result_marker, 43)
+if not receive_publish(payee, payee_result_marker, 2.0):
+    raise RuntimeError("AgentVault result was not delivered to MarketPulse Payee")
+workload.close()
+approver.close()
+payee.close()
+vault.close()
+print(f"MQTT password authentication and isolated ACL checks passed for {CLIENT_ID}")
