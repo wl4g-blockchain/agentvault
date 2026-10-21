@@ -1,16 +1,22 @@
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use sha3::{Digest, Keccak256};
+use solana_keypair::Keypair;
+use solana_signer::Signer as _;
 
 #[cfg(test)]
 use rand_core::OsRng;
 #[cfg(test)]
 use zeroize::Zeroizing;
 
-use crate::{Error, Result};
+use crate::{
+    model::wallet::{is_evm_wallet_algorithm, is_solana_wallet_algorithm},
+    Error, Result,
+};
 
 pub const PRIVATE_KEY_BYTES: usize = 32;
 const EIP712_DIGEST_BYTES: usize = 32;
 pub const EOA_SIGNATURE_BYTES: usize = 65;
+pub const SOLANA_SIGNATURE_BYTES: usize = 64;
 
 #[cfg(test)]
 pub fn generate_private_key() -> Zeroizing<Vec<u8>> {
@@ -56,6 +62,39 @@ pub fn public_key(private_key: &[u8]) -> Result<String> {
     ))
 }
 
+/// Validates private key material for a supported local custody algorithm.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported algorithm or malformed key material.
+pub fn validate_private_key_for_algorithm(algorithm: &str, private_key: &[u8]) -> Result<()> {
+    if is_evm_wallet_algorithm(algorithm) {
+        return validate_private_key(private_key);
+    }
+    if is_solana_wallet_algorithm(algorithm) {
+        solana_keypair(private_key)?;
+        return Ok(());
+    }
+    Err(Error::InvalidKey("unsupported local wallet algorithm".to_owned()))
+}
+
+/// Derives the canonical address and public key using the official key type
+/// for the configured custody algorithm.
+///
+/// # Errors
+///
+/// Returns an error for unsupported algorithms or malformed key material.
+pub fn payment_key_metadata(algorithm: &str, private_key: &[u8]) -> Result<(String, String)> {
+    if is_evm_wallet_algorithm(algorithm) {
+        return Ok((address(private_key)?, public_key(private_key)?));
+    }
+    if is_solana_wallet_algorithm(algorithm) {
+        let address = solana_keypair(private_key)?.pubkey().to_string();
+        return Ok((address.clone(), address));
+    }
+    Err(Error::InvalidKey("unsupported local wallet algorithm".to_owned()))
+}
+
 /// Signs a precomputed 32-byte digest and returns Ethereum `r || s || v` bytes.
 ///
 /// # Errors
@@ -86,6 +125,22 @@ pub(crate) fn sign_eip712_digest(private_key: &[u8], digest: &[u8]) -> Result<[u
     output[..64].copy_from_slice(&signature.to_bytes());
     output[64] = recovery_id.to_byte() + 27;
     Ok(output)
+}
+
+/// Signs protocol-owned Solana transaction message bytes with the official
+/// Solana keypair implementation.
+pub(crate) fn sign_solana_message(private_key: &[u8], message: &[u8]) -> Result<[u8; SOLANA_SIGNATURE_BYTES]> {
+    if message.is_empty() {
+        return Err(Error::InvalidRequest("Solana signing message is empty".to_owned()));
+    }
+    Ok(solana_keypair(private_key)?.sign_message(message).into())
+}
+
+fn solana_keypair(private_key: &[u8]) -> Result<Keypair> {
+    let seed: [u8; PRIVATE_KEY_BYTES] = private_key
+        .try_into()
+        .map_err(|_| Error::InvalidKey(format!("ed25519 private key seed must be {PRIVATE_KEY_BYTES} bytes")))?;
+    Ok(Keypair::new_from_array(seed))
 }
 
 fn signing_key(private_key: &[u8]) -> Result<SigningKey> {

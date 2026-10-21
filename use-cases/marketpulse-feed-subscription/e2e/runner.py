@@ -31,6 +31,8 @@ SCENARIOS = (
     Scenario("payer", "verifier.payer.s10_dependencies", "payer", "s10_dependencies.md", "start and verify payer dependencies"),
     Scenario("payee", "verifier.payee.s10_dependencies", "payee", "s10_dependencies.md", "start and verify payee dependencies"),
     Scenario("full", "verifier.payment.s20_full", "payment", "s20_full.md", "run one language through the complete payment flow"),
+    Scenario("mpp-tempo", "verifier.payment.s25_mpp_tempo", "payment", "s25_mpp_tempo.md", "run MPP Tempo charge, recovery, and gas accounting"),
+    Scenario("x402-solana", "verifier.payment.s26_x402_solana", "payment", "s26_x402_solana.md", "run x402 v2 exact on a real local Solana validator"),
     Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the selected SDK matrix scope"),
     Scenario("web", "verifier.web.s40_dashboard", "web", "s40_dashboard.md", "render Matrix evidence through real Chromium Dashboard journeys"),
 )

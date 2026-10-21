@@ -7,7 +7,7 @@ from common.payer_identity import PAYER_IDENTITIES, payer_identity
 
 
 PAYER_EVENTS = (
-    "agentvault.sdk.payer.x402_detected",
+    "agentvault.sdk.payer.payment_required",
     "agentvault.sdk.payer.signing_requested",
     "agentvault.sdk.payer.signed",
     "agentvault.sdk.payer.retrying",

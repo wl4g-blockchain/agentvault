@@ -46,6 +46,10 @@ func NewMqttVaultTransport(settings config.MqttConfig) (*MqttVaultTransport, err
 	return &MqttVaultTransport{config: settings}, nil
 }
 
+// Close is idempotent because MQTT connections are request-scoped and closed
+// by Do before it returns.
+func (transport *MqttVaultTransport) Close() error { return nil }
+
 type mqttWireRequest struct {
 	Method  string            `json:"method"`
 	Path    string            `json:"path"`

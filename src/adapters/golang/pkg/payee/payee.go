@@ -1,24 +1,49 @@
 package payee
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
+	"reflect"
+	"strings"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
+	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/protocol"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/transport"
 )
 
 var ErrInvalidPayment = errors.New("AgentVault rejected the presented payment")
 
+type PaymentRejectedError struct {
+	Challenge *model.PaymentChallenge
+}
+
+func (errorValue *PaymentRejectedError) Error() string { return ErrInvalidPayment.Error() }
+
+func (errorValue *PaymentRejectedError) Unwrap() error { return ErrInvalidPayment }
+
+type mcpCall struct {
+	ID                 any
+	CredentialProtocol string
+	CredentialPayload  any
+	CanonicalBody      []byte
+}
+
 // PayeeMiddleware owns challenge, credential verification, and settlement.
 // Framework adapters only translate their request/response types.
 type PayeeMiddleware struct {
-	api    *transport.Client
-	config config.PayeeConfig
+	api       *transport.Client
+	config    config.PayeeConfig
+	protocols *protocol.Registry
 }
 
 func NewPayeeMiddleware(wire transport.Transport, settings config.PayeeConfig) (*PayeeMiddleware, error) {
@@ -29,7 +54,11 @@ func NewPayeeMiddleware(wire transport.Transport, settings config.PayeeConfig) (
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	return &PayeeMiddleware{api: transport.NewClient(wire), config: settings}, nil
+	protocols, err := protocol.NewPaymentProtocolFactory().Create(settings.Protocols)
+	if err != nil {
+		return nil, err
+	}
+	return &PayeeMiddleware{api: transport.NewClient(wire), config: settings, protocols: protocols}, nil
 }
 
 func (middleware *PayeeMiddleware) Gin(routes ...GinPayeeRoute) *GinPayeeMiddleware {
@@ -37,11 +66,330 @@ func (middleware *PayeeMiddleware) Gin(routes ...GinPayeeRoute) *GinPayeeMiddlew
 }
 
 func (middleware *PayeeMiddleware) Standard(routes ...StandardPayeeRoute) *StandardPayeeMiddleware {
-	return NewStandardPayeeMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
+	return NewStdHttpMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
 }
 
 func (middleware *PayeeMiddleware) Config() config.PayeeConfig {
 	return middleware.config
+}
+
+func (middleware *PayeeMiddleware) Protocol(name string) (protocol.Adapter, error) {
+	if middleware == nil {
+		return nil, errors.New("payee middleware is not configured")
+	}
+	return middleware.protocols.Get(name)
+}
+
+func (middleware *PayeeMiddleware) MerchantEvidenceHeaderNames() []string {
+	if middleware == nil || middleware.protocols == nil {
+		return nil
+	}
+	return middleware.protocols.MerchantEvidenceHeaderNames()
+}
+
+// PresentedCredential normalizes only payment-bearing HTTP fields and rejects
+// ambiguous duplicates before any credential is forwarded to AgentVault.
+func (middleware *PayeeMiddleware) PresentedCredential(
+	adapter protocol.Adapter,
+	headers map[string][]string,
+	limit int64,
+) (any, error) {
+	if middleware == nil || adapter == nil {
+		return nil, errors.New("payee payment protocol is not configured")
+	}
+	normalized, err := normalizeCredentialHeaders(headers, adapter.CredentialHeaderNames())
+	if err != nil {
+		return nil, err
+	}
+	return adapter.PresentedCredential(normalized, limit)
+}
+
+// PresentedCredentialForProtocol lets every enabled provider inspect its own
+// headers, rejects cross-protocol ambiguity, then enforces the protected route.
+func (middleware *PayeeMiddleware) PresentedCredentialForProtocol(
+	protocolName string,
+	headers map[string][]string,
+	limit int64,
+) (any, error) {
+	if middleware == nil {
+		return nil, errors.New("payee payment protocol is not configured")
+	}
+	if _, err := middleware.protocols.Get(protocolName); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
+	if err != nil {
+		return nil, err
+	}
+	selected, payload, err := middleware.protocols.PresentedCredential(normalized, limit)
+	if err != nil {
+		return nil, err
+	}
+	if selected != "" && selected != protocolName {
+		return nil, errors.New("payment credential protocol does not match the protected route")
+	}
+	return payload, nil
+}
+
+func normalizeCredentialHeaders(headers map[string][]string, names []string) (map[string]string, error) {
+	normalized := make(map[string]string, len(names))
+	for name, values := range headers {
+		owned := false
+		for _, candidate := range names {
+			if strings.EqualFold(name, candidate) {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+		if len(values) != 1 {
+			return nil, fmt.Errorf("duplicate payment request header is not allowed: %s", name)
+		}
+		normalized[name] = values[0]
+	}
+	return normalized, nil
+}
+
+func (middleware *PayeeMiddleware) readBody(request *http.Request, limit int64) ([]byte, error) {
+	if request.ContentLength > limit {
+		return nil, errors.New("protected request body exceeds configured limit")
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read protected request: %w", err)
+	}
+	if int64(len(body)) > limit {
+		return nil, errors.New("protected request body exceeds configured limit")
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
+}
+
+func (middleware *PayeeMiddleware) replayBody(request *http.Request, body []byte) {
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	request.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+}
+
+func (middleware *PayeeMiddleware) hasMerchantEvidenceHeader(headers http.Header) bool {
+	for name := range headers {
+		for _, owned := range middleware.MerchantEvidenceHeaderNames() {
+			if strings.EqualFold(name, owned) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (middleware *PayeeMiddleware) requestHash(request *http.Request, body []byte) string {
+	hash := sha256.New()
+	hash.Write([]byte("agentvault.payee.http.v1\x00"))
+	hash.Write([]byte(request.Method))
+	hash.Write([]byte{0})
+	hash.Write([]byte(request.URL.Path))
+	hash.Write([]byte{0})
+	hash.Write(body)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func (middleware *PayeeMiddleware) hasMCPHTTPPaymentCredential(headers http.Header) (bool, error) {
+	normalized, err := normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
+	if err != nil {
+		return false, err
+	}
+	_, payload, err := middleware.protocols.PresentedCredential(normalized, middleware.config.MaxBodyBytes)
+	return payload != nil, err
+}
+
+func (middleware *PayeeMiddleware) parseMCPCall(body []byte, expectedTool, protocolName string) (*mcpCall, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var message map[string]any
+	if err := decoder.Decode(&message); err != nil {
+		return nil, nil
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, nil
+	}
+	params, paramsOK := message["params"].(map[string]any)
+	if message["jsonrpc"] != "2.0" || message["method"] != "tools/call" || !paramsOK || params["name"] != expectedTool {
+		return nil, nil
+	}
+	id := message["id"]
+	if _, stringID := id.(string); !stringID {
+		if _, numberID := id.(json.Number); !numberID {
+			return nil, errors.New("paid MCP tools/call requires a string or numeric JSON-RPC id")
+		}
+	}
+	meta := map[string]any{}
+	if raw, exists := params["_meta"]; exists {
+		nested, ok := raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("MCP params._meta must be an object")
+		}
+		for key, value := range nested {
+			meta[key] = value
+		}
+	}
+	rootMeta := map[string]any{}
+	if raw, exists := message["_meta"]; exists {
+		var ok bool
+		rootMeta, ok = raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("JSON-RPC root _meta must be an object")
+		}
+	}
+	for _, key := range middleware.protocols.MCPRootRequestMetadataKeys() {
+		if value, exists := rootMeta[key]; exists {
+			if _, duplicate := meta[key]; duplicate {
+				return nil, errors.New("duplicate MCP payment credential metadata")
+			}
+			meta[key] = value
+		}
+	}
+	credentialProtocol, credential, err := middleware.protocols.PresentedMCPCredential(
+		meta, middleware.config.MaxBodyBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if credentialProtocol != "" && credentialProtocol != protocolName {
+		return nil, errors.New("MCP payment credential protocol does not match the protected route")
+	}
+	for _, key := range middleware.protocols.MCPRequestMetadataKeys() {
+		if nested, ok := params["_meta"].(map[string]any); ok {
+			delete(nested, key)
+		}
+	}
+	if nested, ok := params["_meta"].(map[string]any); ok && len(nested) == 0 {
+		delete(params, "_meta")
+	}
+	for _, key := range middleware.protocols.MCPRootRequestMetadataKeys() {
+		delete(rootMeta, key)
+	}
+	if _, exists := message["_meta"]; exists && len(rootMeta) == 0 {
+		delete(message, "_meta")
+	}
+	canonical, err := json.Marshal(message)
+	if err != nil {
+		return nil, errors.New("MCP request cannot be canonicalized")
+	}
+	return &mcpCall{
+		ID: id, CredentialProtocol: credentialProtocol, CredentialPayload: credential, CanonicalBody: canonical,
+	}, nil
+}
+
+func (middleware *PayeeMiddleware) mcpPaymentRequired(
+	challenge *model.PaymentChallenge,
+	rejected bool,
+) (protocol.MCPPaymentRequired, error) {
+	adapter, err := middleware.protocols.MCP(challenge.Protocol)
+	if err != nil {
+		return protocol.MCPPaymentRequired{}, err
+	}
+	if rejected {
+		return adapter.MCPPaymentRejected(challenge, ErrInvalidPayment.Error())
+	}
+	return adapter.MCPPaymentRequired(challenge)
+}
+
+func (middleware *PayeeMiddleware) encodeMCPPaymentRequired(
+	call *mcpCall,
+	challenge *model.PaymentChallenge,
+	rejected bool,
+) ([]byte, error) {
+	if call == nil {
+		return nil, errors.New("MCP call context is missing")
+	}
+	wire, err := middleware.mcpPaymentRequired(challenge, rejected)
+	if err != nil {
+		return nil, err
+	}
+	message := map[string]any{"jsonrpc": "2.0", "id": call.ID}
+	if wire.Result != nil {
+		message["result"] = wire.Result
+	} else if wire.Error != nil {
+		message["error"] = wire.Error
+	} else {
+		return nil, errors.New("protocol returned no MCP challenge")
+	}
+	body, err := json.Marshal(message)
+	if err != nil || int64(len(body)) > middleware.config.MaxBodyBytes {
+		return nil, errors.New("MCP payment challenge is invalid or oversized")
+	}
+	return body, nil
+}
+
+func (middleware *PayeeMiddleware) injectMCPReceipt(
+	call *mcpCall,
+	challenge *model.PaymentChallenge,
+	payment *model.SettledIncomingPayment,
+	body []byte,
+) ([]byte, error) {
+	message, meta, err := middleware.decodeMCPResponse(call, body, true)
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := middleware.protocols.MCP(payment.Receipt.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := adapter.MCPReceipt(challenge, payment)
+	if err != nil {
+		return nil, err
+	}
+	if _, exists := meta[metadata.Key]; exists {
+		return nil, errors.New("paid MCP handler attempted to supply settlement metadata")
+	}
+	meta[metadata.Key] = metadata.Value
+	encoded, err := json.Marshal(message)
+	if err != nil || int64(len(encoded)) > middleware.config.MaxBodyBytes {
+		return nil, errors.New("paid MCP response is invalid or oversized")
+	}
+	return encoded, nil
+}
+
+func (middleware *PayeeMiddleware) decodeMCPResponse(
+	call *mcpCall,
+	body []byte,
+	requireResult bool,
+) (map[string]any, map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var message map[string]any
+	if err := decoder.Decode(&message); err != nil || !reflect.DeepEqual(message["id"], call.ID) {
+		return nil, nil, errors.New("paid MCP response id does not match its request")
+	}
+	result, ok := message["result"].(map[string]any)
+	if !ok {
+		if requireResult {
+			return nil, nil, errors.New("paid MCP handler must return a JSON-RPC result")
+		}
+		if _, ok := message["error"].(map[string]any); !ok {
+			return nil, nil, errors.New("paid MCP handler must return a JSON-RPC result or error")
+		}
+		return message, nil, nil
+	}
+	meta := map[string]any{}
+	if raw, exists := result["_meta"]; exists {
+		meta, ok = raw.(map[string]any)
+		if !ok {
+			return nil, nil, errors.New("paid MCP result._meta must be an object")
+		}
+	}
+	if protocolName, evidence, err := middleware.protocols.MCPMerchantEvidence(meta, middleware.config.MaxBodyBytes); err != nil {
+		return nil, nil, err
+	} else if evidence != nil {
+		return nil, nil, fmt.Errorf("paid MCP handler attempted to supply %s settlement metadata", protocolName)
+	}
+	result["_meta"] = meta
+	return message, meta, nil
 }
 
 func (middleware *PayeeMiddleware) Challenge(ctx context.Context, operation model.PayeeOperation) (*model.PaymentChallenge, error) {
@@ -96,7 +444,7 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 		return nil, err
 	}
 	if !verification.Valid {
-		return nil, ErrInvalidPayment
+		return nil, &PaymentRejectedError{Challenge: challenge}
 	}
 	if verification.VerificationRef == "" {
 		return nil, errors.New("valid AgentVault verification omitted verification_ref")
@@ -125,7 +473,7 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	slog.Info("payee middleware settled payment",
 		"event.name", "agentvault.sdk.payee.settled", "run.id", operation.RunID,
 		"payment.intent_id", payment.Intent.ID)
-	return &model.ProtectionOutcome{Outcome: "authorized", Payment: payment}, nil
+	return &model.ProtectionOutcome{Outcome: "authorized", Challenge: challenge, Payment: payment}, nil
 }
 
 func validateChallengeBinding(operation model.PayeeOperation, challenge *model.PaymentChallenge) error {

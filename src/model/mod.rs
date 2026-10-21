@@ -29,7 +29,7 @@ pub use receipt::PaymentReceipt;
 pub use scenario::PaymentScenario;
 pub use wallet::{
     canonicalize_payment_recipient, canonicalize_wallet_address, payment_recipients_match, wallet_addresses_match,
-    Wallet, EVM_EOA_ALGORITHM,
+    Wallet, EVM_EOA_ALGORITHM, SOLANA_ED25519_ALGORITHM,
 };
 
 #[cfg(test)]

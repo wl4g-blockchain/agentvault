@@ -2,10 +2,40 @@ use std::{fmt, time::Duration};
 
 use crate::{Error, Result};
 
-const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(2);
 const DEFAULT_APPROVAL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_CHALLENGE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+
+struct ProtocolDefaults;
+
+impl ProtocolDefaults {
+    fn values() -> Vec<String> {
+        vec!["x402".to_owned(), "mpp".to_owned()]
+    }
+
+    fn validate(protocols: &[String]) -> Result<()> {
+        if protocols.is_empty()
+            || protocols.iter().any(|protocol| {
+                protocol.is_empty()
+                    || protocol.len() > 32
+                    || protocol != &protocol.to_ascii_lowercase()
+                    || !protocol
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            })
+            || protocols
+                .iter()
+                .enumerate()
+                .any(|(index, protocol)| protocols[..index].contains(protocol))
+        {
+            return Err(Error::InvalidArgument(
+                "payment protocols must be a non-empty, unique list of safe lowercase names".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 pub struct GrpcConfig {
@@ -94,6 +124,7 @@ pub struct PayerConfig {
     pub approval_poll_interval: Duration,
     pub delivery_retries: u8,
     pub max_challenge_bytes: usize,
+    pub protocols: Vec<String>,
 }
 
 impl PayerConfig {
@@ -104,6 +135,7 @@ impl PayerConfig {
             approval_poll_interval: DEFAULT_APPROVAL_POLL_INTERVAL,
             delivery_retries: 0,
             max_challenge_bytes: DEFAULT_MAX_CHALLENGE_BYTES,
+            protocols: ProtocolDefaults::values(),
         };
         config.validate()?;
         Ok(config)
@@ -128,6 +160,12 @@ impl PayerConfig {
         self
     }
 
+    #[must_use]
+    pub fn with_protocols(mut self, protocols: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.protocols = protocols.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if self.scenario_id.trim().is_empty() {
             return Err(Error::InvalidArgument("scenario_id cannot be blank".to_owned()));
@@ -142,31 +180,39 @@ impl PayerConfig {
                 "payer middleware retry, timeout, or challenge limits are invalid".to_owned(),
             ));
         }
-        Ok(())
+        ProtocolDefaults::validate(&self.protocols)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayeeConfig {
     pub max_body_bytes: usize,
+    pub protocols: Vec<String>,
 }
 
 impl Default for PayeeConfig {
     fn default() -> Self {
         Self {
             max_body_bytes: 1024 * 1024,
+            protocols: ProtocolDefaults::values(),
         }
     }
 }
 
 impl PayeeConfig {
+    #[must_use]
+    pub fn with_protocols(mut self, protocols: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.protocols = protocols.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if self.max_body_bytes == 0 {
             return Err(Error::InvalidArgument(
                 "payee middleware body limit must be positive".to_owned(),
             ));
         }
-        Ok(())
+        ProtocolDefaults::validate(&self.protocols)
     }
 }
 

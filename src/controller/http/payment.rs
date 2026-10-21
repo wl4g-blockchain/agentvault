@@ -12,8 +12,9 @@ use axum::{
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use x402_types::util::b64::Base64Bytes;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use crate::{
     apm::AgentVaultMetrics,
@@ -166,9 +167,11 @@ impl PaymentApi {
                     .await?;
                 signing_metric.succeed();
                 intent = signed.intent;
+                let protocol = self.payer_protocols.get(&signed.credential.protocol)?;
                 credential = Some(PaymentCredentialDto::for_http(
                     signed.credential,
                     &request.challenge.origin,
+                    protocol.as_ref(),
                 )?);
             }
             PaymentAuthorizationResult::RequiresApproval { approval_id, .. } => {
@@ -199,25 +202,14 @@ impl PaymentApi {
                 "opaque 402 metadata does not match the requested resource".to_owned(),
             ));
         }
-        let protocol = payment_protocol(&request.challenge)?;
-        let wire = match protocol {
-            "x402" => serde_json::from_str::<Value>(&request.challenge.body)
-                .map_err(|_| Error::InvalidRequest("x402 402 body is not valid JSON".to_owned()))?,
-            "mpp" => {
-                let authenticate = header_value(&request.challenge.headers, "www-authenticate").ok_or_else(|| {
-                    Error::InvalidRequest("MPP 402 response has no WWW-Authenticate header".to_owned())
-                })?;
-                json!({"www_authenticate": authenticate})
-            }
-            unsupported => {
-                return Err(Error::InvalidRequest(format!(
-                    "unsupported outbound payment protocol: {unsupported}"
-                )))
-            }
-        };
-        let challenge = self
-            .payer_protocols
-            .get(protocol)?
+        let (adapter, wire) = self.payer_protocols.resolve_http_challenge(
+            request.challenge.protocol_hint.as_deref(),
+            &request.challenge.resource,
+            &request.challenge.headers,
+            &request.challenge.body,
+        )?;
+        let protocol = adapter.name();
+        let challenge = adapter
             .parse_challenge(
                 &request.context.scenario_id,
                 &request.challenge.resource,
@@ -284,6 +276,7 @@ impl PaymentApi {
     ) -> Result<ReportOutboundResponseResponse> {
         let mut operation_metric = self.metrics.payment_operation("settle", "outbound");
         request.context.validate()?;
+        let evidence = request.evidence()?;
         let recorded = self
             .outbound_evidence_handler
             .record_merchant_response(
@@ -292,7 +285,9 @@ impl PaymentApi {
                     scenario_id: request.context.scenario_id.clone(),
                     run_id: request.context.run_id.clone(),
                     intent_id: intent_id.to_owned(),
-                    payment_response: request.payment_response.clone(),
+                    protocol: evidence.protocol,
+                    header_name: evidence.header_name,
+                    header_value: evidence.header_value,
                 },
                 now,
             )
@@ -915,8 +910,47 @@ pub(crate) struct AuthorizePaymentResponse {
 pub(crate) struct ReportOutboundResponseRequest {
     #[serde(flatten)]
     pub context: OperationContextDto,
-    /// Official x402 v2 `PAYMENT-RESPONSE` header value (standard base64).
-    pub payment_response: String,
+    /// Compatibility field for the original x402 v2 API. New SDKs send the
+    /// protocol-owned evidence envelope below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_response: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ProtocolEvidenceDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProtocolEvidenceDto {
+    pub header_name: String,
+    pub header_value: String,
+}
+
+struct ResolvedProtocolEvidence {
+    protocol: String,
+    header_name: String,
+    header_value: String,
+}
+
+impl ReportOutboundResponseRequest {
+    fn evidence(&self) -> Result<ResolvedProtocolEvidence> {
+        match (&self.payment_response, &self.protocol, &self.evidence) {
+            (Some(value), None, None) => Ok(ResolvedProtocolEvidence {
+                protocol: "x402".to_owned(),
+                header_name: "payment-response".to_owned(),
+                header_value: value.clone(),
+            }),
+            (None, Some(protocol), Some(evidence)) => Ok(ResolvedProtocolEvidence {
+                protocol: protocol.clone(),
+                header_name: evidence.header_name.clone(),
+                header_value: evidence.header_value.clone(),
+            }),
+            _ => Err(Error::InvalidRequest(
+                "provide either legacy payment_response or protocol evidence".to_owned(),
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -947,26 +981,17 @@ impl PaymentCredentialDto {
         }
     }
 
-    fn for_http(credential: PaymentCredential, origin: &str) -> Result<Self> {
-        let (header_name, header_value) = match credential.protocol.as_str() {
-            "x402" => (
-                "payment-signature".to_owned(),
-                Base64Bytes::encode(serde_json::to_vec(&credential.payload)?).to_string(),
-            ),
-            "mpp" => {
-                let value = credential
-                    .payload
-                    .get("authorization")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error::PaymentProtocol("MPP credential has no Authorization value".to_owned()))?;
-                ("authorization".to_owned(), value.to_owned())
-            }
-            protocol => {
-                return Err(Error::PaymentProtocol(format!(
-                    "unsupported HTTP credential protocol: {protocol}"
-                )))
-            }
-        };
+    fn for_http(
+        credential: PaymentCredential,
+        origin: &str,
+        protocol: &dyn crate::protocol::PaymentProtocol,
+    ) -> Result<Self> {
+        if credential.protocol != protocol.name() {
+            return Err(Error::PaymentProtocol(
+                "HTTP credential adapter does not match its protocol".to_owned(),
+            ));
+        }
+        let http = protocol.encode_http_credential(&credential)?;
         Ok(Self {
             protocol: credential.protocol,
             challenge_hash: credential.challenge_hash,
@@ -974,8 +999,8 @@ impl PaymentCredentialDto {
             payload: credential.payload,
             http: Some(HttpCredentialDto {
                 bound_origin: origin.to_owned(),
-                header_name,
-                header_value,
+                header_name: http.header_name,
+                header_value: http.header_value,
             }),
         })
     }
@@ -1338,29 +1363,6 @@ fn canonical_origin(resource: &str) -> Result<String> {
         return Err(Error::InvalidRequest("payment resource URL is unsafe".to_owned()));
     }
     Ok(url.origin().ascii_serialization())
-}
-
-fn header_value<'a>(headers: &'a BTreeMap<String, String>, wanted: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
-        .map(|(_, value)| value.as_str())
-}
-
-fn payment_protocol(challenge: &PaymentRequiredDto) -> Result<&str> {
-    if let Some(hint) = challenge.protocol_hint.as_deref() {
-        if hint != hint.trim() || !matches!(hint, "x402" | "mpp") {
-            return Err(Error::PaymentProtocol(format!(
-                "unsupported payment protocol hint: {hint}"
-            )));
-        }
-        return Ok(hint);
-    }
-    if header_value(&challenge.headers, "www-authenticate").is_some() {
-        Ok("mpp")
-    } else {
-        Ok("x402")
-    }
 }
 
 fn confirmed_totals(entries: &[PaymentLedgerEntry]) -> Result<(Amount, Amount)> {

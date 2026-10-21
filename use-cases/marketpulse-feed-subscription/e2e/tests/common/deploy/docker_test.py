@@ -5,7 +5,7 @@ from json import dumps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from common.deploy.docker import (
     AGENTVAULT_CHART,
@@ -178,6 +178,93 @@ class FacilitatorRuntimeEvidenceTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "invalid /supported JSON"):
             deployer._facilitator_capabilities()
+
+
+class TempoLifecycleTest(unittest.TestCase):
+    @patch("common.deploy.docker.time.sleep")
+    @patch("common.deploy.docker.time.time", return_value=1_000)
+    def test_faucet_window_requires_a_current_non_genesis_block(
+        self,
+        _time: Mock,
+        _sleep: Mock,
+    ) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer._json_rpc_result = Mock(side_effect=[
+            {"number": "0x0", "timestamp": "0x3e8"},
+            {"number": "0x1", "timestamp": "0x3e8"},
+        ])
+
+        deployer._wait_tempo_faucet_window("http://tempo.local", attempts=2)
+
+        self.assertEqual(deployer._json_rpc_result.call_count, 2)
+        _sleep.assert_called_once_with(0.5)
+
+    @patch("common.deploy.docker.time.sleep")
+    @patch("common.deploy.docker.time.time", return_value=1_000)
+    def test_faucet_window_rejects_stale_chain_time(self, _time: Mock, _sleep: Mock) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer._json_rpc_result = Mock(return_value={"number": "0x1", "timestamp": "0x1"})
+
+        with self.assertRaisesRegex(RuntimeError, "faucet nonce window"):
+            deployer._wait_tempo_faucet_window("http://tempo.local", attempts=1)
+
+    def test_waits_for_current_official_node_block_before_running_rust_gate(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.context = SimpleNamespace(timeout_seconds=60)
+        deployer.compose = ["docker", "compose", "-p", "agentvault-e2e"]
+        deployer.environment = {"E2E_TEMPO_RPC_PORT": "28546"}
+        deployer.cleanup = Mock()
+        deployer._compose = Mock()
+        deployer._wait_rpc = Mock()
+        deployer._wait_tempo_faucet_window = Mock()
+        deployer._target_budget = Mock()
+        deployer._run = Mock(return_value="passed")
+
+        self.assertEqual(deployer.mpp_tempo(), "passed")
+
+        deployer._compose.assert_called_once_with(("tempo",), "up", "-d", "tempo")
+        deployer._wait_rpc.assert_called_once_with("http://127.0.0.1:28546/", "eth_chainId", "0x539", 90)
+        deployer._wait_tempo_faucet_window.assert_called_once_with("http://127.0.0.1:28546/")
+        deployer._target_budget.assert_called_once_with()
+        deployer._run.assert_called_once()
+
+
+class SolanaLifecycleTest(unittest.TestCase):
+    def test_bootstraps_finalized_spl_fixture_before_running_official_x402_gate(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.context = SimpleNamespace(timeout_seconds=60)
+        deployer.environment = {"E2E_SOLANA_RPC_PORT": "28899"}
+        deployer.cleanup = Mock()
+        deployer._compose = Mock()
+        deployer._wait_rpc = Mock()
+        deployer._solana_command = Mock()
+        deployer._solana_pubkey = Mock(side_effect=["B" * 32, "C" * 32, "D" * 32, "E" * 32])
+        deployer._solana_json = Mock(side_effect=[
+            {"commandOutput": {"address": "E" * 32}},
+            {},
+            {},
+            {"associatedTokenAddress": "F" * 32},
+            {"associatedTokenAddress": "G" * 32},
+            {},
+        ])
+        deployer._wait_solana_token_balance = Mock()
+        deployer._solana_rpc_result = Mock(return_value="H" * 44)
+        deployer._solana_keypair_json = Mock(side_effect=["[1]", "[2]"])
+        deployer._target_budget = Mock()
+        deployer._run = Mock(return_value="passed")
+
+        self.assertEqual(deployer.x402_solana(), "passed")
+
+        deployer._compose.assert_called_once_with(("payer",), "up", "-d", "solana")
+        deployer._wait_rpc.assert_called_once_with("http://127.0.0.1:28899/", "getHealth", "ok", 120)
+        self.assertEqual(
+            deployer._wait_solana_token_balance.call_args_list,
+            [unittest.mock.call("F" * 32, 1_000_000_000), unittest.mock.call("G" * 32, 0)],
+        )
+        self.assertEqual(deployer.environment["SOLANA_CHAIN_REFERENCE"], "H" * 32)
+        self.assertEqual(deployer.environment["SOLANA_RECIPIENT_ADDRESS"], "C" * 32)
+        deployer._target_budget.assert_called_once_with()
+        deployer._run.assert_called_once()
 
 
 class CleanupIsolationTest(unittest.TestCase):

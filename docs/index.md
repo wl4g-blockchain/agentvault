@@ -201,7 +201,11 @@ Credential 语义指纹在同一支付方向内全局唯一：任何 INBOUND Cre
 
 ## 8. Protocol 与外部结算
 
-`PaymentProtocol` 把 wire Challenge/Credential 转换为统一领域对象，并负责协议语义指纹与签名计划。当前完整 Payer 能力是 x402 v2 / EVM / USDC / exact / EIP-3009；MPP / Tempo Charge 当前只开放 Payee 流程，`payer.mpp.enabled=true` 会在启动期 Fail Closed，不能把仅能解析 Challenge 的代码误报成可签名能力。协议库可用时直接封装官方 crate；业务内核不复制协议栈。AgentVault x402 Payee profile 会随 402 返回 `payment-expires-at`（规范十进制 Unix 秒）；Payer 必须原样回传这个绝对时间，使审批轮询和进程重试解析出同一个 Challenge Hash。Adapter 会同时按 x402 `maxTimeoutSeconds` 校验它，缺失、过期或超出窗口均 Fail Closed，而不是以本机当前时间重新生成过期点。
+`PaymentProtocol` 把 wire Challenge/Credential 转换为统一领域对象，并负责协议语义指纹与签名计划。完整 Payer 能力包括 x402 v2 / EVM / USDC / exact / EIP-3009，以及 MPP 0.15.1 的 Tempo `charge`：Adapter 从权威 Challenge 构造受约束的 type-0x76 交易和 EIP-712 digest，仍由既有 Wallet/Policy/预算/审批链路签名，再生成官方 Credential；Payee 通过固定外部 Provider 的 verify/settle 获取可信链上证据。MPP session、split、fee-payer、machine-token 与 delegated-key 仍显式 Unsupported，不能伪装成 charge。协议库可用时直接封装官方 crate；业务内核不复制协议栈。AgentVault x402 Payee profile 会随 402 返回 `payment-expires-at`（规范十进制 Unix 秒）；Payer 必须原样回传这个绝对时间，使审批轮询和进程重试解析出同一个 Challenge Hash。Adapter 会同时按 x402 `maxTimeoutSeconds` 校验它，缺失、过期或超出窗口均 Fail Closed，而不是以本机当前时间重新生成过期点。
+
+x402 Provider 只接受 v2 结构：HTTP 优先解析规范 Base64 `PAYMENT-REQUIRED`，兼容原 JSON body；头与 body 同时声明但内容不同即拒绝。MCP Tool Call 支持错误 Tool Result 中的 `structuredContent` 与文本 JSON，两者冲突同样拒绝；付款重试使用 `x402/payment`，成功证据使用 `x402/payment-response`。MPP Provider 使用官方 `mpp` crate 的 HTTP Challenge/Credential/Receipt 与 MCP PaymentError/`org.paymentauth/credential`/`org.paymentauth/receipt` 类型；仅选择允许列表中的 Tempo `charge`，非付款认证 Challenge 不会误判。`Payment-Authorization` 只有在对端 Challenge 明确要求时使用，`Authorization: Payment` 不得覆盖已有业务 Bearer。所有协议付款 `_meta` 在调用业务 Handler 前剥离，其他 `_meta` 原样保留。
+
+Rust、Go、Python、TypeScript 的 x402 Provider 直接组合各自官方 v2 SDK；五语言 MPP Provider 同样优先组合官方/上游库模型。当前上游 Java x402 模块仍是仅本地安装的 `1.0.0-SNAPSHOT` v1（`X-PAYMENT` 与 v1 body），不能作为 v2 类型依赖，因此 Java 只保留受共享夹具约束的薄 v2 wire 投影，钱包签名、协议权威校验和结算仍由使用官方 Rust 类型的 Vault 执行；在上游提供兼容的 Java v2 类型后再替换该投影，禁止以 v1 库伪装 v2 支持。
 
 Facilitator/Provider 始终是进程外依赖。HTTP adapter 固定 Base URL 和相对路径、禁止跨 Authority Redirect、限制响应体与超时，并校验返回的资产和结算证据。Provider 跟随所属 Payee 协议配置；共享 `chains` 注册表由运营方固定链类型与 RPC，Challenge 不能选择 Provider 或 RPC。
 
@@ -227,6 +231,7 @@ Management 健康端点区分存活与就绪：`/healthz` 只证明进程事件�
 ```text
 model/        wire/domain DTO
 transport/    统一契约、gRPC/MQTT 实现、超时、响应上限和脱敏
+protocol/     PaymentProtocol Provider/Factory、x402 与 MPP wire 映射
 payer/        PayerMiddleware + 生态 HTTP 客户端拦截器
 payee/        PayeeMiddleware + 生态服务端中间件
 config/       传输与双向 Middleware 强类型配置
@@ -250,7 +255,7 @@ SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外�
 - `deploy/helm/agentvault/`：AuthGuard 为默认启用的 umbrella dependency，受保护 HTTPRoute 使用 `authguard.io/protected=true`；禁用后不创建受保护 Route，运营方必须明确暴露开放 Service。
 - `use-cases/marketpulse-feed-subscription/e2e/`：从零构建、部署和分层验证的真实案例。
 
-E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。Provisioning 为五个 Payer 分别建立 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 默认以 `--e2e-sdk-scope simple` 执行 Rust/Go 2×2×2=8 个快速隔离 Case；发布验收显式使用 `--e2e-sdk-scope full` 执行 5×5×2=50 个 Case。`s21` 至 `s24` 按所选 scope 验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步链路及精确 Token 余额守恒。Web 场景校验同 scope 的不可变报告，再以报告派生的 API fixture 驱动真实 Chromium，截图验证每页最多 10 条的 Payer/Payee 列表、全部 Ledger 守恒、Client→Scenario 可信归属，以及 12 个候选 Wallet 的单列滚动多选下拉与双 Wallet 原子创建；它不会伪称隔离数据库是一个生产库。当前资金断言覆盖 EVM/x402；Solana 在该案例中只验证真实节点健康，不宣称已完成 Solana 支付。
+E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。Provisioning 为五个 Payer 分别建立 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 默认以 `--e2e-sdk-scope simple` 执行 Rust/Go 2×2×2=8 个快速隔离 x402 Case；发布验收显式使用 `--e2e-sdk-scope full` 执行 5×5×2=50 个 Case。`s21` 至 `s24` 按所选 scope 验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步、Ledger/Receipt/交易绑定、Token 守恒与 Facilitator Gas。独立 `x402-solana` 场景在固定版本的真实本地 Validator 上创建 SPL Mint/ATA，由上游 x402 v2 client/facilitator 完成 verify 与唯一一次 settle，并核对 SPL 余额、交易手续费和 Lamport 守恒。独立 `mpp-tempo` 场景在固定摘要的官方 Tempo localnet 上，以官方 `mpp` Rust SDK 驱动的本地 HTTP 结算服务完成非变更 verify、type-0x76 广播、丢响应恢复和包含 pathUSD Gas 的守恒；Tempo `charge` 直接使用链 RPC，不伪造 x402 式 Facilitator，也不额外部署同义清算合约。五 SDK 的双协议/双 Transport/双角色一致性由共享契约夹具门禁。Web 场景校验同 scope 的不可变报告，再以报告派生的 API fixture 驱动真实 Chromium，截图验证每页最多 10 条的 Payer/Payee 列表、全部 Ledger 守恒、Client→Scenario 可信归属，以及 12 个候选 Wallet 的单列滚动多选下拉与双 Wallet 原子创建；它不会伪称隔离数据库是一个生产库。三条链路分别输出不可变报告，不能互相替代。
 
 ## 12. 安全边界
 

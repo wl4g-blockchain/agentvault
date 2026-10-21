@@ -8,13 +8,13 @@ async fn expires_caps_ttl_and_evicts_least_recently_used() {
     let expiring = MemoryCache::new(1, 8, Duration::from_millis(10)).unwrap();
     expiring.init().await.unwrap();
     expiring
-        .set("offer", "one", vec![1], Duration::from_secs(60))
+        .set("offer", "one", vec![1], Duration::from_mins(1))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(15)).await;
     assert_eq!(expiring.get("offer", "one").await.unwrap(), None);
 
-    let cache = MemoryCache::new(2, 8, Duration::from_secs(60)).unwrap();
+    let cache = MemoryCache::new(2, 8, Duration::from_mins(1)).unwrap();
     cache.init().await.unwrap();
     cache
         .set("offer", "one", vec![1], Duration::from_secs(1))

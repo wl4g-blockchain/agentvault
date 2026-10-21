@@ -3,12 +3,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import {
   AgentVault,
   GrpcConfig,
-  GrpcVaultTransport,
   MqttConfig,
-  MqttVaultTransport,
   PayerRequestContext,
   readBounded,
   type FetchPayerMiddleware,
+  type VaultTransportConfig,
 } from '@agentvault/sdk';
 
 const YESTERDAY_TOOL = 'marketpulse.yesterday_news';
@@ -28,7 +27,7 @@ export class MCPHelper {
 
   private constructor(
     private readonly client: Client,
-    private readonly transport: { close(): void | Promise<void> },
+    private readonly vault: AgentVault,
     private readonly payments: Map<string, string>,
     tools: Iterable<string>,
   ) {
@@ -38,26 +37,26 @@ export class MCPHelper {
   static async fromEnvironment(): Promise<MCPHelper> {
     const timeout = positive('AGENTVAULT_MQTT_TIMEOUT_SECONDS') * 1000;
     const transportName = (process.env.AGENTVAULT_TRANSPORT ?? 'mqtt').trim().toLowerCase();
-    let vaultTransport: MqttVaultTransport | GrpcVaultTransport;
+    let transportConfig: VaultTransportConfig;
     if (transportName === 'mqtt') {
-      vaultTransport = new MqttVaultTransport(new MqttConfig(
+      transportConfig = { provider: 'mqtt', mqtt: new MqttConfig(
         required('AGENTVAULT_MQTT_HOST'), positive('AGENTVAULT_MQTT_PORT'),
         boolean('AGENTVAULT_MQTT_TLS'), required('AGENTVAULT_MQTT_USERNAME'),
         required('AGENTVAULT_MQTT_PASSWORD'), 'quantstream-typescript',
         required('QUANTSTREAM_CLIENT_ID'), timeout,
-      ));
-      await vaultTransport.connect();
+      ) };
     } else if (transportName === 'grpc') {
-      vaultTransport = new GrpcVaultTransport(new GrpcConfig(
+      transportConfig = { provider: 'grpc', grpc: new GrpcConfig(
         required('AGENTVAULT_GRPC_ENDPOINT'), boolean('AGENTVAULT_GRPC_TLS'), undefined, timeout,
-      ));
+      ) };
     } else {
       throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
     }
+    const vault = AgentVault.fromConfig(transportConfig);
     console.info(JSON.stringify({
       event: 'agentvault.sdk.payer.transport_selected', transport: transportName,
     }));
-    const payer = new AgentVault(vaultTransport).payer({
+    const payer = vault.payer({
       scenarioId: required('QUANTSTREAM_SCENARIO_ID'),
       approvalTimeoutMs: positive('AGENTVAULT_APPROVAL_TIMEOUT_SECONDS') * 1000,
       deliveryRetries: 1,
@@ -76,17 +75,17 @@ export class MCPHelper {
       for (const requiredTool of [YESTERDAY_TOOL, REALTIME_TOOL]) {
         if (!tools.includes(requiredTool)) throw new Error(`MarketPulse MCP server did not expose ${requiredTool}`);
       }
-      return new MCPHelper(client, vaultTransport, payments, tools);
+      return new MCPHelper(client, vault, payments, tools);
     } catch (error: unknown) {
       await client.close().catch(() => undefined);
-      await vaultTransport.close();
+      await vault.close();
       throw error;
     }
   }
 
   async close(): Promise<void> {
     await this.client.close();
-    await this.transport.close();
+    await this.vault.close();
   }
 
   yesterdayNews(runId: string): Promise<ToolResult> {

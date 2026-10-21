@@ -12,7 +12,7 @@ fn shared_contract_validates_keys_and_caps_ttl() {
     assert!(validate_component("").is_err());
     assert!(validate_component("unsafe:key").is_err());
     assert_eq!(
-        effective_ttl(Duration::from_secs(60), Duration::from_secs(5)).unwrap(),
+        effective_ttl(Duration::from_mins(1), Duration::from_secs(5)).unwrap(),
         Duration::from_secs(5)
     );
     assert!(effective_ttl(Duration::ZERO, Duration::from_secs(5)).is_err());

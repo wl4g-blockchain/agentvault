@@ -374,10 +374,14 @@ mod catalog {
             /// canonical EVM address and the secp256k1/EVM algorithm family.
             #[must_use]
             pub fn signing_ready_for_payment_network(&self, network: &str) -> bool {
-                self.signing_ready()
-                    && (!crate::model::wallet::is_evm_payment_network(network)
-                        || crate::model::wallet::is_evm_wallet_algorithm(&self.wallet.algorithm))
-                    && self.clone().canonicalized_for_payment_network(network).is_ok()
+                let compatible = if crate::model::wallet::is_evm_payment_network(network) {
+                    crate::model::wallet::is_evm_wallet_algorithm(&self.wallet.algorithm)
+                } else if crate::model::wallet::is_solana_payment_network(network) {
+                    crate::model::wallet::is_solana_wallet_algorithm(&self.wallet.algorithm)
+                } else {
+                    false
+                };
+                self.signing_ready() && compatible && self.clone().canonicalized_for_payment_network(network).is_ok()
             }
         }
 
@@ -901,6 +905,15 @@ mod transaction {
             pub limit: u32,
         }
 
+        /// One durably leased reconciliation attempt. The counter is assigned
+        /// atomically with the lease so retries across workers and process
+        /// restarts cannot reuse an operational attempt number.
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct ReconciliationClaim {
+            pub intent: PaymentIntent,
+            pub attempt_no: u32,
+        }
+
         /// Atomic settlement/reconciliation commit. The intent transition, operation
         /// events, confirmed financial facts, and outgoing notifications either all
         /// commit or all roll back. For an outbound reserved intent this is the only
@@ -1142,7 +1155,7 @@ mod transaction {
             /// transaction ports and cannot be expressed here.
             async fn commit_progress(&self, write: PaymentProgressWrite<'_>) -> Result<PaymentIntent>;
 
-            /// Atomically records one idempotent outbound x402 merchant-response hint.
+            /// Atomically records one idempotent protocol-owned outbound merchant-response hint.
             /// A byte-for-byte equivalent semantic hint is a replay; another hint for
             /// the same intent is a conflict. Only independently confirmed RPC
             /// evidence may subsequently call [`Self::commit_settlement`].
@@ -1156,7 +1169,10 @@ mod transaction {
             /// Claims due Signed/Submitted/Pending/Unknown recovery work and expired
             /// Created challenges. Leases must be persisted before rows are returned;
             /// Created rows are eligible only when their durable `expires_at` is due.
-            async fn claim_reconciliation(&self, request: &ReconciliationLeaseRequest) -> Result<Vec<PaymentIntent>>;
+            async fn claim_reconciliation(
+                &self,
+                request: &ReconciliationLeaseRequest,
+            ) -> Result<Vec<ReconciliationClaim>>;
 
             async fn renew_reconciliation_lease(&self, intent_id: &str, owner: &str, lease_until: i64) -> Result<()>;
 
@@ -1190,6 +1206,10 @@ mod transaction {
                     .and_then(serde_json::Value::as_bool)
                     == Some(true)
                 && payload
+                    .and_then(|value| value.get("protocol"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(existing.protocol.as_str())
+                && payload
                     .and_then(|value| value.get("transaction"))
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|value| !value.is_empty())
@@ -1204,7 +1224,7 @@ mod transaction {
             if !hash_valid
                 || existing.updated_at != expected_updated_at
                 || existing.direction != PaymentDirection::Outbound
-                || existing.protocol != "x402"
+                || existing.protocol.trim().is_empty()
                 || !matches!(existing.status, PaymentStatus::Signed | PaymentStatus::Unknown)
                 || candidate.status != PaymentStatus::PendingSettlement
                 || !existing.same_immutable_identity_as(candidate)
@@ -1430,7 +1450,7 @@ mod transaction {
     pub use intent::{
         AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
         ChallengeIssuanceGuard, ChallengeWrite, OutboundEvidenceWrite, PaymentProgressWrite, PaymentQuery,
-        PaymentStorage, ReconciliationLeaseRequest, SettlementWrite, VerificationWrite,
+        PaymentStorage, ReconciliationClaim, ReconciliationLeaseRequest, SettlementWrite, VerificationWrite,
     };
     pub use ledger::{LedgerQuery, LedgerStorage, LedgerWrite};
     pub use outbox::{OutboxDeliveryClass, OutboxLeaseRequest, OutboxMessage, OutboxStatus, OutboxStorage};
@@ -1451,7 +1471,8 @@ pub use transaction::{
     AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
     ChallengeIssuanceGuard, ChallengeWrite, EventStorage, LedgerQuery, LedgerStorage, LedgerWrite,
     OutboundEvidenceWrite, OutboxDeliveryClass, OutboxLeaseRequest, OutboxMessage, OutboxStatus, OutboxStorage,
-    PaymentProgressWrite, PaymentQuery, PaymentStorage, ReconciliationLeaseRequest, SettlementWrite, VerificationWrite,
+    PaymentProgressWrite, PaymentQuery, PaymentStorage, ReconciliationClaim, ReconciliationLeaseRequest,
+    SettlementWrite, VerificationWrite,
 };
 
 /// Provider-neutral handles for every durable payment domain port.
@@ -1482,6 +1503,7 @@ pub trait WalletKeyManager: WalletPaymentSigner {
     async fn create_local(
         &self,
         wallet_id: &str,
+        algorithm: &str,
         private_key: &[u8],
         config: &WalletProvisioningConfig,
         created_at: i64,

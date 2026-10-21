@@ -2444,7 +2444,7 @@ mod key_repository {
 
     use crate::{
         config::WalletKeyRingConfig,
-        model::wallet::{Wallet, EVM_EOA_ALGORITHM},
+        model::wallet::{is_evm_wallet_algorithm, is_solana_wallet_algorithm, Wallet, EVM_EOA_ALGORITHM},
         storage::{
             EncryptedWalletKeyVersion, IntentBoundPaymentSignatureRequest, WalletKeyManager, WalletKeyStatus,
             WalletPaymentSignature, WalletPaymentSigner, WalletProvisioningConfig, WalletStorage as _,
@@ -2499,7 +2499,14 @@ mod key_repository {
                 ));
             }
             let private_key = self.decrypt_version(request.active_key())?;
-            let bytes = crypto::sign_eip712_digest(&private_key, request.digest())?.to_vec();
+            let algorithm = request.wallet().wallet.algorithm.as_str();
+            let bytes = if is_evm_wallet_algorithm(algorithm) {
+                crypto::sign_eip712_digest(&private_key, request.digest())?.to_vec()
+            } else if is_solana_wallet_algorithm(algorithm) {
+                crypto::sign_solana_message(&private_key, request.digest())?.to_vec()
+            } else {
+                return Err(Error::InvalidKey("unsupported payment wallet algorithm".to_owned()));
+            };
             Ok(WalletPaymentSignature {
                 wallet_id: request.wallet().wallet.id.clone(),
                 key_version: request.active_key().version,
@@ -2514,11 +2521,12 @@ mod key_repository {
         async fn create_local(
             &self,
             wallet_id: &str,
+            algorithm: &str,
             private_key: &[u8],
             config: &WalletProvisioningConfig,
             created_at: i64,
         ) -> Result<Wallet> {
-            self.create_local_configured(wallet_id, private_key, config, created_at)
+            self.create_local_configured_for_algorithm(wallet_id, algorithm, private_key, config, created_at)
                 .await
         }
 
@@ -2640,8 +2648,27 @@ mod key_repository {
             config: &WalletProvisioningConfig,
             created_at: i64,
         ) -> Result<Wallet> {
+            self.create_local_configured_for_algorithm(wallet_id, EVM_EOA_ALGORITHM, private_key, config, created_at)
+                .await
+        }
+
+        /// Creates a local wallet for one explicitly supported custody
+        /// algorithm while preserving the existing EVM convenience API.
+        ///
+        /// # Errors
+        ///
+        /// Fails when the algorithm or key material is invalid, encryption
+        /// fails, or the complete wallet aggregate cannot be committed atomically.
+        pub async fn create_local_configured_for_algorithm(
+            &self,
+            wallet_id: &str,
+            algorithm: &str,
+            private_key: &[u8],
+            config: &WalletProvisioningConfig,
+            created_at: i64,
+        ) -> Result<Wallet> {
             validate_wallet_id(wallet_id)?;
-            let wallet = wallet_from_private_key(wallet_id, private_key, created_at)?;
+            let wallet = wallet_from_private_key(wallet_id, algorithm, private_key, created_at)?;
             let encrypted = self.encrypt_version(&wallet, private_key, 1, created_at)?;
             self.storage.create_local_configured(&wallet, &encrypted, config).await
         }
@@ -2664,7 +2691,12 @@ mod key_repository {
             let next_version = current_version
                 .checked_add(1)
                 .ok_or_else(|| Error::InvalidTransition("wallet key version overflow".to_owned()))?;
-            let wallet = wallet_from_private_key(wallet_id, private_key, current.wallet.created_at)?;
+            let wallet = wallet_from_private_key(
+                wallet_id,
+                &current.wallet.algorithm,
+                private_key,
+                current.wallet.created_at,
+            )?;
             let encrypted = self.encrypt_version(&wallet, private_key, next_version, activated_at)?;
             self.storage.rotate(&wallet, &encrypted, activated_at).await
         }
@@ -2800,23 +2832,27 @@ mod key_repository {
         }
     }
 
-    fn wallet_from_private_key(wallet_id: &str, private_key: &[u8], created_at: i64) -> Result<Wallet> {
-        crypto::validate_private_key(private_key)?;
+    fn wallet_from_private_key(
+        wallet_id: &str,
+        algorithm: &str,
+        private_key: &[u8],
+        created_at: i64,
+    ) -> Result<Wallet> {
+        crypto::validate_private_key_for_algorithm(algorithm, private_key)?;
+        let (address, public_key) = crypto::payment_key_metadata(algorithm, private_key)?;
         Ok(Wallet {
             id: wallet_id.to_owned(),
-            algorithm: EVM_EOA_ALGORITHM.to_owned(),
-            address: crypto::address(private_key)?,
-            public_key: crypto::public_key(private_key)?,
+            algorithm: algorithm.to_owned(),
+            address,
+            public_key,
             created_at,
         })
     }
 
     fn verify_private_key_matches_wallet(wallet: &Wallet, private_key: &[u8]) -> Result<()> {
-        crypto::validate_private_key(private_key)?;
-        if wallet.algorithm != EVM_EOA_ALGORITHM
-            || crypto::address(private_key)? != wallet.address
-            || crypto::public_key(private_key)? != wallet.public_key
-        {
+        crypto::validate_private_key_for_algorithm(&wallet.algorithm, private_key)?;
+        let (address, public_key) = crypto::payment_key_metadata(&wallet.algorithm, private_key)?;
+        if address != wallet.address || public_key != wallet.public_key {
             return Err(Error::InvalidKey(
                 "private key does not match wallet public metadata".to_owned(),
             ));
@@ -3268,7 +3304,8 @@ mod payment {
         storage::{
             AuthorizationAction, AuthorizationGuard, AuthorizationRecord, AuthorizationWrite, BudgetSnapshot,
             ChallengeIssuanceGuard, ChallengeWrite, IdempotentWrite, OutboundEvidenceWrite, Page, PaymentProgressWrite,
-            PaymentQuery, PaymentStorage, ReconciliationLeaseRequest, SettlementWrite, VerificationWrite,
+            PaymentQuery, PaymentStorage, ReconciliationClaim, ReconciliationLeaseRequest, SettlementWrite,
+            VerificationWrite,
         },
         Error, Result,
     };
@@ -3645,7 +3682,7 @@ mod payment {
             })
         }
 
-        async fn claim_reconciliation(&self, request: &ReconciliationLeaseRequest) -> Result<Vec<PaymentIntent>> {
+        async fn claim_reconciliation(&self, request: &ReconciliationLeaseRequest) -> Result<Vec<ReconciliationClaim>> {
             if request.owner.trim().is_empty() || request.lease_until <= request.now || request.limit == 0 {
                 return Err(Error::InvalidRequest("invalid reconciliation lease request".to_owned()));
             }
@@ -3688,11 +3725,18 @@ mod payment {
                         if result.rows_affected() != 1 {
                             return Err(conflict("payment reconciliation claim lost its conditional update"));
                         }
-                        intents.push(
-                            load_intent_connection(connection, &id)
-                                .await?
-                                .ok_or_else(|| Error::Storage("claimed payment intent disappeared".to_owned()))?,
-                        );
+                        let attempt: i64 =
+                            sqlx::query_scalar("SELECT reconcile_attempts FROM pay_intent WHERE id = ?1")
+                                .bind(&id)
+                                .fetch_one(&mut *connection)
+                                .await
+                                .map_err(|error| storage_error("load payment reconciliation attempt", error))?;
+                        let attempt_no = u32::try_from(attempt)
+                            .map_err(|_| Error::Storage("payment reconciliation attempt is invalid".to_owned()))?;
+                        let intent = load_intent_connection(connection, &id)
+                            .await?
+                            .ok_or_else(|| Error::Storage("claimed payment intent disappeared".to_owned()))?;
+                        intents.push(ReconciliationClaim { intent, attempt_no });
                     }
                     Ok(intents)
                 })

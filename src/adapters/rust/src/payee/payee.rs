@@ -1,6 +1,11 @@
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+
 use crate::{
     percent_encode, ApiClient, CreateChallengeRequest, Error, OperationContext, PayeeConfig, PayeeOperation,
-    PaymentChallenge, PaymentCredential, PaymentOffer, PaymentReceipt, PaymentVerification, ProtectionOutcome,
+    PaymentChallenge, PaymentCredential, PaymentOffer, PaymentProtocolFactory, PaymentReceipt, PaymentVerification,
+    ProtectionOutcome, ProtocolHttpResponse, ProtocolMcpMetadata, ProtocolMcpPaymentRequired, ProtocolRegistry,
     ResolveOfferRequest, Result, SettlePaymentRequest, SettledIncomingPayment, VaultTransport, VerifyPaymentRequest,
 };
 
@@ -10,6 +15,34 @@ use crate::{
 pub struct PayeeMiddleware<T> {
     api: ApiClient<T>,
     config: PayeeConfig,
+    protocols: ProtocolRegistry,
+}
+
+pub(crate) enum PayeeProtectionError {
+    Sdk(Error),
+    Rejected {
+        challenge: Box<PaymentChallenge>,
+        message: String,
+    },
+}
+
+impl From<Error> for PayeeProtectionError {
+    fn from(error: Error) -> Self {
+        Self::Sdk(error)
+    }
+}
+
+impl PayeeProtectionError {
+    fn into_sdk(self) -> Error {
+        match self {
+            Self::Sdk(error) => error,
+            Self::Rejected { message, .. } => Error::Api {
+                status: 402,
+                code: "PAYMENT_INVALID".to_owned(),
+                message,
+            },
+        }
+    }
 }
 
 impl<T> Clone for PayeeMiddleware<T> {
@@ -17,6 +50,7 @@ impl<T> Clone for PayeeMiddleware<T> {
         Self {
             api: self.api.clone(),
             config: self.config.clone(),
+            protocols: self.protocols.clone(),
         }
     }
 }
@@ -24,15 +58,18 @@ impl<T> Clone for PayeeMiddleware<T> {
 impl<T> PayeeMiddleware<T> {
     pub fn new(transport: T, config: PayeeConfig) -> Result<Self> {
         config.validate()?;
+        let protocols = PaymentProtocolFactory::new().create(&config.protocols)?;
         Ok(Self {
             api: ApiClient::new(transport),
             config,
+            protocols,
         })
     }
 
     pub(crate) fn from_api(api: ApiClient<T>, config: PayeeConfig) -> Result<Self> {
         config.validate()?;
-        Ok(Self { api, config })
+        let protocols = PaymentProtocolFactory::new().create(&config.protocols)?;
+        Ok(Self { api, config, protocols })
     }
 
     #[must_use]
@@ -50,11 +87,94 @@ impl<T> PayeeMiddleware<T> {
     pub fn standard(self) -> crate::StandardPayeeMiddleware<T> {
         crate::StandardPayeeMiddleware::new(self)
     }
+
+    pub(crate) fn presented_credential(
+        &self,
+        protocol: &str,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Option<Value>> {
+        self.protocols.get(protocol)?;
+        let selected = self
+            .protocols
+            .presented_credential(headers, self.config.max_body_bytes)?;
+        if selected.as_ref().is_some_and(|(selected, _)| selected != protocol) {
+            return Err(Error::InvalidArgument(
+                "payment credential protocol does not match the protected route".to_owned(),
+            ));
+        }
+        Ok(selected.map(|(_, payload)| payload))
+    }
+
+    pub(crate) fn presented_mcp_credential(&self, protocol: &str, meta: &Value) -> Result<Option<Value>> {
+        self.protocols.get(protocol)?;
+        let selected = self
+            .protocols
+            .presented_mcp_credential(meta, self.config.max_body_bytes)?;
+        if selected.as_ref().is_some_and(|(selected, _)| selected != protocol) {
+            return Err(Error::InvalidArgument(
+                "MCP payment credential protocol does not match the protected route".to_owned(),
+            ));
+        }
+        Ok(selected.map(|(_, payload)| payload))
+    }
+
+    pub(crate) fn credential_header_names(&self) -> Vec<&'static str> {
+        self.protocols.credential_header_names()
+    }
+
+    pub(crate) fn merchant_evidence_header_names(&self) -> Vec<&'static str> {
+        self.protocols.merchant_evidence_header_names()
+    }
+
+    pub(crate) fn mcp_request_metadata_keys(&self) -> Vec<&'static str> {
+        self.protocols.mcp_request_metadata_keys()
+    }
+
+    pub(crate) fn mcp_root_request_metadata_keys(&self) -> Vec<&'static str> {
+        self.protocols.mcp_root_request_metadata_keys()
+    }
+
+    pub(crate) fn mcp_receipt_metadata_keys(&self) -> Vec<&'static str> {
+        self.protocols.mcp_receipt_metadata_keys()
+    }
+
+    pub(crate) fn challenge_response(&self, challenge: &PaymentChallenge) -> Result<ProtocolHttpResponse> {
+        self.protocols.get(&challenge.protocol)?.challenge(challenge)
+    }
+
+    pub(crate) fn receipt_response(&self, payment: &SettledIncomingPayment) -> Result<ProtocolHttpResponse> {
+        self.protocols.get(&payment.receipt.protocol)?.receipt(payment)
+    }
+
+    pub(crate) fn mcp_challenge_response(&self, challenge: &PaymentChallenge) -> Result<ProtocolMcpPaymentRequired> {
+        self.protocols.get(&challenge.protocol)?.mcp_payment_required(challenge)
+    }
+
+    pub(crate) fn mcp_rejection_response(
+        &self,
+        challenge: &PaymentChallenge,
+        message: &str,
+    ) -> Result<ProtocolMcpPaymentRequired> {
+        self.protocols
+            .get(&challenge.protocol)?
+            .mcp_payment_rejected(challenge, message)
+    }
+
+    pub(crate) fn mcp_receipt(
+        &self,
+        challenge: &PaymentChallenge,
+        payment: &SettledIncomingPayment,
+    ) -> Result<ProtocolMcpMetadata> {
+        self.protocols
+            .get(&payment.receipt.protocol)?
+            .mcp_receipt(challenge, payment)
+    }
 }
 
 impl<T: VaultTransport> PayeeMiddleware<T> {
     pub async fn challenge(&self, operation: &PayeeOperation) -> Result<PaymentChallenge> {
         operation.validate()?;
+        self.protocols.get(&operation.protocol)?;
         let context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let challenge = self
             .create_challenge(&CreateChallengeRequest {
@@ -71,6 +191,16 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
     }
 
     pub async fn protect(&self, operation: &PayeeOperation) -> Result<ProtectionOutcome> {
+        self.protect_with_challenge(operation)
+            .await
+            .map(|(outcome, _)| outcome)
+            .map_err(PayeeProtectionError::into_sdk)
+    }
+
+    pub(crate) async fn protect_with_challenge(
+        &self,
+        operation: &PayeeOperation,
+    ) -> std::result::Result<(ProtectionOutcome, PaymentChallenge), PayeeProtectionError> {
         tracing::info!(
             event.name = "agentvault.sdk.payee.intercepted",
             run.id = %operation.run_id,
@@ -83,9 +213,12 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             payment.challenge_hash = %challenge.challenge_hash
         );
         let Some(payload) = operation.credential_payload.clone() else {
-            return Ok(ProtectionOutcome::PaymentRequired {
-                challenge: Box::new(challenge),
-            });
+            return Ok((
+                ProtectionOutcome::PaymentRequired {
+                    challenge: Box::new(challenge.clone()),
+                },
+                challenge,
+            ));
         };
         let verify_context = OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())?;
         let challenge_hash = challenge.challenge_hash.clone();
@@ -104,9 +237,8 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             })
             .await?;
         if !verification.valid {
-            return Err(Error::Api {
-                status: 402,
-                code: "PAYMENT_INVALID".to_owned(),
+            return Err(PayeeProtectionError::Rejected {
+                challenge: Box::new(challenge),
                 message: "AgentVault rejected the presented payment".to_owned(),
             });
         }
@@ -134,9 +266,12 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             run.id = %operation.run_id,
             payment.intent_id = %payment.intent.id
         );
-        Ok(ProtectionOutcome::Authorized {
-            payment: Box::new(payment),
-        })
+        Ok((
+            ProtectionOutcome::Authorized {
+                payment: Box::new(payment),
+            },
+            challenge,
+        ))
     }
 
     pub async fn resolve_offer(&self, request: &ResolveOfferRequest) -> Result<PaymentOffer> {

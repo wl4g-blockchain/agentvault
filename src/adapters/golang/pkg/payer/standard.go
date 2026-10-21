@@ -1,6 +1,7 @@
 package payer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -76,17 +77,22 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
+	mcpBody, mcpID, mcpCandidate, err := m.mcpRequest(template)
+	if err != nil {
+		return nil, err
+	}
 	first, err := m.base.RoundTrip(request)
 	if err != nil {
 		return nil, err
 	}
-	if first.StatusCode != http.StatusPaymentRequired {
+	httpChallenge := first.StatusCode == http.StatusPaymentRequired
+	messageCandidate := !httpChallenge && mcpCandidate && m.isJSONResponse(first)
+	if !httpChallenge && !messageCandidate {
 		return first, nil
 	}
 	slog.Info("payer middleware detected payment challenge",
-		"event.name", "agentvault.sdk.payer.x402_detected", "run.id", operation.RunID)
-	body, err := readBounded(first.Body, first.ContentLength, m.config.MaxChallengeBytes)
-	first.Body.Close()
+		"event.name", "agentvault.sdk.payer.payment_required", "run.id", operation.RunID)
+	body, err := m.bufferResponse(first)
 	if err != nil {
 		return nil, err
 	}
@@ -96,48 +102,138 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	}
 	slog.Info("payer middleware requested AgentVault signature",
 		"event.name", "agentvault.sdk.payer.signing_requested", "run.id", operation.RunID)
-	authorized, err := m.Authorize(request.Context(), model.PayerHTTPRequest{
+	sdkRequest := model.PayerHTTPRequest{
 		Method: request.Method, URL: request.URL.String(), Origin: origin,
-		Headers: flattenHeaders(request.Header), FollowRedirects: false,
-	}, model.PayerHTTPResponse{
+		Headers: flattenHeaders(request.Header), Body: mcpBody, FollowRedirects: false,
+	}
+	sdkResponse := model.PayerHTTPResponse{
 		Status: first.StatusCode, Headers: flattenHeaders(first.Header), Body: body,
-	}, operation)
+	}
+	var authorized *model.AuthorizedPayment
+	if httpChallenge {
+		authorized, err = m.Authorize(request.Context(), sdkRequest, sdkResponse, operation)
+	} else {
+		authorized, err = m.AuthorizeMCP(request.Context(), sdkRequest, sdkResponse, operation)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if authorized == nil {
+		return first, nil
 	}
 	slog.Info("payer middleware received signed credential",
 		"event.name", "agentvault.sdk.payer.signed", "run.id", operation.RunID,
 		"payment.intent_id", authorized.Intent.ID)
-	headerName, headerValue, err := m.CredentialHeader(authorized, origin, flattenHeaders(template.Header))
+	paidTemplate := template
+	if httpChallenge {
+		headerName, headerValue, err := m.CredentialHeader(authorized, origin, flattenHeaders(paidTemplate.Header))
+		if err != nil {
+			return nil, err
+		}
+		paidTemplate.Header.Set(headerName, headerValue)
+	} else {
+		paidBody, err := m.MCPCredential(authorized, mcpBody)
+		if err != nil {
+			return nil, err
+		}
+		m.setReplayableBody(paidTemplate, paidBody)
+	}
+	var response *http.Response
+	var paid *http.Request
+	err = m.Deliver(request.Context(), operation, authorized, func(_ int) (model.PayerHTTPResponse, error) {
+		var cloneErr error
+		paid, cloneErr = cloneReplayable(paidTemplate)
+		if cloneErr != nil {
+			return model.PayerHTTPResponse{}, cloneErr
+		}
+		var sendErr error
+		response, sendErr = m.base.RoundTrip(paid)
+		if sendErr != nil {
+			return model.PayerHTTPResponse{}, sendErr
+		}
+		view := model.PayerHTTPResponse{
+			Status: response.StatusCode, Headers: flattenHeaders(response.Header),
+		}
+		if messageCandidate && m.isJSONResponse(response) {
+			view.Body, sendErr = m.bufferResponse(response)
+			if sendErr != nil {
+				return model.PayerHTTPResponse{}, sendErr
+			}
+			if view.Status >= 200 && view.Status < 300 {
+				if _, valid := m.boundMCPResponse(view.Body, mcpID, true); !valid {
+					return model.PayerHTTPResponse{}, errors.New("paid MCP response has no matching JSON-RPC result")
+				}
+			}
+		}
+		return view, nil
+	}, func() {
+		if response != nil && response.Body != nil {
+			response.Body.Close()
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt <= m.config.DeliveryRetries; attempt++ {
-		slog.Info("payer middleware is delivering signed request",
-			"event.name", "agentvault.sdk.payer.retrying", "run.id", operation.RunID,
-			"attempt.no", attempt+1, "payment.intent_id", authorized.Intent.ID)
-		paid, cloneErr := cloneReplayable(template)
-		if cloneErr != nil {
-			return nil, cloneErr
-		}
-		paid.Header.Set(headerName, headerValue)
-		response, sendErr := m.base.RoundTrip(paid)
-		if sendErr != nil {
-			return nil, sendErr
-		}
-		if reportErr := m.Report(request.Context(), operation, authorized, model.PayerHTTPResponse{
-			Status: response.StatusCode, Headers: flattenHeaders(response.Header),
-		}); reportErr != nil {
-			response.Body.Close()
-			return nil, reportErr
-		}
-		if response.StatusCode != http.StatusServiceUnavailable || attempt == m.config.DeliveryRetries {
-			response.Request = paid.WithContext(context.WithValue(paid.Context(), paymentResultKey{}, authorized))
-			return response, nil
-		}
-		response.Body.Close()
+	response.Request = paid.WithContext(context.WithValue(paid.Context(), paymentResultKey{}, authorized))
+	return response, nil
+}
+
+func (m *StandardPayerMiddleware) mcpRequest(request *http.Request) ([]byte, any, bool, error) {
+	if request.Method != http.MethodPost ||
+		!strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/json") ||
+		request.GetBody == nil {
+		return nil, nil, false, nil
 	}
-	return nil, errors.New("payer retry loop ended unexpectedly")
+	body, err := request.GetBody()
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("clone MCP request body: %w", err)
+	}
+	defer body.Close()
+	value, err := io.ReadAll(io.LimitReader(body, m.config.MaxChallengeBytes+1))
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("read MCP request: %w", err)
+	}
+	if int64(len(value)) > m.config.MaxChallengeBytes {
+		return nil, nil, false, errors.New("MCP tools/call request exceeds configured limit")
+	}
+	message, ok := m.mcpCall(value)
+	if !ok {
+		return value, nil, false, nil
+	}
+	return value, message["id"], true, nil
+}
+
+func (m *StandardPayerMiddleware) isJSONResponse(response *http.Response) bool {
+	return response != nil && strings.HasPrefix(
+		strings.ToLower(response.Header.Get("Content-Type")), "application/json",
+	)
+}
+
+func (m *StandardPayerMiddleware) bufferResponse(response *http.Response) ([]byte, error) {
+	if response == nil || response.Body == nil {
+		return nil, nil
+	}
+	body, err := readBounded(response.Body, response.ContentLength, m.config.MaxChallengeBytes)
+	closeErr := response.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close payment response: %w", closeErr)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	response.ContentLength = int64(len(body))
+	return body, nil
+}
+
+func (m *StandardPayerMiddleware) setReplayableBody(request *http.Request, body []byte) {
+	value := append([]byte(nil), body...)
+	request.Body = io.NopCloser(bytes.NewReader(value))
+	request.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(value)), nil
+	}
+	request.ContentLength = int64(len(value))
+	request.Header.Del("Content-Length")
 }
 
 func flattenHeaders(headers http.Header) map[string]string {

@@ -200,8 +200,12 @@ class ProtectionOutcome:
         return cls("payment_required", challenge=challenge)
 
     @classmethod
-    def authorized(cls, payment: SettledIncomingPayment) -> "ProtectionOutcome":
-        return cls("authorized", payment=payment)
+    def authorized(
+        cls,
+        payment: SettledIncomingPayment,
+        challenge: PaymentChallenge | None = None,
+    ) -> "ProtectionOutcome":
+        return cls("authorized", challenge=challenge, payment=payment)
 
 
 __all__ = [

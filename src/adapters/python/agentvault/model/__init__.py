@@ -43,6 +43,7 @@ from .payer import (
     PaymentAuthorizationResult,
     PaymentBalance,
     PaymentRequired,
+    ProtocolEvidence,
     ReportOutboundResponseRequest,
     ReportOutboundResponseResponse,
 )

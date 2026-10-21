@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,11 +40,92 @@ pub struct ProtocolSettlement {
     pub payment_requirements: Value,
 }
 
+/// Protocol-owned HTTP credential mapping. SDKs apply it only to the
+/// challenge-bound origin and never overwrite unrelated authentication.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolHttpCredential {
+    pub header_name: String,
+    pub header_value: String,
+}
+
+/// Untrusted merchant settlement hint decoded by the protocol provider.
+/// Ledger state still requires independent chain/provider confirmation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolMerchantEvidence {
+    pub accepted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payer: Option<String>,
+}
+
 /// Bidirectional protocol adapter. It translates protocol wire structures into
 /// the shared payment domain and never owns policy, keys, or financial state.
 #[async_trait]
 pub trait PaymentProtocol: Send + Sync {
     fn name(&self) -> &'static str;
+
+    /// Recognizes and decodes this protocol's HTTP 402 representation. `None`
+    /// means the response did not advertise this protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response declares this protocol with invalid
+    /// or conflicting wire data.
+    fn decode_http_challenge(
+        &self,
+        _resource: &str,
+        _headers: &BTreeMap<String, String>,
+        _body: &str,
+    ) -> Result<Option<Value>> {
+        Ok(None)
+    }
+
+    /// Maps a canonical credential to its protocol-defined request header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential is not valid for this protocol's
+    /// HTTP delivery contract.
+    fn encode_http_credential(&self, _credential: &PaymentCredential) -> Result<ProtocolHttpCredential> {
+        Err(Error::PaymentProtocol(
+            "HTTP credential mapping is not implemented for this payment method".to_owned(),
+        ))
+    }
+
+    /// Protocol-defined successful response header name.
+    fn merchant_evidence_header(&self) -> &'static str {
+        ""
+    }
+
+    /// Decodes merchant response material as an untrusted settlement hint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the evidence is malformed or is not a successful
+    /// receipt for this protocol.
+    fn decode_merchant_evidence(&self, _value: &str) -> Result<ProtocolMerchantEvidence> {
+        Err(Error::PaymentProtocol(
+            "merchant evidence is not implemented for this payment method".to_owned(),
+        ))
+    }
+
+    /// Derives the canonical payer from a signed credential without trusting
+    /// merchant response metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the challenge, credential, or signer binding is
+    /// invalid.
+    fn credential_payer(&self, _challenge: &PaymentChallenge, _credential: &PaymentCredential) -> Result<String> {
+        Err(Error::PaymentProtocol(
+            "credential payer extraction is not implemented for this payment method".to_owned(),
+        ))
+    }
 
     // Payer
     async fn parse_challenge(

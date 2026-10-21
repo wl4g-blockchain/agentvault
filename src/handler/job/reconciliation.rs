@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tracing::Instrument as _;
 
 use crate::{
     handler::{
@@ -268,32 +269,29 @@ impl ReconciliationEvidenceSource for SettlementHandler {
     }
 }
 
-/// Routes reconciliation by durable payment direction and protocol. Outbound
-/// x402 never reuses the inbound provider settlement path: its merchant header
-/// is only a transaction hint and must be independently proven by the fixed
-/// operator RPC adapter.
+/// Routes reconciliation by durable payment direction. An outbound protocol
+/// never reuses the inbound provider settlement path: its merchant receipt is
+/// only a transaction hint and must be independently proven by the fixed
+/// operator RPC adapter configured for the intent's network.
 pub struct PaymentEvidenceRouter {
     provider: Arc<dyn ReconciliationEvidenceSource>,
-    outbound_x402: Arc<OutboundEvidenceHandler>,
+    outbound: Arc<OutboundEvidenceHandler>,
 }
 
 impl PaymentEvidenceRouter {
     #[must_use]
-    pub fn new(provider: Arc<dyn ReconciliationEvidenceSource>, outbound_x402: Arc<OutboundEvidenceHandler>) -> Self {
-        Self {
-            provider,
-            outbound_x402,
-        }
+    pub fn new(provider: Arc<dyn ReconciliationEvidenceSource>, outbound: Arc<OutboundEvidenceHandler>) -> Self {
+        Self { provider, outbound }
     }
 }
 
 #[async_trait]
 impl ReconciliationEvidenceSource for PaymentEvidenceRouter {
     async fn lookup(&self, intent: &PaymentIntent, observed_at: i64) -> Result<ReconciliationEvidence> {
-        if intent.direction != PaymentDirection::Outbound || intent.protocol != "x402" {
+        if intent.direction != PaymentDirection::Outbound {
             return self.provider.lookup(intent, observed_at).await;
         }
-        match self.outbound_x402.reconciliation_observation(intent).await? {
+        match self.outbound.reconciliation_observation(intent).await? {
             OutboundEvidenceObservation::Confirmed {
                 authority,
                 transaction,
@@ -503,28 +501,45 @@ impl ReconciliationJob {
             lease_until: checked_timestamp_add(claim_now, self.lease_seconds, "reconciliation lease")?,
             limit: self.config.batch_size,
         };
-        let intents = self.storage.claim_reconciliation(&claim).await?;
+        let claims = self.storage.claim_reconciliation(&claim).await?;
         let mut run = ReconciliationRun {
-            claimed: u32::try_from(intents.len()).unwrap_or(u32::MAX),
+            claimed: u32::try_from(claims.len()).unwrap_or(u32::MAX),
             ..ReconciliationRun::default()
         };
-        for intent in intents {
-            let now = self.clock.now()?;
-            self.storage
-                .renew_reconciliation_lease(
-                    &intent.id,
-                    &self.config.worker_id,
-                    checked_timestamp_add(now, self.lease_seconds, "reconciliation lease")?,
-                )
-                .await?;
-            self.reconcile_intent(&intent, now, &mut run).await?;
+        for claim in claims {
+            let span = tracing::info_span!(
+                "payment.reconciliation.attempt",
+                run.id = %claim.intent.run_id,
+                payment.intent.id = %claim.intent.id,
+                payment.attempt_no = claim.attempt_no,
+            );
+            async {
+                let now = self.clock.now()?;
+                self.storage
+                    .renew_reconciliation_lease(
+                        &claim.intent.id,
+                        &self.config.worker_id,
+                        checked_timestamp_add(now, self.lease_seconds, "reconciliation lease")?,
+                    )
+                    .await?;
+                self.reconcile_intent(&claim.intent, claim.attempt_no, now, &mut run)
+                    .await
+            }
+            .instrument(span)
+            .await?;
         }
         Ok(run)
     }
 
-    async fn reconcile_intent(&self, intent: &PaymentIntent, now: i64, run: &mut ReconciliationRun) -> Result<()> {
+    async fn reconcile_intent(
+        &self,
+        intent: &PaymentIntent,
+        attempt_no: u32,
+        now: i64,
+        run: &mut ReconciliationRun,
+    ) -> Result<()> {
         if intent.status == PaymentStatus::Created && intent.expires_at.is_some_and(|expires_at| expires_at <= now) {
-            self.commit_expired_challenge(intent, now).await?;
+            self.commit_expired_challenge(intent, attempt_no, now).await?;
             run.expired = run.expired.saturating_add(1);
             return Ok(());
         }
@@ -534,7 +549,7 @@ impl ReconciliationJob {
         }
         match self.evidence.lookup(intent, now).await {
             Ok(ReconciliationEvidence::Confirmed(evidence)) => {
-                match self.commit_confirmed(intent, evidence.as_ref(), now).await {
+                match self.commit_confirmed(intent, evidence.as_ref(), attempt_no, now).await {
                     Ok(()) => run.settled = run.settled.saturating_add(1),
                     Err(Error::Settlement(reason)) => {
                         tracing::warn!(intent_id = %intent.id, %reason, "rejected untrusted reconciliation evidence");
@@ -545,7 +560,7 @@ impl ReconciliationJob {
                 }
             }
             Ok(ReconciliationEvidence::Verified { verification_ref }) => {
-                self.commit_verified(intent, &verification_ref, now).await?;
+                self.commit_verified(intent, &verification_ref, attempt_no, now).await?;
                 run.verified = run.verified.saturating_add(1);
             }
             Ok(ReconciliationEvidence::Pending) => {
@@ -553,7 +568,7 @@ impl ReconciliationJob {
                 self.reschedule(intent, now).await?;
             }
             Ok(ReconciliationEvidence::Expired { reason }) => {
-                self.commit_expired_settlement(intent, now, &reason).await?;
+                self.commit_expired_settlement(intent, attempt_no, now, &reason).await?;
                 run.expired = run.expired.saturating_add(1);
             }
             Ok(ReconciliationEvidence::Unknown { reason }) => {
@@ -575,7 +590,7 @@ impl ReconciliationJob {
         Ok(())
     }
 
-    async fn commit_expired_challenge(&self, intent: &PaymentIntent, now: i64) -> Result<()> {
+    async fn commit_expired_challenge(&self, intent: &PaymentIntent, attempt_no: u32, now: i64) -> Result<()> {
         if intent.status != PaymentStatus::Created
             || intent.expires_at.is_none_or(|expires_at| expires_at > now)
             || intent.reservation_status != ReservationStatus::Reserved
@@ -584,11 +599,17 @@ impl ReconciliationJob {
                 "challenge expiry does not match a due reserved intent".to_owned(),
             ));
         }
-        self.commit_expired(intent, now, "challenge_expiry", "challenge expired")
+        self.commit_expired(intent, attempt_no, now, "challenge_expiry", "challenge expired")
             .await
     }
 
-    async fn commit_expired_settlement(&self, intent: &PaymentIntent, now: i64, reason: &str) -> Result<()> {
+    async fn commit_expired_settlement(
+        &self,
+        intent: &PaymentIntent,
+        attempt_no: u32,
+        now: i64,
+        reason: &str,
+    ) -> Result<()> {
         if intent.direction != PaymentDirection::Inbound
             || intent.protocol != "x402"
             || !matches!(intent.status, PaymentStatus::PendingSettlement | PaymentStatus::Unknown)
@@ -598,11 +619,18 @@ impl ReconciliationJob {
                 "authorization expiry does not match a recoverable inbound settlement".to_owned(),
             ));
         }
-        self.commit_expired(intent, now, "settlement_authorization_expiry", reason)
+        self.commit_expired(intent, attempt_no, now, "settlement_authorization_expiry", reason)
             .await
     }
 
-    async fn commit_expired(&self, intent: &PaymentIntent, now: i64, stage: &str, reason: &str) -> Result<()> {
+    async fn commit_expired(
+        &self,
+        intent: &PaymentIntent,
+        attempt_no: u32,
+        now: i64,
+        stage: &str,
+        reason: &str,
+    ) -> Result<()> {
         let updated_at = now.max(intent.updated_at.saturating_add(1));
         let mut expired = intent.clone();
         expired.status = PaymentStatus::Expired;
@@ -614,7 +642,7 @@ impl ReconciliationJob {
             id: stable_id("event", &material),
             intent_id: intent.id.clone(),
             event_type: PaymentEventType::Failed,
-            attempt_no: 0,
+            attempt_no,
             signature_ref: None,
             tx_hash: None,
             payload: json!({"stage": stage, "reason": reason}),
@@ -653,9 +681,15 @@ impl ReconciliationJob {
         Ok(())
     }
 
-    async fn commit_confirmed(&self, intent: &PaymentIntent, evidence: &ConfirmedSettlement, now: i64) -> Result<()> {
+    async fn commit_confirmed(
+        &self,
+        intent: &PaymentIntent,
+        evidence: &ConfirmedSettlement,
+        attempt_no: u32,
+        now: i64,
+    ) -> Result<()> {
         evidence.validate_for(intent, now)?;
-        let commit = build_reconciliation_commit(intent, evidence, now)?;
+        let commit = build_reconciliation_commit(intent, evidence, attempt_no, now)?;
         self.storage
             .commit_settlement(SettlementWrite {
                 intent: &commit.intent,
@@ -668,7 +702,13 @@ impl ReconciliationJob {
         Ok(())
     }
 
-    async fn commit_verified(&self, intent: &PaymentIntent, verification_ref: &str, now: i64) -> Result<()> {
+    async fn commit_verified(
+        &self,
+        intent: &PaymentIntent,
+        verification_ref: &str,
+        attempt_no: u32,
+        now: i64,
+    ) -> Result<()> {
         if intent.status != PaymentStatus::Submitted || verification_ref.trim().is_empty() {
             return Err(Error::Settlement(
                 "verified reconciliation evidence does not match a submitted intent".to_owned(),
@@ -687,7 +727,7 @@ impl ReconciliationJob {
             id: stable_id("event", &format!("{}:verified:{verification_ref}", intent.id)),
             intent_id: intent.id.clone(),
             event_type: PaymentEventType::CredentialVerified,
-            attempt_no: 0,
+            attempt_no,
             signature_ref: None,
             tx_hash: None,
             payload: json!({"verification_ref": verification_ref, "recovered": true}),
@@ -739,6 +779,7 @@ struct ReconciliationCommit {
 fn build_reconciliation_commit(
     intent: &PaymentIntent,
     evidence: &ConfirmedSettlement,
+    attempt_no: u32,
     now: i64,
 ) -> Result<ReconciliationCommit> {
     let wallet_id = intent
@@ -751,7 +792,15 @@ fn build_reconciliation_commit(
     Ok(ReconciliationCommit {
         intent: reconciled_intent(intent, evidence, now),
         ledger: reconciled_ledger(intent, evidence, wallet_id, &ledger_id, now)?,
-        event: reconciled_event(intent, evidence, &receipt, &ledger_id, &stable_material, now),
+        event: reconciled_event(
+            intent,
+            evidence,
+            &receipt,
+            &ledger_id,
+            &stable_material,
+            attempt_no,
+            now,
+        ),
         outbox: reconciled_outbox(intent, evidence, &stable_material, now),
     })
 }
@@ -763,7 +812,10 @@ fn reconciled_intent(intent: &PaymentIntent, evidence: &ConfirmedSettlement, now
     settled.tx_hash.clone_from(&evidence.tx_hash);
     settled.settlement_ref.clone_from(&evidence.settlement_ref);
     settled.next_reconcile_at = None;
-    settled.settled_at = Some(evidence.effective_at);
+    // The immutable ledger/receipt retain the trusted chain timestamp. The
+    // intent lifecycle itself cannot predate local intent creation when the
+    // two clocks differ within the accepted bounded-skew window.
+    settled.settled_at = Some(evidence.effective_at.max(intent.created_at));
     settled.updated_at = now.max(intent.updated_at.saturating_add(1));
     if settled.reservation_status == ReservationStatus::Reserved {
         settled.reservation_status = ReservationStatus::Consumed;
@@ -842,13 +894,14 @@ fn reconciled_event(
     receipt: &PaymentReceipt,
     ledger_id: &str,
     stable_material: &str,
+    attempt_no: u32,
     now: i64,
 ) -> PaymentEvent {
     PaymentEvent {
         id: stable_id("event", stable_material),
         intent_id: intent.id.clone(),
         event_type: PaymentEventType::Reconciled,
-        attempt_no: 0,
+        attempt_no,
         signature_ref: None,
         tx_hash: evidence.tx_hash.clone(),
         payload: json!({

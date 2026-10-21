@@ -79,6 +79,7 @@ struct WalletSpec {
 
 enum WalletSource {
     Local {
+        algorithm: String,
         private_key_env: String,
     },
     External {
@@ -126,12 +127,13 @@ impl<'de> Deserialize<'de> for WalletSpec {
         let wire = WalletSpecWire::deserialize(deserializer)?;
         let source = match wire.custody {
             ManifestWalletCustody::Local => {
-                if wire.algorithm.is_some() || wire.address.is_some() || wire.public_key.is_some() {
+                if wire.address.is_some() || wire.public_key.is_some() {
                     return Err(D::Error::custom(
-                        "local wallet accepts only private_key_env custody material",
+                        "local wallet accepts only algorithm and private_key_env custody material",
                     ));
                 }
                 WalletSource::Local {
+                    algorithm: wire.algorithm.unwrap_or_else(|| EVM_EOA_ALGORITHM.to_owned()),
                     private_key_env: wire
                         .private_key_env
                         .ok_or_else(|| D::Error::custom("local wallet requires private_key_env"))?,
@@ -404,9 +406,15 @@ fn validate_wallet_spec(wallet: &WalletSpec) -> Result<()> {
         return Err(Error::InvalidRequest("provisioning wallet id is empty".to_owned()));
     }
     match &wallet.source {
-        WalletSource::Local { private_key_env } if private_key_env.trim().is_empty() => {
+        WalletSource::Local {
+            algorithm,
+            private_key_env,
+        } if private_key_env.trim().is_empty()
+            || (!crate::model::wallet::is_evm_wallet_algorithm(algorithm)
+                && !crate::model::wallet::is_solana_wallet_algorithm(algorithm)) =>
+        {
             return Err(Error::InvalidRequest(
-                "local wallet private_key_env is empty".to_owned(),
+                "local wallet algorithm or private_key_env is invalid".to_owned(),
             ));
         }
         WalletSource::External { algorithm, address, .. }
@@ -669,12 +677,12 @@ async fn provision_wallet(
         max_per_day: spec.max_per_day,
     };
     match &spec.source {
-        WalletSource::Local { .. } => {
+        WalletSource::Local { algorithm, .. } => {
             let private_key = private_key
                 .ok_or_else(|| Error::InvalidTransition("local wallet provisioning key is unavailable".to_owned()))?;
             ports
                 .local_keys
-                .create_local(&spec.id, &private_key, &config, provisioned_at)
+                .create_local(&spec.id, algorithm, &private_key, &config, provisioned_at)
                 .await?;
         }
         WalletSource::External { .. } => {
@@ -687,13 +695,17 @@ async fn provision_wallet(
 
 fn wallet_material(spec: &WalletSpec, created_at: i64) -> Result<(Wallet, Option<Zeroizing<Vec<u8>>>)> {
     match &spec.source {
-        WalletSource::Local { private_key_env } => {
-            let private_key = private_key_from_env(private_key_env)?;
+        WalletSource::Local {
+            algorithm,
+            private_key_env,
+        } => {
+            let private_key = private_key_from_env(private_key_env, algorithm)?;
+            let (address, public_key) = crypto::payment_key_metadata(algorithm, &private_key)?;
             let wallet = Wallet {
                 id: spec.id.clone(),
-                algorithm: EVM_EOA_ALGORITHM.to_owned(),
-                address: crypto::address(&private_key)?,
-                public_key: crypto::public_key(&private_key)?,
+                algorithm: algorithm.clone(),
+                address,
+                public_key,
                 created_at,
             };
             Ok((wallet, Some(private_key)))
@@ -717,13 +729,13 @@ fn wallet_material(spec: &WalletSpec, created_at: i64) -> Result<(Wallet, Option
     }
 }
 
-fn private_key_from_env(variable: &str) -> Result<Zeroizing<Vec<u8>>> {
+fn private_key_from_env(variable: &str, algorithm: &str) -> Result<Zeroizing<Vec<u8>>> {
     let encoded = read_secret_env(variable.trim(), "provisioned wallet private key", 1024)?;
     let encoded = encoded.strip_prefix("0x").unwrap_or(encoded.as_str());
     let decoded = Zeroizing::new(
         hex::decode(encoded).map_err(|_| Error::InvalidKey(format!("private key in {variable} is not hexadecimal")))?,
     );
-    crypto::validate_private_key(&decoded)?;
+    crypto::validate_private_key_for_algorithm(algorithm, &decoded)?;
     Ok(decoded)
 }
 

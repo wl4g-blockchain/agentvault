@@ -104,7 +104,9 @@ The checked-in service configuration is safe by default: both `agentvault.payer.
 - MarketPulse Payee: a free previous-day MCP news tool and a paid real-time tool.
 - QuantStream Payer: equivalent Rust, Go, Python, TypeScript, and Java ingestion services plus an administrator approval UI.
 
-The test uses PostgreSQL, authenticated EMQX ACLs, the official x402 Facilitator, Anvil/TestUSDC, a real Solana node health dependency, AgentVault, the Payee, and one SDK process. It verifies 402 retry, MQTT signing, daily-limit approval, one-time grant consumption, EVM settlement, receipt, Ledger, and delivery recovery.
+The x402 SDK matrix uses PostgreSQL, authenticated EMQX ACLs, the official x402 Facilitator, Anvil/TestUSDC, AgentVault, the Payee, and one SDK process. It verifies 402 retry, MQTT/gRPC signing, daily-limit approval, one-time grant consumption, EVM settlement, receipt/Ledger/transaction binding, exact facilitator gas accounting, and delivery recovery. An explicit x402 Solana gate runs the pinned upstream client/facilitator against a real local validator and proves exact SPL and lamport-fee conservation. A separate MPP gate uses the digest-pinned official Tempo localnet and an HTTP settlement boundary backed by the official MPP Rust SDK to verify a Vault-signed type-0x76 charge, verify/settle, lost-response recovery, one broadcast, receipt, and pathUSD conservation including gas.
+
+The five SDK protocol providers use x402 v2 for both HTTP (`PAYMENT-REQUIRED`, with compatible JSON-body parsing and conflict rejection) and MCP JSON-RPC (`structuredContent`/text challenges plus protocol-owned `_meta` credentials and receipts). MPP likewise supports HTTP and MCP through the official paymentauth wire types; a challenged payment header never overwrites an unrelated application Bearer token. Protocol-owned credential metadata is removed before the protected business handler runs.
 
 ```bash
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s structure
@@ -113,12 +115,14 @@ python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payer
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payee
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s full \
   --payer-language rust --payee-language rust
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s mpp-tempo
+python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s x402-solana
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix # simple: 8 cases
 python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix \
   --e2e-sdk-scope full # full: 50 cases
 ```
 
-Solana payment is not asserted by this E2E; the Solana node is a real dependency and health boundary. The financial flow currently asserted end-to-end is x402 exact on EVM.
+The x402 EVM language matrix, x402 Solana payment gate, and MPP Tempo charge gate produce separate immutable reports so one chain profile cannot mask another.
 
 ## License
 

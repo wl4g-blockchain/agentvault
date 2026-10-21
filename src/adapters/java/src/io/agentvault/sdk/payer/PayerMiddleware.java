@@ -1,5 +1,7 @@
 package io.agentvault.sdk.payer;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentvault.sdk.config.Config.PayerConfig;
 import io.agentvault.sdk.model.Base;
 import io.agentvault.sdk.model.Base.OperationContext;
@@ -19,35 +21,49 @@ import io.agentvault.sdk.model.Payer.PayerRequestContext;
 import io.agentvault.sdk.model.Payer.PaymentRequired;
 import io.agentvault.sdk.model.Payer.ReportOutboundResponseRequest;
 import io.agentvault.sdk.model.Payer.ReportOutboundResponseResponse;
+import io.agentvault.sdk.model.Payer.ProtocolEvidence;
+import io.agentvault.sdk.protocol.PaymentProtocolFactory;
+import io.agentvault.sdk.protocol.ProtocolRegistry;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
 /** Transport-neutral payer state machine used by ecosystem HTTP adapters. */
 public final class PayerMiddleware {
+    private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
+    private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> RESERVED = Set.of(
-            "host", "content-length", "authorization", "connection", "transfer-encoding",
+            "host", "content-length", "connection", "transfer-encoding",
             "proxy-authorization", "proxy-authenticate", "upgrade", "te", "trailer",
             "accept", "content-type");
 
     private final VaultTransport transport;
     private final PayerConfig config;
+    private final ProtocolRegistry protocols;
 
     public PayerMiddleware(VaultTransport transport, PayerConfig config) {
         this.transport = java.util.Objects.requireNonNull(transport, "transport");
         this.config = java.util.Objects.requireNonNull(config, "config");
+        this.protocols = new PaymentProtocolFactory().create(config.protocols());
     }
 
     public PayerConfig config() { return config; }
 
     public SpringInterceptorPayerMiddleware spring() {
         return new SpringInterceptorPayerMiddleware(this);
+    }
+
+    public JdkHttpPayerMiddleware jdkHttp() {
+        return new JdkHttpPayerMiddleware(this);
     }
 
     public AuthorizedPayment authorize(
@@ -70,6 +86,9 @@ public final class PayerMiddleware {
                 response.headers(),
                 strictUtf8(response.body()),
                 header(response.headers(), "payment-expires-at"));
+        if (challenge.protocolHint() != null && !challenge.protocolHint().isBlank()) {
+            protocols.get(challenge.protocolHint());
+        }
         AuthorizePaymentResponse authorization = authorizeUntilTerminal(new AuthorizePaymentRequest(
                 config.scenarioId(), context.runId(), challenge));
         if (authorization.authorization().outcome() == AuthorizationOutcome.DENIED) {
@@ -81,6 +100,7 @@ public final class PayerMiddleware {
         }
         PaymentCredential credential = authorization.credential();
         PaymentIntent intent = authorization.intent();
+        protocols.get(intent.protocol());
         if (intent.id() == null || intent.id().isBlank()
                 || !config.scenarioId().equals(intent.scenarioId())
                 || !context.runId().equals(intent.runId())
@@ -98,12 +118,92 @@ public final class PayerMiddleware {
         return new AuthorizedPayment(intent, credential);
     }
 
+    public AuthorizedPayment authorizeMcp(
+            PayerHttpRequest request,
+            JsonNode message,
+            PayerRequestContext context) {
+        return authorizeMcp(request, message, context, Map.of());
+    }
+
+    public AuthorizedPayment authorizeMcp(
+            PayerHttpRequest request,
+            JsonNode message,
+            PayerRequestContext context,
+            Map<String, String> responseHeaders) {
+        JsonNode requestId = mcpCallId(request.body());
+        if (requestId == null || !boundMcpResponse(message, requestId, false)) return null;
+        ProtocolRegistry.McpChallenge selected =
+                protocols.mcpChallenge(message, config.maxChallengeBytes());
+        if (selected == null) return null;
+        if (header(responseHeaders, "payment-required") != null) {
+            throw new IllegalArgumentException(
+                    "MCP payment challenge must not also declare PAYMENT-REQUIRED");
+        }
+        String advertised = header(responseHeaders, "payment-protocol");
+        if (advertised != null && !advertised.equalsIgnoreCase(selected.adapter().name())) {
+            throw new IllegalArgumentException(
+                    "MCP payment challenge protocol metadata conflicts with its JSON-RPC payload");
+        }
+        var headers = new LinkedHashMap<>(selected.challenge().headers());
+        headers.put("payment-protocol", selected.adapter().name());
+        String expiresAt = header(responseHeaders, "payment-expires-at");
+        if (expiresAt != null && !expiresAt.isBlank()) {
+            headers.put("payment-expires-at", expiresAt);
+        }
+        return authorize(
+                request,
+                new PayerHttpResponse(402, headers, selected.challenge().body()),
+                context);
+    }
+
+    private static JsonNode mcpCallId(byte[] body) {
+        try {
+            JsonNode message = JSON.readTree(body);
+            if (message == null || !message.isObject() || !"2.0".equals(message.path("jsonrpc").asText())
+                    || !"tools/call".equals(message.path("method").asText())
+                    || !message.path("params").isObject()
+                    || !(message.path("id").isTextual() || message.path("id").isNumber())) return null;
+            return message.get("id");
+        } catch (java.io.IOException error) {
+            return null;
+        }
+    }
+
+    static boolean boundMcpResponse(JsonNode message, JsonNode expectedId, boolean requireResult) {
+        return message != null && message.isObject()
+                && "2.0".equals(message.path("jsonrpc").asText())
+                && expectedId.equals(message.get("id"))
+                && (!requireResult || message.path("result").isObject());
+    }
+
+    public io.agentvault.sdk.protocol.PaymentProtocol.McpMetadata mcpCredential(
+            AuthorizedPayment authorized, String origin) {
+        if (!authorized.intent().protocol().equals(authorized.credential().protocol())) {
+            throw new IllegalStateException("outbound payment protocol binding is invalid");
+        }
+        var adapter = protocols.get(authorized.credential().protocol());
+        Base.HttpCredential delivery = adapter.credential(authorized.credential());
+        if (!origin.equalsIgnoreCase(delivery.boundOrigin())) {
+            throw new IllegalStateException("unsafe or missing MCP credential origin binding");
+        }
+        return adapter.mcpCredential(authorized.credential());
+    }
+
+    public List<String> mcpRequestMetadataKeys() {
+        return protocols.mcpRequestMetadataKeys();
+    }
+
+    public List<String> mcpRootRequestMetadataKeys() {
+        return protocols.mcpRootRequestMetadataKeys();
+    }
+
     public Map.Entry<String, String> credentialHeader(
             AuthorizedPayment authorized,
             String origin,
             Map<String, String> existing) {
-        Base.HttpCredential value = authorized.credential().http();
-        if (value == null || !origin.equalsIgnoreCase(value.boundOrigin()) || value.headerName() == null
+        Base.HttpCredential value = protocols.get(authorized.credential().protocol())
+                .credential(authorized.credential());
+        if (!origin.equalsIgnoreCase(value.boundOrigin()) || value.headerName() == null
                 || value.headerValue() == null || !value.headerName().matches("[!#$%&'*+\\-.^_`|~A-Za-z0-9]+")
                 || value.headerValue().contains("\r") || value.headerValue().contains("\n")
                 || RESERVED.contains(value.headerName().toLowerCase())
@@ -114,17 +214,178 @@ public final class PayerMiddleware {
     }
 
     public void report(PayerRequestContext context, AuthorizedPayment authorized, PayerHttpResponse response) {
-        if (!"x402".equals(authorized.credential().protocol())) return;
-        String evidence = header(response.headers(), "payment-response");
-        if (evidence != null && !evidence.isBlank()) {
+        if (!authorized.intent().protocol().equals(authorized.credential().protocol())) {
+            throw new IllegalStateException("outbound payment protocol binding is invalid");
+        }
+        var adapter = protocols.get(authorized.credential().protocol());
+        ProtocolRegistry.McpEvidence selected = protocols.merchantEvidence(response.headers());
+        if (selected != null && !selected.protocol().equals(adapter.name())) {
+            throw new IllegalStateException(
+                    "HTTP settlement receipt protocol does not match the paid credential");
+        }
+        var evidence = selected == null ? null : selected.evidence();
+        if (evidence != null) {
             reportOutboundResponse(
                     new OperationContext(config.scenarioId(), context.runId()),
                     authorized.intent().id(),
+                    adapter.name(),
                     evidence);
         } else if (response.status() >= 200 && response.status() < 300) {
             throw new IllegalStateException(
-                    "successful x402 response omitted PAYMENT-RESPONSE; payment remains reserved");
+                    "successful " + adapter.name() + " response omitted settlement evidence; payment remains reserved");
         }
+    }
+
+    public void reportMcp(
+            PayerRequestContext context, AuthorizedPayment authorized, JsonNode metadata) {
+        if (!authorized.intent().protocol().equals(authorized.credential().protocol())) {
+            throw new IllegalStateException("outbound payment protocol binding is invalid");
+        }
+        ProtocolRegistry.McpEvidence selected =
+                protocols.mcpMerchantEvidence(metadata, config.maxChallengeBytes());
+        if (selected == null || !authorized.intent().protocol().equals(selected.protocol())) {
+            throw new IllegalStateException(
+                    "successful " + authorized.intent().protocol()
+                            + " MCP response omitted matching settlement evidence; payment remains reserved");
+        }
+        reportOutboundResponse(
+                new OperationContext(config.scenarioId(), context.runId()),
+                authorized.intent().id(),
+                selected.protocol(),
+                selected.evidence());
+    }
+
+    @FunctionalInterface
+    public interface Delivery<T, E extends Exception> {
+        T send(int attemptNo) throws E;
+    }
+
+    public interface DeliveryResponse<T, E extends Exception> {
+        PayerHttpResponse view(T response) throws E;
+        void discard(T response) throws E;
+    }
+
+    @FunctionalInterface
+    public interface DeliveryReporter<T, E extends Exception> {
+        void report(T response) throws E;
+    }
+
+    /** Owns the bounded paid-request retry state machine for synchronous adapters. */
+    public <T, E extends Exception> T deliver(
+            PayerRequestContext context,
+            AuthorizedPayment authorized,
+            Delivery<T, E> delivery,
+            DeliveryResponse<T, E> responseAdapter) throws E {
+        return deliver(context, authorized, delivery, responseAdapter,
+                response -> report(context, authorized, responseAdapter.view(response)));
+    }
+
+    /** Same bounded state machine with protocol-specific response evidence extraction. */
+    public <T, E extends Exception> T deliver(
+            PayerRequestContext context,
+            AuthorizedPayment authorized,
+            Delivery<T, E> delivery,
+            DeliveryResponse<T, E> responseAdapter,
+            DeliveryReporter<T, E> reporter) throws E {
+        for (int attempt = 0; attempt <= config.deliveryRetries(); attempt++) {
+            deliveryEvent(context, authorized, attempt + 1);
+            T response = delivery.send(attempt + 1);
+            PayerHttpResponse view = responseAdapter.view(response);
+            try {
+                reporter.report(response);
+            } catch (Exception error) {
+                responseAdapter.discard(response);
+                @SuppressWarnings("unchecked")
+                E typed = (E) error;
+                throw typed;
+            }
+            if (view.status() != 503 || attempt == config.deliveryRetries()) return response;
+            responseAdapter.discard(response);
+        }
+        throw new IllegalStateException("payer retry loop ended unexpectedly");
+    }
+
+    public interface AsyncDelivery<T> {
+        CompletionStage<T> send(int attemptNo);
+        PayerHttpResponse view(T response);
+        CompletionStage<Void> discard(T response);
+    }
+
+    @FunctionalInterface
+    public interface AsyncDeliveryReporter<T> {
+        CompletionStage<Void> report(T response);
+    }
+
+    /** Owns the same state machine for WebFlux and other asynchronous adapters. */
+    public <T> CompletionStage<T> deliverAsync(
+            PayerRequestContext context,
+            AuthorizedPayment authorized,
+            AsyncDelivery<T> delivery) {
+        return deliverAsync(context, authorized, delivery, response -> {
+            report(context, authorized, delivery.view(response));
+            return CompletableFuture.completedFuture(null);
+        });
+    }
+
+    public <T> CompletionStage<T> deliverAsync(
+            PayerRequestContext context,
+            AuthorizedPayment authorized,
+            AsyncDelivery<T> delivery,
+            AsyncDeliveryReporter<T> reporter) {
+        return deliverAsync(context, authorized, delivery, reporter, 0);
+    }
+
+    private <T> CompletionStage<T> deliverAsync(
+            PayerRequestContext context,
+            AuthorizedPayment authorized,
+            AsyncDelivery<T> delivery,
+            AsyncDeliveryReporter<T> reporter,
+            int attempt) {
+        if (attempt > config.deliveryRetries()) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("payer retry loop ended unexpectedly"));
+        }
+        deliveryEvent(context, authorized, attempt + 1);
+        final CompletionStage<T> sent;
+        try {
+            sent = delivery.send(attempt + 1);
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(error);
+        }
+        return sent.thenCompose(response -> {
+            PayerHttpResponse view = delivery.view(response);
+            CompletionStage<Void> reported;
+            try {
+                reported = reporter.report(response);
+            } catch (RuntimeException error) {
+                reported = CompletableFuture.failedFuture(error);
+            }
+            return reported.handle((ignored, error) -> {
+                if (error == null) return CompletableFuture.completedFuture(view);
+                return delivery.discard(response).thenCompose(discarded ->
+                        CompletableFuture.<PayerHttpResponse>failedFuture(unwrap(error)));
+            }).thenCompose(value -> value).thenCompose(reportedView -> {
+            if (reportedView.status() != 503 || attempt == config.deliveryRetries()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            return delivery.discard(response)
+                    .thenCompose(ignored -> deliverAsync(
+                            context, authorized, delivery, reporter, attempt + 1));
+            });
+        });
+    }
+
+    private static Throwable unwrap(Throwable error) {
+        return error instanceof java.util.concurrent.CompletionException && error.getCause() != null
+                ? error.getCause() : error;
+    }
+
+
+    private static void deliveryEvent(
+            PayerRequestContext context, AuthorizedPayment authorized, int attemptNo) {
+        LOG.log(System.Logger.Level.INFO,
+                "agentvault.sdk.payer.retrying run_id={0} intent_id={1} attempt_no={2}",
+                context.runId(), authorized.intent().id(), attemptNo);
     }
 
     private AuthorizePaymentResponse authorizeUntilTerminal(AuthorizePaymentRequest request) {
@@ -188,10 +449,14 @@ public final class PayerMiddleware {
     }
 
     private ReportOutboundResponseResponse reportOutboundResponse(
-            OperationContext context, String intentId, String paymentResponse) {
+            OperationContext context,
+            String intentId,
+            String protocol,
+            io.agentvault.sdk.protocol.PaymentProtocol.MerchantEvidence evidence) {
         Base.required("intent_id", intentId);
         var request = new ReportOutboundResponseRequest(
-                context.scenarioId(), context.runId(), paymentResponse);
+                context.scenarioId(), context.runId(), protocol,
+                new ProtocolEvidence(evidence.headerName(), evidence.headerValue()));
         return transport.post(
                 "/api/v1/payments/" + escape(intentId) + "/outbound-response",
                 request,

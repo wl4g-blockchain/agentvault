@@ -37,6 +37,7 @@ def _evidence(facilitator_runtime: str) -> FullFlowEvidence:
         },
         initial_balances={},
         final_balances={},
+        chain_accounting={},
         logs={
             "payee": "\n".join(payee_lines),
             "agentvault": "\n".join(vault_lines),

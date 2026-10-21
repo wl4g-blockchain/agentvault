@@ -9,6 +9,10 @@ use std::{
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_pubkey::Pubkey;
+use x402_chain_solana::{chain::SolanaChainReference, v1_solana_exact::types::ATA_PROGRAM_PUBKEY};
+use x402_types::chain::ChainId;
 
 use crate::{
     apm::AgentVaultMetrics,
@@ -338,6 +342,142 @@ impl WalletBalanceSource for EvmRpcBalanceSource {
         Ok(WalletBalanceSnapshot {
             asset_available,
             native_available,
+            minimum_native_required: self.minimum_native_required,
+        })
+    }
+}
+
+/// Read-only Solana balance adapter backed by the official RPC client and the
+/// same associated-token-account derivation used by `x402-chain-solana`.
+pub struct SolanaRpcBalanceSource {
+    network: String,
+    chain_reference: SolanaChainReference,
+    rpc: Arc<RpcClient>,
+    minimum_native_required: Amount,
+}
+
+impl SolanaRpcBalanceSource {
+    /// Creates one source bound to a fixed CAIP-2 network and operator RPC.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-Solana chain, unsafe transport configuration, or a zero
+    /// response-size policy.
+    pub fn new(
+        network: &str,
+        endpoint: &str,
+        secret_headers: &BTreeMap<String, String>,
+        timeout: Duration,
+        max_response_bytes: usize,
+        minimum_native_required: Amount,
+        allow_insecure_loopback: bool,
+    ) -> Result<Self> {
+        let chain_id = network
+            .parse::<ChainId>()
+            .map_err(|_| Error::Config("Solana balance network is invalid".to_owned()))?;
+        let chain_reference = SolanaChainReference::try_from(chain_id)
+            .map_err(|_| Error::Config("Solana balance network is invalid".to_owned()))?;
+        if max_response_bytes == 0 {
+            return Err(Error::Config(
+                "Solana balance response-size limit must be positive".to_owned(),
+            ));
+        }
+        Ok(Self {
+            network: network.to_owned(),
+            chain_reference,
+            rpc: Arc::new(crate::utils::solana_rpc::client(
+                endpoint,
+                timeout,
+                max_response_bytes,
+                secret_headers,
+                allow_insecure_loopback,
+            )?),
+            minimum_native_required,
+        })
+    }
+
+    fn token_program(owner: Pubkey) -> Result<Pubkey> {
+        const TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+        let token = TOKEN_PROGRAM
+            .parse::<Pubkey>()
+            .map_err(|_| Error::Settlement("canonical SPL Token program is invalid".to_owned()))?;
+        let token_2022 = TOKEN_2022_PROGRAM
+            .parse::<Pubkey>()
+            .map_err(|_| Error::Settlement("canonical Token-2022 program is invalid".to_owned()))?;
+        if owner == token || owner == token_2022 {
+            Ok(owner)
+        } else {
+            Err(Error::Settlement(
+                "Solana x402 mint is not owned by a supported token program".to_owned(),
+            ))
+        }
+    }
+
+    fn validate_genesis(&self, genesis: &str) -> Result<()> {
+        if genesis.get(..32) != Some(self.chain_reference.as_str()) {
+            return Err(Error::Settlement(format!(
+                "Solana RPC genesis hash does not match {}",
+                self.network
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl WalletBalanceSource for SolanaRpcBalanceSource {
+    async fn load(&self, wallet: &Wallet, asset: &AssetIdentity) -> Result<WalletBalanceSnapshot> {
+        if asset.network != self.network {
+            return Err(Error::Settlement(
+                "Solana balance source network does not match the asset".to_owned(),
+            ));
+        }
+        let owner = crate::model::canonicalize_payment_recipient(&asset.network, &wallet.address)
+            .map_err(|_| Error::Settlement("Solana payment wallet address is invalid".to_owned()))?
+            .parse::<Pubkey>()
+            .map_err(|_| Error::Settlement("Solana payment wallet address is invalid".to_owned()))?;
+        let mint = asset
+            .token_contract
+            .as_deref()
+            .ok_or_else(|| Error::Settlement("Solana token mint is missing".to_owned()))?;
+        let mint = crate::model::canonicalize_payment_recipient(&asset.network, mint)
+            .map_err(|_| Error::Settlement("Solana token mint is invalid".to_owned()))?
+            .parse::<Pubkey>()
+            .map_err(|_| Error::Settlement("Solana token mint is invalid".to_owned()))?;
+
+        let (genesis, native_available, mint_account) = tokio::try_join!(
+            self.rpc.get_genesis_hash(),
+            self.rpc.get_balance(&owner),
+            self.rpc.get_account(&mint),
+        )
+        .map_err(|error| Error::Settlement(format!("Solana balance RPC failed: {error}")))?;
+        self.validate_genesis(&genesis.to_string())?;
+        let token_program = Self::token_program(mint_account.owner)?;
+        let (associated_account, _) = Pubkey::find_program_address(
+            &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+            &ATA_PROGRAM_PUBKEY,
+        );
+        let token_account = self
+            .rpc
+            .get_account_with_commitment(&associated_account, self.rpc.commitment())
+            .await
+            .map_err(|error| Error::Settlement(format!("Solana token-account RPC failed: {error}")))?;
+        let asset_available = if token_account.value.is_some() {
+            self.rpc
+                .get_token_account_balance(&associated_account)
+                .await
+                .map_err(|error| Error::Settlement(format!("Solana token-balance RPC failed: {error}")))?
+                .amount
+                .parse::<u128>()
+                .map(Amount::new)
+                .map_err(|_| Error::Settlement("Solana token balance is invalid".to_owned()))?
+        } else {
+            Amount::ZERO
+        };
+        Ok(WalletBalanceSnapshot {
+            asset_available,
+            native_available: Amount::new(u128::from(native_available)),
             minimum_native_required: self.minimum_native_required,
         })
     }

@@ -134,7 +134,95 @@ fn durable_receipt_falls_back_to_reconciliation_event() {
 
 #[test]
 fn concurrent_settlement_replay_requires_same_terminal_payment_identity() {
-    let expected = PaymentIntent {
+    let expected = pending_inbound_intent("x402");
+    let mut winner = expected.clone();
+    winner.status = PaymentStatus::Settled;
+    winner.updated_at += 1;
+    winner.settled_at = Some(winner.updated_at);
+
+    assert!(is_concurrent_settlement_winner(&expected, &winner));
+
+    let mut foreign = winner.clone();
+    foreign.wallet_id = Some("wallet-other".to_owned());
+    assert!(!is_concurrent_settlement_winner(&expected, &foreign));
+
+    winner.status = PaymentStatus::Unknown;
+    winner.settled_at = None;
+    assert!(!is_concurrent_settlement_winner(&expected, &winner));
+}
+
+#[test]
+fn mpp_confirmed_evidence_builds_matching_payment_receipt_and_ledger() {
+    let intent = pending_inbound_intent("mpp");
+    let transaction = format!("0x{}", "ab".repeat(32));
+    let result = SettlementProviderResult {
+        valid: true,
+        settled: true,
+        payer: Some("0x3333333333333333333333333333333333333333".to_owned()),
+        transaction: Some(transaction.clone()),
+        settlement_ref: None,
+        effect_ref: Some("tempo:tip20-transfer:0".to_owned()),
+        invalid_reason: None,
+        asset: Some(intent.asset.clone()),
+        amount: Some(intent.amount),
+        recipient: Some(intent.recipient.clone()),
+        confirmations: Some(1),
+        extensions: BTreeMap::from([
+            ("gas_fee".to_owned(), json!("474")),
+            ("gas_used".to_owned(), json!(295_999)),
+        ]),
+    };
+    result.validate_confirmed_for(&intent, 1).unwrap();
+
+    let settled = confirmed_intent(&intent, &result, 101, 100);
+    let receipt = confirmed_receipt(&intent, &result, 100).unwrap();
+    let ledger = confirmed_ledger(&intent, "tempo-localnet:1337", &result, 100, 101).unwrap();
+    let event = confirmed_event(&intent, &result, &receipt, 101);
+
+    assert_eq!(settled.status, PaymentStatus::Settled);
+    assert_eq!(settled.reservation_status, ReservationStatus::Consumed);
+    assert_eq!(settled.tx_hash.as_deref(), Some(transaction.as_str()));
+    assert_eq!(receipt.protocol, "mpp");
+    assert_eq!(receipt.tx_hash.as_deref(), Some(transaction.as_str()));
+    assert_eq!(ledger.entry_type, LedgerEntryType::Payment);
+    assert_eq!(ledger.direction, PaymentDirection::Inbound);
+    assert_eq!(ledger.amount, intent.amount);
+    assert_eq!(ledger.tx_hash.as_deref(), Some(transaction.as_str()));
+    assert_eq!(ledger.effect_ref.as_deref(), Some("tempo:tip20-transfer:0"));
+    assert_eq!(event.event_type, PaymentEventType::Settled);
+    assert_eq!(event.payload["receipt"]["protocol"], "mpp");
+}
+
+#[test]
+fn confirmed_intent_clamps_bounded_provider_clock_skew_to_creation_time() {
+    let intent = pending_inbound_intent("mpp");
+    let result = SettlementProviderResult {
+        valid: true,
+        settled: true,
+        transaction: Some(format!("0x{}", "ab".repeat(32))),
+        settlement_ref: None,
+        payer: Some("0x1111111111111111111111111111111111111111".to_owned()),
+        recipient: Some(intent.recipient.clone()),
+        asset: Some(intent.asset.clone()),
+        amount: Some(intent.amount),
+        effect_ref: Some("log:0".to_owned()),
+        confirmations: Some(1),
+        invalid_reason: None,
+        extensions: BTreeMap::new(),
+    };
+
+    let settled = confirmed_intent(&intent, &result, 101, intent.created_at - 1);
+
+    assert_eq!(settled.settled_at, Some(intent.created_at));
+}
+
+fn pending_inbound_intent(protocol: &str) -> PaymentIntent {
+    let (network, asset, token_contract) = if protocol == "mpp" {
+        ("eip155:1337", "pathUSD", "0x20c0000000000000000000000000000000000000")
+    } else {
+        ("eip155:31337", "USDC", "0x1111111111111111111111111111111111111111")
+    };
+    PaymentIntent {
         id: "intent-1".to_owned(),
         scenario_id: "scenario-1".to_owned(),
         run_id: "run-1".to_owned(),
@@ -142,11 +230,11 @@ fn concurrent_settlement_replay_requires_same_terminal_payment_identity() {
         policy_id: Some("policy-1".to_owned()),
         offer_id: Some("offer-1".to_owned()),
         direction: PaymentDirection::Inbound,
-        protocol: "x402".to_owned(),
+        protocol: protocol.to_owned(),
         asset: AssetIdentity {
-            network: "eip155:31337".to_owned(),
-            asset: "USDC".to_owned(),
-            token_contract: Some("0x1111111111111111111111111111111111111111".to_owned()),
+            network: network.to_owned(),
+            asset: asset.to_owned(),
+            token_contract: Some(token_contract.to_owned()),
             decimals: 6,
         },
         recipient: "0x2222222222222222222222222222222222222222".to_owned(),
@@ -165,19 +253,5 @@ fn concurrent_settlement_replay_requires_same_terminal_payment_identity() {
         updated_at: 95,
         expires_at: Some(1_000),
         settled_at: None,
-    };
-    let mut winner = expected.clone();
-    winner.status = PaymentStatus::Settled;
-    winner.updated_at += 1;
-    winner.settled_at = Some(winner.updated_at);
-
-    assert!(is_concurrent_settlement_winner(&expected, &winner));
-
-    let mut foreign = winner.clone();
-    foreign.wallet_id = Some("wallet-other".to_owned());
-    assert!(!is_concurrent_settlement_winner(&expected, &foreign));
-
-    winner.status = PaymentStatus::Unknown;
-    winner.settled_at = None;
-    assert!(!is_concurrent_settlement_winner(&expected, &winner));
+    }
 }

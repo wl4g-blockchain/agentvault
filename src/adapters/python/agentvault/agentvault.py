@@ -2,20 +2,40 @@ from __future__ import annotations
 
 import urllib.parse
 
-from .config import PayeeConfig, PayerConfig
+from .config import PayeeConfig, PayerConfig, VaultTransportConfig
 from .model import ApprovalPage, ApprovalQuery, ApprovalRequest, SubmitApprovalDecisionRequest
 from .payee import PayeeMiddleware
 from .payer import PayerMiddleware
-from .transport import VaultTransport
+from .transport import VaultTransport, VaultTransportFactory
 
 
 class AgentVault:
     """Single SDK facade that creates role middleware from one transport."""
 
-    def __init__(self, transport: VaultTransport) -> None:
+    def __init__(self, transport: VaultTransport, *, owned: bool = False) -> None:
         if transport is None:
             raise ValueError("AgentVault transport is not configured")
         self._transport = transport
+        self._owned = owned
+        self._closed = False
+
+    @classmethod
+    def from_config(cls, config: VaultTransportConfig) -> "AgentVault":
+        return cls(VaultTransportFactory().create(config), owned=True)
+
+    def close(self) -> None:
+        if self._closed or not self._owned:
+            return
+        close = getattr(self._transport, "close", None)
+        if callable(close):
+            close()
+        self._closed = True
+
+    def __enter__(self) -> "AgentVault":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def payer(self, config: PayerConfig) -> PayerMiddleware:
         return PayerMiddleware(self._transport, config)

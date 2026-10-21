@@ -1,11 +1,12 @@
 use crate::{
     model_base::validate_required, percent_encode, ApiClient, ApprovalDecisionKind, ApprovalPage, ApprovalQuery,
-    ApprovalRequest, Error, PayeeConfig, PayeeMiddleware, PayerConfig, PayerMiddleware, Result,
-    SubmitApprovalDecisionRequest, VaultTransport,
+    ApprovalRequest, ConfiguredVaultTransport, Error, PayeeConfig, PayeeMiddleware, PayerConfig, PayerMiddleware,
+    Result, SubmitApprovalDecisionRequest, TransportError, VaultTransport, VaultTransportConfig, VaultTransportFactory,
 };
 
 pub struct AgentVault<T> {
     api: ApiClient<T>,
+    owned: bool,
 }
 
 impl<T> AgentVault<T> {
@@ -13,6 +14,7 @@ impl<T> AgentVault<T> {
     pub fn new(transport: T) -> Self {
         Self {
             api: ApiClient::new(transport),
+            owned: false,
         }
     }
 
@@ -26,6 +28,14 @@ impl<T> AgentVault<T> {
 }
 
 impl<T: VaultTransport> AgentVault<T> {
+    pub async fn close(&self) -> std::result::Result<(), TransportError> {
+        if self.owned {
+            self.api.close().await
+        } else {
+            Ok(())
+        }
+    }
+
     pub async fn get_pending_approvals(&self, query: &ApprovalQuery) -> Result<ApprovalPage> {
         validate_required("scenario_id", &query.scenario_id)?;
         self.api
@@ -73,6 +83,15 @@ impl<T: VaultTransport> AgentVault<T> {
                 scenario_id = percent_encode(scenario_id)
             ))
             .await
+    }
+}
+
+impl AgentVault<ConfiguredVaultTransport> {
+    pub fn from_config(config: VaultTransportConfig) -> std::result::Result<Self, TransportError> {
+        VaultTransportFactory::new(config).create().map(|transport| Self {
+            api: ApiClient::new(transport),
+            owned: true,
+        })
     }
 }
 

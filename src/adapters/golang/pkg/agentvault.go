@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"sync"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
@@ -14,11 +15,30 @@ import (
 )
 
 type AgentVault struct {
-	wire transport.Transport
+	wire      transport.Transport
+	owned     transport.VaultTransport
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func New(wire transport.Transport) *AgentVault {
 	return &AgentVault{wire: wire}
+}
+
+func NewFromConfig(settings config.VaultTransportConfig) (*AgentVault, error) {
+	wire, err := transport.NewVaultTransportFactory().Create(settings)
+	if err != nil {
+		return nil, err
+	}
+	return &AgentVault{wire: wire, owned: wire}, nil
+}
+
+func (vault *AgentVault) Close() error {
+	if vault == nil || vault.owned == nil {
+		return nil
+	}
+	vault.closeOnce.Do(func() { vault.closeErr = vault.owned.Close() })
+	return vault.closeErr
 }
 
 func (vault *AgentVault) Payer(settings config.PayerConfig) (*payer.PayerMiddleware, error) {
@@ -40,6 +60,7 @@ type PayeeOperation = model.PayeeOperation
 type GinPayeeMiddleware = payee.GinPayeeMiddleware
 type GinPayeeRoute = payee.GinPayeeRoute
 type StandardPayeeMiddleware = payee.StandardPayeeMiddleware
+type StdHttpMiddleware = payee.StdHttpMiddleware
 type StandardPayeeRoute = payee.StandardPayeeRoute
 
 var NewPayerMiddleware = payer.NewPayerMiddleware
@@ -48,6 +69,7 @@ var WithPayment = payer.WithPayment
 var PaymentFromResponse = payer.PaymentFromResponse
 var NewPayeeMiddleware = payee.NewPayeeMiddleware
 var NewMCPToolRoute = payee.NewMCPToolRoute
+var NewStdHttpMiddleware = payee.NewStdHttpMiddleware
 var NewStandardMCPToolRoute = payee.NewStandardMCPToolRoute
 
 type Transport = transport.Transport
@@ -59,6 +81,14 @@ type MqttVaultTransport = transport.MqttVaultTransport
 type MqttConfig = config.MqttConfig
 type GrpcVaultTransport = transport.GrpcVaultTransport
 type GrpcConfig = config.GrpcConfig
+type VaultTransportConfig = config.VaultTransportConfig
+type TransportProvider = config.TransportProvider
+type VaultTransportFactory = transport.VaultTransportFactory
+
+const (
+	TransportProviderGrpc = config.TransportProviderGrpc
+	TransportProviderMqtt = config.TransportProviderMqtt
+)
 
 const (
 	MethodGet  = transport.MethodGet
@@ -68,6 +98,7 @@ const (
 var ErrRunConflict = transport.ErrRunConflict
 var NewMqttVaultTransport = transport.NewMqttVaultTransport
 var NewGrpcVaultTransport = transport.NewGrpcVaultTransport
+var NewVaultTransportFactory = transport.NewVaultTransportFactory
 
 type OperationContext = model.OperationContext
 type PaymentDirection = model.PaymentDirection

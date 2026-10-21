@@ -94,14 +94,23 @@ Flowgent Anvil, Solana, and Facilitator deployments:
 
 - `payer`: Anvil and Solana nodes; no Facilitator container.
 - `payee`: Anvil, Solana, and official x402 Facilitator.
+- `tempo`: the digest-pinned official Tempo localnet used only by the explicit
+  MPP `charge` gate.
 - `infra`: PostgreSQL, EMQX, and Jaeger.
 - `apps`: AgentVault, QuantStream Admin UI, and the read-only auditor.
 - `payee-{go,rust,python,java,typescript}`: exactly one payee backend.
 - `ingestor-{go,rust,python,java,typescript}`: exactly one payer backend.
 
-The asserted payment is x402 v2 / EVM / EIP-3009 against compiled TestUSDC.
-Solana is a real validator health dependency but no Solana payment is claimed.
-No mock RPC, broker, or Facilitator is used.
+The five-language business matrix asserts x402 v2 / EVM / EIP-3009 against
+compiled TestUSDC. The separate `mpp-tempo` scenario asserts a Vault-signed
+Tempo type-0x76 `charge`, external HTTP verify/settle, lost-response recovery,
+single broadcast, receipt binding, and pathUSD balance conservation including
+token-denominated gas. The explicit `x402-solana` scenario creates a real SPL
+mint and associated token accounts on the pinned local validator, then runs the
+pinned upstream x402 v2 client and facilitator through verify and one settle.
+It asserts exact SPL deltas, aggregate token conservation, unchanged payer
+lamports, and the facilitator's exact confirmed transaction fee. No mock RPC,
+broker, or Facilitator is used.
 MarketPulse also emits AgentVault's `payment-expires-at` HTTP profile field as
 canonical Unix seconds. Every approval poll reuses that absolute value, so the
 same official x402 body always maps to the same durable Challenge Hash.
@@ -156,6 +165,8 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
+python3 runner.py -s mpp-tempo
+python3 runner.py -s x402-solana
 python3 runner.py -s matrix --matrix-workers 2 # default simple: Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -205,9 +216,18 @@ rejects scope mismatch/corrupt evidence, and executes only the remaining cases.
    rows; and
 6. the active Payer's two EOAs each lose exactly 1 USDC, the other eight Payer
    EOAs remain byte-for-byte unchanged, the gateway/payee gains exactly 2 USDC,
-   total token balance is conserved, and all ten AgentVault SQL snapshots
-   converge to chain state.
+   total token balance is conserved, both Anvil receipts and exact facilitator
+   native gas spend match the four Ledger postings, and all ten AgentVault SQL
+   snapshots converge to chain state.
 
-Provider fee/refund/deposit/transfer/reversal matrices, MPP/Tempo settlement,
-and Solana payment are not overstated here; they require their own provider
-fixtures and acceptance scenarios.
+`mpp-tempo` and `x402-solana` are deliberately independent of that EVM SDK
+matrix. The former proves the implemented MPP Tempo `charge` core against a
+real node and a local HTTP settlement service backed by the official `mpp`
+Rust server/Tempo provider primitives. The supported direct-charge flow
+validates without mutation and broadcasts exactly once through Tempo RPC; it
+does not invent an x402-style facilitator or a duplicate merchant contract. The latter proves the pinned
+upstream x402 Solana exact client/facilitator and real SPL accounting boundary.
+The shared five-SDK fixture separately covers both transports, both protocols,
+and both roles. MPP session/split/fee-payer/delegated methods and provider
+fee/refund/deposit/transfer/reversal matrices remain unsupported or require
+their own acceptance scenarios.

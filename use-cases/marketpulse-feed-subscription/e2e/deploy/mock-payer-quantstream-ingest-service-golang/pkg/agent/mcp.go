@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,12 +51,10 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 	if transportName == "" {
 		transportName = "mqtt"
 	}
-	var wire agentvault.Transport
-	var closeTransport func() error
-	var err error
-	switch transportName {
+	var settings agentvault.VaultTransportConfig
+	switch strings.ToLower(strings.TrimSpace(transportName)) {
 	case "mqtt":
-		wire, err = agentvault.NewMqttVaultTransport(agentvault.MqttConfig{
+		settings = agentvault.VaultTransportConfig{Provider: agentvault.TransportProviderMqtt, Mqtt: &agentvault.MqttConfig{
 			Host:             values.required("AGENTVAULT_MQTT_HOST"),
 			Port:             uint16(values.positiveUint("AGENTVAULT_MQTT_PORT", 16)),
 			TLS:              values.boolean("AGENTVAULT_MQTT_TLS"),
@@ -63,29 +62,31 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 			Password:         values.required("AGENTVAULT_MQTT_PASSWORD"),
 			ConnectionPrefix: "quantstream-go", VaultClientID: values.required("QUANTSTREAM_CLIENT_ID"),
 			RequestTimeout: mqttTimeout,
-		})
+		}}
 	case "grpc":
-		var grpc *agentvault.GrpcVaultTransport
-		grpc, err = agentvault.NewGrpcVaultTransport(agentvault.GrpcConfig{
+		settings = agentvault.VaultTransportConfig{Provider: agentvault.TransportProviderGrpc, Grpc: &agentvault.GrpcConfig{
 			Endpoint: values.required("AGENTVAULT_GRPC_ENDPOINT"),
 			TLS:      values.boolean("AGENTVAULT_GRPC_TLS"), RequestTimeout: mqttTimeout,
-		})
-		wire = grpc
-		if grpc != nil {
-			closeTransport = grpc.Close
-		}
+		}}
 	default:
 		return nil, errors.New("AGENTVAULT_TRANSPORT must be mqtt or grpc")
 	}
 	if values.err != nil {
 		return nil, values.err
 	}
+	vault, err := agentvault.NewFromConfig(settings)
 	if err != nil {
 		return nil, err
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = vault.Close()
+		}
+	}()
 	slog.Info("selected AgentVault Payer transport",
 		"event.name", "agentvault.sdk.payer.transport_selected", "agentvault.transport", transportName)
-	core, err := agentvault.New(wire).Payer(agentvault.PayerConfig{
+	core, err := vault.Payer(agentvault.PayerConfig{
 		ScenarioID: scenarioID, ApprovalTimeout: approvalTimeout,
 		ApprovalPollInterval: time.Second, DeliveryRetries: 1,
 	})
@@ -133,7 +134,8 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 		}
 	}
 	initialized = true
-	return &MCPHelper{client: mcpClient, payments: capture, tools: tools, closeTransport: closeTransport}, nil
+	completed = true
+	return &MCPHelper{client: mcpClient, payments: capture, tools: tools, closeTransport: vault.Close}, nil
 }
 
 func (helper *MCPHelper) Close() error {

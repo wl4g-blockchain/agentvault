@@ -150,3 +150,31 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
     assert!(original.same_posting_as(&conflicting));
     assert!(!original.same_fact_content_as(&conflicting));
 }
+
+#[test]
+fn posting_key_accepts_only_canonical_supported_chain_transactions() {
+    let solana_signature = "3gPVDLMYKWaWcTcwd7rfvGDCL3PUVzDf5CgFTFtT7uiRkefs3m4sQhW6jPfnRd4pwtUBcR2M5yXAyQwbAouh9kpU";
+    let solana = settlement_posting_key(
+        "solana-rpc:local",
+        "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ",
+        Some(solana_signature),
+        None,
+        Some("spl-transfer"),
+    )
+    .unwrap();
+    assert!(solana.starts_with("chain-effect:"));
+    assert_eq!(
+        settlement_posting_key(
+            "solana-rpc:local",
+            "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ",
+            Some("not-a-signature"),
+            None,
+            None,
+        ),
+        Err("tx_hash")
+    );
+    assert_eq!(
+        settlement_posting_key("rpc", "cosmos:local", Some(solana_signature), None, None),
+        Err("network")
+    );
+}

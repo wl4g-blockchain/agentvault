@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use solana_signature::Signature as SolanaSignature;
+use std::str::FromStr;
 
 use super::payment::{Amount, AssetIdentity, PaymentDirection};
 
@@ -70,6 +72,30 @@ pub struct PaymentLedgerEntry {
 }
 
 impl PaymentLedgerEntry {
+    /// Returns the canonical transaction identity for one supported chain.
+    /// EVM hashes are case-insensitive and normalized to lowercase; Solana
+    /// signatures are base58 identities and therefore retain their spelling.
+    pub(crate) fn canonical_transaction(network: &str, transaction: &str) -> Result<String, &'static str> {
+        let transaction = transaction.trim();
+        if network.starts_with("eip155:") {
+            if transaction.len() != 66
+                || !transaction.starts_with("0x")
+                || !transaction[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("tx_hash");
+            }
+            return Ok(transaction.to_ascii_lowercase());
+        }
+        if network.starts_with("solana:") {
+            let signature = SolanaSignature::from_str(transaction).map_err(|_| "tx_hash")?;
+            if signature == SolanaSignature::default() {
+                return Err("tx_hash");
+            }
+            return Ok(signature.to_string());
+        }
+        Err("network")
+    }
+
     /// Validates entry-type-specific fields before append-only persistence.
     ///
     /// # Errors
@@ -182,7 +208,7 @@ pub fn settlement_posting_key(
         if network.is_empty() {
             return Err("network");
         }
-        let normalized = normalize_transaction(network, tx_hash)?;
+        let normalized = PaymentLedgerEntry::canonical_transaction(network, tx_hash)?;
         return Ok(match effect_ref {
             Some(effect_ref) => format!(
                 "chain-effect:{}",
@@ -233,20 +259,6 @@ fn validate_effect_ref(effect_ref: &str) -> Result<&str, &'static str> {
         return Err("effect_ref");
     }
     Ok(normalized)
-}
-
-fn normalize_transaction(network: &str, tx_hash: &str) -> Result<String, &'static str> {
-    if network.starts_with("eip155:") {
-        if tx_hash.len() != 66
-            || !tx_hash.starts_with("0x")
-            || !tx_hash[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err("tx_hash");
-        }
-        Ok(tx_hash.to_ascii_lowercase())
-    } else {
-        Ok(tx_hash.to_owned())
-    }
 }
 
 fn posting_digest(domain: &[u8], values: &[&[u8]]) -> String {

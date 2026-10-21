@@ -21,17 +21,18 @@ use crate::{
         ReconciliationEvidenceSource, ReconciliationJob, WalletBalanceSyncJob,
     },
     handler::{
-        ApprovalHandler, ApprovalPrincipalAuthorizer, EvmEvidenceSource, EvmReceiptRegistry, EvmRpcBalanceSource,
+        ApprovalHandler, ApprovalPrincipalAuthorizer, EvmAuthorizationSource, EvmReceiptRegistry, EvmRpcBalanceSource,
         EvmRpcReceiptConfig, EvmRpcReceiptSource, JwtApprovalGrantTokenService, OfferHandler,
         OutboundEvidenceDependencies, OutboundEvidenceHandler, OutboundSigningDependencies, OutboundSigningHandler,
-        PaymentHandler, ProtocolRegistry, ScenarioHandler, SettlementDependencies, SettlementHandler,
-        SettlementProviderConfig, SettlementProviderRegistry, StoredApprovalPrincipalAuthorizer, WalletBalanceRegistry,
-        WalletBalanceSource, WalletBalanceSynchronizer, X402FacilitatorProvider,
+        PaymentHandler, ProtocolRegistry, ReceiptSource, ScenarioHandler, SettlementDependencies, SettlementHandler,
+        SettlementProviderConfig, SettlementProviderRegistry, SolanaRpcBalanceSource, SolanaRpcReceiptConfig,
+        SolanaRpcReceiptSource, StoredApprovalPrincipalAuthorizer, WalletBalanceRegistry, WalletBalanceSource,
+        WalletBalanceSynchronizer, X402FacilitatorProvider,
     },
     protocol::{
         mpp::{MppAdapter, MppAsset},
-        x402::{X402Adapter, X402Asset},
-        PaymentProtocol,
+        x402::{X402Adapter, X402Asset, X402SolanaConfig},
+        PaymentProtocolFactory,
     },
     storage::{
         ApprovalStorage, ApproverStorage, ClientStorage, EventStorage, IStorage, LedgerStorage, OfferStorage,
@@ -715,7 +716,7 @@ fn payer_balance_assets(config: &AppConfig) -> Vec<AssetIdentity> {
         assets.extend(config.agentvault.payer.mpp.assets.iter().map(|asset| AssetIdentity {
             network: asset.network.clone(),
             asset: asset.symbol.clone(),
-            token_contract: asset.token_contract.clone(),
+            token_contract: Some(asset.currency.clone()),
             decimals: asset.decimals,
         }));
     }
@@ -742,37 +743,46 @@ fn build_approval_expiration(
 }
 
 fn build_payer_protocol_registry(config: &AppConfig) -> crate::Result<ProtocolRegistry> {
-    let mut adapters: Vec<Arc<dyn PaymentProtocol>> = Vec::new();
+    let mut factory = PaymentProtocolFactory::new();
     let x402 = &config.agentvault.payer.x402;
     if x402.enabled {
-        adapters.push(Arc::new(X402Adapter::new(
-            x402_assets(&x402.assets),
+        factory = factory.register(Arc::new(x402_adapter(
+            config,
+            &x402.assets,
             x402.max_challenge_ttl.as_secs(),
         )?));
     }
-    ProtocolRegistry::new(adapters)
+    let mpp = &config.agentvault.payer.mpp;
+    if mpp.enabled {
+        factory = factory.register(Arc::new(MppAdapter::new_payer(
+            mpp_assets(&mpp.assets),
+            mpp.max_challenge_ttl.as_secs(),
+        )?));
+    }
+    factory.build()
 }
 
 fn build_payee_protocol_registry(config: &AppConfig) -> crate::Result<ProtocolRegistry> {
-    let mut adapters: Vec<Arc<dyn PaymentProtocol>> = Vec::new();
+    let mut factory = PaymentProtocolFactory::new();
     let x402 = &config.agentvault.payee.x402;
     if x402.enabled {
-        adapters.push(Arc::new(X402Adapter::new(
-            x402_assets(&x402.assets),
+        factory = factory.register(Arc::new(x402_adapter(
+            config,
+            &x402.assets,
             x402.max_challenge_ttl.as_secs(),
         )?));
     }
     let mpp = &config.agentvault.payee.mpp;
     if mpp.enabled {
         let secret = read_secret_ref(&mpp.challenge_secret, "MPP challenge secret", MAX_OPERATOR_SECRET_BYTES)?;
-        adapters.push(Arc::new(MppAdapter::new_payee(
+        factory = factory.register(Arc::new(MppAdapter::new_payee(
             mpp_assets(&mpp.assets),
             mpp.realm.clone(),
             secret.to_string(),
             mpp.max_challenge_ttl.as_secs(),
         )?));
     }
-    ProtocolRegistry::new(adapters)
+    factory.build()
 }
 
 fn build_provider_registry(config: &AppConfig) -> crate::Result<SettlementProviderRegistry> {
@@ -852,6 +862,39 @@ fn x402_assets(assets: &[X402AssetConfig]) -> Vec<X402Asset> {
         .collect()
 }
 
+fn x402_adapter(
+    config: &AppConfig,
+    assets: &[X402AssetConfig],
+    max_timeout_seconds: u64,
+) -> crate::Result<X402Adapter> {
+    let mut solana = Vec::new();
+    for asset in assets {
+        let Some(chain) = config.agentvault.chains.get(&asset.network) else {
+            return Err(Error::Config(format!(
+                "no fixed chain RPC configured for {}",
+                asset.network
+            )));
+        };
+        if chain.family != ChainFamily::Solana {
+            continue;
+        }
+        let fee_payer = asset
+            .fee_payer
+            .clone()
+            .ok_or_else(|| Error::Config(format!("x402 Solana asset {} has no fee payer", asset.network)))?;
+        solana.push(X402SolanaConfig {
+            network: asset.network.clone(),
+            fee_payer,
+            rpc_url: chain.rpc.endpoint.clone(),
+            rpc_timeout: chain.rpc.timeout,
+            rpc_max_response_bytes: chain.rpc.max_response_bytes,
+            rpc_headers: resolved_header_values(&chain.rpc.secret_headers, &format!("Solana RPC {}", asset.network))?,
+            allow_insecure_loopback: chain.rpc.allow_insecure_loopback,
+        });
+    }
+    X402Adapter::new_with_solana(x402_assets(assets), max_timeout_seconds, solana)
+}
+
 fn mpp_assets(assets: &[MppAssetConfig]) -> Vec<MppAsset> {
     assets
         .iter()
@@ -859,7 +902,7 @@ fn mpp_assets(assets: &[MppAssetConfig]) -> Vec<MppAsset> {
             network: asset.network.clone(),
             currency: asset.currency.clone(),
             symbol: asset.symbol.clone(),
-            token_contract: asset.token_contract.clone(),
+            token_contract: Some(asset.currency.clone()),
             decimals: asset.decimals,
         })
         .collect()
@@ -868,67 +911,118 @@ fn mpp_assets(assets: &[MppAssetConfig]) -> Vec<MppAsset> {
 fn build_balance_registry(config: &AppConfig) -> crate::Result<WalletBalanceRegistry> {
     let mut sources = Vec::new();
     for (network, chain) in &config.agentvault.chains {
-        if chain.family != ChainFamily::Evm {
-            continue;
-        }
         let rpc = &chain.rpc;
         let headers = resolved_header_values(&rpc.secret_headers, &format!("chain RPC {network}"))?;
-        let source: Arc<dyn WalletBalanceSource> = Arc::new(EvmRpcBalanceSource::new(
-            &rpc.endpoint,
-            headers,
-            rpc.timeout,
-            rpc.max_response_bytes,
-            chain.minimum_native_balance,
-            rpc.allow_insecure_loopback,
-        )?);
+        let source: Arc<dyn WalletBalanceSource> = match chain.family {
+            ChainFamily::Evm => Arc::new(EvmRpcBalanceSource::new(
+                &rpc.endpoint,
+                headers,
+                rpc.timeout,
+                rpc.max_response_bytes,
+                chain.minimum_native_balance,
+                rpc.allow_insecure_loopback,
+            )?),
+            ChainFamily::Solana => Arc::new(SolanaRpcBalanceSource::new(
+                network,
+                &rpc.endpoint,
+                &headers,
+                rpc.timeout,
+                rpc.max_response_bytes,
+                chain.minimum_native_balance,
+                rpc.allow_insecure_loopback,
+            )?),
+        };
         sources.push((network.clone(), source));
     }
     WalletBalanceRegistry::new(sources)
 }
 
 fn build_receipt_registry(config: &AppConfig) -> crate::Result<EvmReceiptRegistry> {
-    let mut sources = Vec::new();
+    let mut sources: Vec<(String, Arc<dyn ReceiptSource>)> = Vec::new();
+    let mut authorizations: Vec<(String, Arc<dyn EvmAuthorizationSource>)> = Vec::new();
     let mut configured = std::collections::BTreeSet::new();
-    let outbound_assets = config
+    let outbound_x402 = config
         .agentvault
         .payer
         .x402
         .enabled
         .then_some(config.agentvault.payer.x402.assets.as_slice())
         .into_iter()
-        .flatten();
-    let inbound_assets = config
+        .flatten()
+        .map(|asset| asset.network.as_str());
+    let outbound_mpp = config
+        .agentvault
+        .payer
+        .mpp
+        .enabled
+        .then_some(config.agentvault.payer.mpp.assets.as_slice())
+        .into_iter()
+        .flatten()
+        .map(|asset| asset.network.as_str());
+    let inbound_x402 = config
         .agentvault
         .payee
         .x402
         .enabled
         .then_some(config.agentvault.payee.x402.assets.as_slice())
         .into_iter()
-        .flatten();
-    for asset in outbound_assets.chain(inbound_assets) {
-        if !configured.insert(asset.network.clone()) {
+        .flatten()
+        .map(|asset| asset.network.as_str());
+    let inbound_mpp = config
+        .agentvault
+        .payee
+        .mpp
+        .enabled
+        .then_some(config.agentvault.payee.mpp.assets.as_slice())
+        .into_iter()
+        .flatten()
+        .map(|asset| asset.network.as_str());
+    for network in outbound_x402.chain(outbound_mpp).chain(inbound_x402).chain(inbound_mpp) {
+        if !configured.insert(network.to_owned()) {
             continue;
         }
         let chain = config
             .agentvault
             .chains
-            .get(&asset.network)
-            .ok_or_else(|| Error::Config(format!("no fixed chain RPC configured for {}", asset.network)))?;
+            .get(network)
+            .ok_or_else(|| Error::Config(format!("no fixed chain RPC configured for {network}")))?;
         let rpc = &chain.rpc;
-        let source: Arc<dyn EvmEvidenceSource> = Arc::new(EvmRpcReceiptSource::new(
-            &asset.network,
-            EvmRpcReceiptConfig {
-                endpoint: rpc.endpoint.clone(),
-                secret_headers: resolved_header_values(&rpc.secret_headers, &format!("EVM RPC {}", asset.network))?,
-                timeout: rpc.timeout,
-                max_response_bytes: rpc.max_response_bytes,
-                minimum_confirmations: chain.confirmation_depth,
-                allow_insecure_loopback: rpc.allow_insecure_loopback,
-            },
-        )?);
-        sources.push((asset.network.clone(), source));
+        let headers = resolved_header_values(&rpc.secret_headers, &format!("chain RPC {network}"))?;
+        match chain.family {
+            ChainFamily::Evm => {
+                let source = Arc::new(EvmRpcReceiptSource::new(
+                    network,
+                    EvmRpcReceiptConfig {
+                        endpoint: rpc.endpoint.clone(),
+                        secret_headers: headers,
+                        timeout: rpc.timeout,
+                        max_response_bytes: rpc.max_response_bytes,
+                        minimum_confirmations: chain.confirmation_depth,
+                        allow_insecure_loopback: rpc.allow_insecure_loopback,
+                    },
+                )?);
+                let receipt: Arc<dyn ReceiptSource> = source.clone();
+                let authorization: Arc<dyn EvmAuthorizationSource> = source;
+                sources.push((network.to_owned(), receipt));
+                authorizations.push((network.to_owned(), authorization));
+            }
+            ChainFamily::Solana => {
+                let source: Arc<dyn ReceiptSource> = Arc::new(SolanaRpcReceiptSource::new(
+                    network,
+                    &SolanaRpcReceiptConfig {
+                        endpoint: rpc.endpoint.clone(),
+                        secret_headers: headers,
+                        timeout: rpc.timeout,
+                        max_response_bytes: rpc.max_response_bytes,
+                        minimum_confirmations: chain.confirmation_depth,
+                        allow_insecure_loopback: rpc.allow_insecure_loopback,
+                    },
+                )?);
+                sources.push((network.to_owned(), source));
+            }
+        }
     }
-    EvmReceiptRegistry::new(sources)
+    EvmReceiptRegistry::from_sources(sources, authorizations)
 }
 
 fn secret_headers(headers: &BTreeMap<String, SecretHeaderConfig>, description: &str) -> crate::Result<HeaderMap> {

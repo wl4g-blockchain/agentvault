@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import secrets
+import threading
 from typing import Any, Mapping
 
 import grpc
@@ -31,6 +32,8 @@ class GrpcVaultTransport:
             request_serializer=BytesValue.SerializeToString,
             response_deserializer=BytesValue.FromString,
         )
+        self._close_lock = threading.Lock()
+        self._closed = False
 
     def __repr__(self) -> str:
         return f"GrpcVaultTransport(config={self.config!r}, channel=<redacted>)"
@@ -96,7 +99,11 @@ class GrpcVaultTransport:
         return value
 
     def close(self) -> None:
-        self._channel.close()
+        with self._close_lock:
+            if self._closed:
+                return
+            self._channel.close()
+            self._closed = True
 
     def __enter__(self) -> "GrpcVaultTransport":
         return self

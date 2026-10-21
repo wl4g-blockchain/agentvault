@@ -14,9 +14,10 @@ use zeroize::Zeroizing;
 
 use crate::{
     model::{
-        payment_recipients_match, settlement_posting_key, Amount, AssetIdentity, LedgerEntryType, PaymentChallenge,
-        PaymentCredential, PaymentDirection, PaymentEvent, PaymentEventType, PaymentIntent, PaymentLedgerEntry,
-        PaymentOffer, PaymentPolicy, PaymentReceipt, PaymentStatus, ReservationStatus,
+        payment_recipients_match, settlement_posting_key, wallet::is_evm_payment_network, Amount, AssetIdentity,
+        LedgerEntryType, PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEvent, PaymentEventType,
+        PaymentIntent, PaymentLedgerEntry, PaymentOffer, PaymentPolicy, PaymentReceipt, PaymentStatus,
+        ReservationStatus,
     },
     protocol::x402::eip3009_authorization_identity,
     storage::{
@@ -354,7 +355,7 @@ impl SettlementHandler {
         observed_at: i64,
     ) -> Result<ReconciliationProviderObservation> {
         let settlement = self.load_reconciliation_settlement(intent).await?;
-        if intent.direction == PaymentDirection::Inbound && intent.protocol == "x402" {
+        if uses_eip3009_recovery(intent) {
             let Some(requested) = self.settlement_requested_event(intent).await? else {
                 return Err(Error::Storage(
                     "inbound x402 reconciliation has no durable settlement operation".to_owned(),
@@ -966,7 +967,7 @@ impl SettlementHandler {
                 .ok_or_else(|| Error::Storage("settlement intent disappeared".to_owned()))?;
             return Ok(SettlementRequestRecord::Replay(current));
         }
-        let from_block = if intent.protocol == "x402" {
+        let from_block = if uses_eip3009_recovery(intent) {
             Some(
                 self.authorizations
                     .latest_block(&intent.asset.network)
@@ -1286,7 +1287,7 @@ fn authorization_query(
     settlement: &crate::protocol::ProtocolSettlement,
     from_block: u64,
 ) -> Result<(EvmAuthorizationQuery, i64)> {
-    if intent.direction != PaymentDirection::Inbound || intent.protocol != "x402" || settlement.protocol != "x402" {
+    if !uses_eip3009_recovery(intent) || settlement.protocol != "x402" {
         return Err(Error::Settlement(
             "EIP-3009 recovery requires an inbound x402 intent".to_owned(),
         ));
@@ -1311,13 +1312,19 @@ fn authorization_query(
     ))
 }
 
+fn uses_eip3009_recovery(intent: &PaymentIntent) -> bool {
+    intent.direction == PaymentDirection::Inbound
+        && intent.protocol == "x402"
+        && is_evm_payment_network(&intent.asset.network)
+}
+
 fn settlement_request_payload(intent: &PaymentIntent, from_block: Option<u64>) -> Value {
     let mut payload = serde_json::Map::from_iter([
         ("run_id".to_owned(), Value::String(intent.run_id.clone())),
         (
             "recovery".to_owned(),
             Value::String(
-                if intent.protocol == "x402" {
+                if uses_eip3009_recovery(intent) {
                     "eip3009_authorization_event"
                 } else {
                     "provider_verify"
@@ -1337,15 +1344,15 @@ fn settlement_request_from_block(intent: &PaymentIntent, event: &PaymentEvent) -
         .payload
         .as_object()
         .ok_or_else(|| Error::Storage("settlement operation payload is malformed".to_owned()))?;
-    let expected_recovery = if intent.protocol == "x402" {
+    let expected_recovery = if uses_eip3009_recovery(intent) {
         "eip3009_authorization_event"
     } else {
         "provider_verify"
     };
-    let exact_fields = payload.len() == if intent.protocol == "x402" { 3 } else { 2 }
+    let exact_fields = payload.len() == if uses_eip3009_recovery(intent) { 3 } else { 2 }
         && payload.contains_key("run_id")
         && payload.contains_key("recovery")
-        && (intent.protocol != "x402" || payload.contains_key("from_block"));
+        && (!uses_eip3009_recovery(intent) || payload.contains_key("from_block"));
     if event.intent_id != intent.id
         || event.event_type != PaymentEventType::SettlementRequested
         || event.attempt_no != 0
@@ -1559,7 +1566,9 @@ fn confirmed_intent(
         settled.reservation_status = ReservationStatus::Consumed;
     }
     settled.updated_at = updated_at;
-    settled.settled_at = Some(effective_at);
+    // Preserve the provider timestamp in the receipt and ledger, while the
+    // local intent lifecycle remains monotonic across bounded clock skew.
+    settled.settled_at = Some(effective_at.max(intent.created_at));
     settled
 }
 

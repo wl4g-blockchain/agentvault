@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import urllib.parse
 from typing import Any, Mapping
@@ -42,17 +43,109 @@ class HttpxPayerMiddleware:
             raise ValueError("paid requests cannot follow redirects")
         if operation is not None and (
             (content is not None and not isinstance(content, (bytes, str)))
-            or "files" in kwargs
+            or "files" in kwargs or "data" in kwargs or "stream" in kwargs
         ):
             raise ValueError("paid requests must use a replayable, non-streaming body")
         request_headers = dict(headers or {})
         if operation is None:
             return await self._send(method, url, request_headers, content, **kwargs)
+        if "json" in kwargs:
+            if content is not None:
+                raise ValueError("paid requests cannot provide both content and json")
+            content = json.dumps(kwargs.pop("json"), separators=(",", ":"))
+            if not any(name.lower() == "content-type" for name in request_headers):
+                request_headers["content-type"] = "application/json"
+        request_body = _body_bytes(content)
+        mcp_request = self._mcp_request(method, request_headers, request_body)
         first = await self._send(method, url, request_headers, content, stream=True, **kwargs)
         if first.status_code != 402:
-            await first.aread()
-            return first
-        _event("agentvault.sdk.payer.x402_detected", run_id=operation.run_id)
+            if mcp_request is None or not first.headers.get(
+                "content-type", ""
+            ).lower().startswith("application/json"):
+                await first.aread()
+                return first
+            try:
+                first_body = await _read_bounded(
+                    first, self.core.config.max_challenge_bytes
+                )
+            finally:
+                await first.aclose()
+            try:
+                message = json.loads(first_body)
+            except (UnicodeDecodeError, ValueError):
+                return self._buffered(first, first_body)
+            request_id = self.core._mcp_call_id(request_body)
+            if request_id is None or not self.core._bound_mcp_response(
+                message, request_id, require_result=False
+            ):
+                return self._buffered(first, first_body)
+            origin = _canonical_origin(url)
+            authorized = await asyncio.to_thread(
+                self.core.authorize_mcp,
+                PayerHttpRequest(
+                    method, url, origin, request_headers, request_body, False
+                ),
+                message,
+                operation,
+                first.headers,
+            )
+            if authorized is None:
+                return self._buffered(first, first_body)
+            _event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
+            _event(
+                "agentvault.sdk.payer.signed",
+                run_id=operation.run_id,
+                intent_id=authorized.intent.id,
+            )
+            metadata = self.core.mcp_credential(authorized, origin)
+            paid_body = self._attach_mcp_credential(
+                mcp_request, metadata.key, metadata.value
+            )
+            paid_response_body: bytes | None = None
+
+            async def report_mcp(response: httpx.Response) -> None:
+                nonlocal paid_response_body
+                if response.status_code == 503 or not 200 <= response.status_code < 300:
+                    return
+                if not response.headers.get(
+                    "content-type", ""
+                ).lower().startswith("application/json"):
+                    raise RuntimeError("paid MCP response must be application/json")
+                paid_response_body = await _read_bounded(
+                    response, self.core.config.max_challenge_bytes
+                )
+                try:
+                    paid_message = json.loads(paid_response_body)
+                except (UnicodeDecodeError, ValueError) as error:
+                    raise RuntimeError("paid MCP response is not valid JSON") from error
+                if not self.core._bound_mcp_response(
+                    paid_message, request_id, require_result=True
+                ):
+                    raise RuntimeError(
+                        "paid MCP response has no matching JSON-RPC result"
+                    )
+                meta = paid_message["result"].get("_meta", {})
+                await asyncio.to_thread(
+                    self.core.report_mcp, operation, authorized, meta
+                )
+
+            response = await self.core.deliver(
+                operation,
+                authorized,
+                lambda _attempt: self._send(
+                    method, url, request_headers, paid_body, stream=True, **kwargs
+                ),
+                lambda value: PayerHttpResponse(value.status_code, dict(value.headers)),
+                lambda value: value.aclose(),
+                report_mcp,
+            )
+            response.extensions["agentvault.payment"] = authorized
+            if paid_response_body is not None:
+                buffered = self._buffered(response, paid_response_body)
+                await response.aclose()
+                return buffered
+            return response
+        _event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
         origin = _canonical_origin(url)
         try:
             challenge_body = await _read_bounded(first, self.core.config.max_challenge_bytes)
@@ -71,18 +164,15 @@ class HttpxPayerMiddleware:
                intent_id=authorized.intent.id)
         name, value = self.core.credential_header(authorized, origin, request_headers)
         paid_headers = {**request_headers, name: value}
-        response = first
-        for attempt in range(self.core.config.delivery_retries + 1):
-            _event("agentvault.sdk.payer.retrying", run_id=operation.run_id,
-                   intent_id=authorized.intent.id, attempt_no=attempt + 1)
-            response = await self._send(method, url, paid_headers, content, **kwargs)
-            await asyncio.to_thread(
-                self.core.report, operation, authorized,
-                PayerHttpResponse(response.status_code, dict(response.headers)))
-            if response.status_code != 503 or attempt == self.core.config.delivery_retries:
-                response.extensions["agentvault.payment"] = authorized
-                return response
-        raise RuntimeError("payer retry loop ended unexpectedly")
+        response = await self.core.deliver(
+            operation,
+            authorized,
+            lambda _attempt: self._send(method, url, paid_headers, content, **kwargs),
+            lambda value: PayerHttpResponse(value.status_code, dict(value.headers)),
+            lambda value: value.aclose(),
+        )
+        response.extensions["agentvault.payment"] = authorized
+        return response
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self.request("GET", url, **kwargs)
@@ -95,6 +185,68 @@ class HttpxPayerMiddleware:
                     **kwargs: Any) -> httpx.Response:
         request = self._client.build_request(method, url, headers=headers, content=content, **kwargs)
         return await self._client.send(request, follow_redirects=False, stream=stream)
+
+    def _mcp_request(
+        self, method: str, headers: Mapping[str, str], body: bytes,
+    ) -> dict[str, object] | None:
+        content_type = next(
+            (value for name, value in headers.items() if name.lower() == "content-type"),
+            "",
+        )
+        if method.upper() != "POST" or not content_type.lower().startswith(
+            "application/json"
+        ):
+            return None
+        try:
+            message = json.loads(body)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if (
+            not isinstance(message, dict)
+            or message.get("jsonrpc") != "2.0"
+            or message.get("method") != "tools/call"
+            or not isinstance(message.get("params"), dict)
+            or self.core._mcp_call_id(body) is None
+        ):
+            return None
+        return message
+
+    def _attach_mcp_credential(
+        self, message: dict[str, object], key: str, value: object,
+    ) -> bytes:
+        copy = json.loads(json.dumps(message))
+        params = copy["params"]
+        assert isinstance(params, dict)
+        root_meta = copy.get("_meta", {})
+        if not isinstance(root_meta, dict):
+            raise RuntimeError("JSON-RPC root _meta must be an object")
+        if any(
+            existing in root_meta
+            for existing in self.core.mcp_root_request_metadata_keys()
+        ):
+            raise RuntimeError(
+                "MCP request already contains root payment credentials"
+            )
+        meta = params.get("_meta", {})
+        if not isinstance(meta, dict):
+            raise RuntimeError("MCP params._meta must be an object")
+        if any(
+            existing in meta for existing in self.core.mcp_request_metadata_keys()
+        ):
+            raise RuntimeError("MCP request already contains payment credentials")
+        meta[key] = value
+        params["_meta"] = meta
+        return json.dumps(copy, separators=(",", ":")).encode()
+
+    @staticmethod
+    def _buffered(response: httpx.Response, body: bytes) -> httpx.Response:
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            content=body,
+            request=response.request,
+            extensions=response.extensions,
+        )
 
 
 async def _read_bounded(response: httpx.Response, maximum: int) -> bytes:

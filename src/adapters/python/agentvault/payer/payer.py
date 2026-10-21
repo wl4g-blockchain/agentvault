@@ -1,24 +1,31 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import math
 import time
 import urllib.parse
 import re
-from typing import Mapping
+from typing import Awaitable, Callable, Mapping, TypeVar
 
 from ..config import PayerConfig
 from ..model import (
     AuthorizationOutcome, AuthorizedPayment, AuthorizePaymentRequest, AuthorizePaymentResponse,
     BalanceQuery, OperationContext, PayerHttpRequest, PayerHttpResponse, PayerRequestContext,
     PaymentBalance, PaymentIntent, PaymentReceipt, PaymentRequired, ReportOutboundResponseRequest,
-    ReportOutboundResponseResponse,
+    ReportOutboundResponseResponse, ProtocolEvidence,
 )
+from ..protocol import McpMetadata, PaymentProtocolFactory
 from ..transport import VaultTransport
 
 _HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~A-Za-z0-9]+$")
 _RESERVED_HEADERS = {
-    "host", "content-length", "authorization", "connection", "transfer-encoding", "upgrade",
+    "host", "content-length", "connection", "transfer-encoding", "upgrade",
     "proxy-authorization", "proxy-authenticate", "te", "trailer", "accept", "content-type",
 }
+_LOG = logging.getLogger("agentvault.sdk")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class PayerMiddleware:
@@ -29,6 +36,7 @@ class PayerMiddleware:
             raise ValueError("AgentVault transport is not configured")
         self._transport = transport
         self.config = config
+        self._protocols = PaymentProtocolFactory().create(config.protocols)
 
     def standard(self, *, timeout: float = 30.0,
               client: "httpx.AsyncClient | None" = None) -> "HttpxPayerMiddleware":
@@ -57,6 +65,8 @@ class PayerMiddleware:
             protocol_hint=_header(response.headers, "payment-protocol") or None,
             expires_at=_header(response.headers, "payment-expires-at") or None,
         )
+        if required.protocol_hint is not None:
+            self._protocols.get(required.protocol_hint)
         authorization_request = AuthorizePaymentRequest(
             context=operation.operation_context(self.config.scenario_id),
             challenge=required,
@@ -68,6 +78,7 @@ class PayerMiddleware:
             raise RuntimeError("approval wait returned an invalid terminal result")
         credential = response.credential
         intent = response.intent
+        self._protocols.get(intent.protocol)
         if (
             not intent.id
             or intent.scenario_id != self.config.scenario_id
@@ -83,24 +94,180 @@ class PayerMiddleware:
             raise RuntimeError("credential, outbound intent, and paid resource are not bound to the same payment")
         return AuthorizedPayment(intent, credential)
 
+    def authorize_mcp(
+        self,
+        request: PayerHttpRequest,
+        message: object,
+        operation: PayerRequestContext,
+        response_headers: Mapping[str, str] | None = None,
+    ) -> AuthorizedPayment | None:
+        request_id = self._mcp_call_id(request.body)
+        if request_id is None or not self._bound_mcp_response(
+            message, request_id, require_result=False
+        ):
+            return None
+        selected = self._protocols.mcp_challenge(message, self.config.max_challenge_bytes)
+        if selected is None:
+            return None
+        adapter, challenge = selected
+        transport_headers = response_headers or {}
+        if _header(transport_headers, "payment-required"):
+            raise RuntimeError(
+                "MCP payment challenge must not also declare PAYMENT-REQUIRED"
+            )
+        advertised = _header(transport_headers, "payment-protocol")
+        if advertised and advertised.lower() != adapter.name.lower():
+            raise RuntimeError(
+                "MCP payment challenge protocol metadata conflicts with its JSON-RPC payload"
+            )
+        headers = dict(challenge.headers)
+        headers["payment-protocol"] = adapter.name
+        expires_at = _header(transport_headers, "payment-expires-at")
+        if expires_at:
+            headers["payment-expires-at"] = expires_at
+        return self.authorize(
+            request,
+            PayerHttpResponse(402, headers, challenge.body),
+            operation,
+        )
+
+    def _mcp_call_id(self, body: bytes) -> str | int | float | None:
+        try:
+            message = json.loads(body)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if (
+            not isinstance(message, dict)
+            or message.get("jsonrpc") != "2.0"
+            or message.get("method") != "tools/call"
+            or not isinstance(message.get("params"), dict)
+        ):
+            return None
+        call_id = message.get("id")
+        if isinstance(call_id, bool) or not isinstance(call_id, (str, int, float)):
+            return None
+        if isinstance(call_id, float) and not math.isfinite(call_id):
+            return None
+        return call_id
+
+    def _bound_mcp_response(
+        self,
+        message: object,
+        expected_id: str | int | float,
+        *,
+        require_result: bool,
+    ) -> bool:
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            return False
+        response_id = message.get("id")
+        if type(response_id) is not type(expected_id) or response_id != expected_id:
+            return False
+        return not require_result or isinstance(message.get("result"), dict)
+
+    def mcp_credential(self, payment: AuthorizedPayment, origin: str) -> McpMetadata:
+        if payment.intent.protocol != payment.credential.protocol:
+            raise RuntimeError("outbound payment protocol binding is invalid")
+        adapter = self._protocols.get(payment.credential.protocol)
+        delivery = adapter.credential(payment.credential)
+        if delivery.bound_origin.lower() != origin.lower():
+            raise RuntimeError("unsafe or missing MCP credential origin binding")
+        return adapter.mcp_credential(payment.credential)
+
+    def mcp_request_metadata_keys(self) -> tuple[str, ...]:
+        return self._protocols.mcp_request_metadata_keys()
+
+    def mcp_root_request_metadata_keys(self) -> tuple[str, ...]:
+        return self._protocols.mcp_root_request_metadata_keys()
+
     def report(self, operation: PayerRequestContext, payment: AuthorizedPayment,
                response: PayerHttpResponse) -> None:
-        if payment.credential.protocol != "x402":
-            return
-        settlement = _header(response.headers, "payment-response")
-        if settlement:
+        if payment.intent.protocol != payment.credential.protocol:
+            raise RuntimeError("outbound payment protocol binding is invalid")
+        adapter = self._protocols.get(payment.credential.protocol)
+        protocol_name, evidence = self._protocols.merchant_evidence(response.headers)
+        if evidence is not None and protocol_name != adapter.name:
+            raise RuntimeError(
+                "HTTP settlement receipt protocol does not match the paid credential"
+            )
+        if evidence is not None:
             self._report_outbound_response(
-                operation.operation_context(self.config.scenario_id), payment.intent.id, settlement)
+                operation.operation_context(self.config.scenario_id), payment.intent.id,
+                adapter.name, evidence.header_name, evidence.header_value)
         elif 200 <= response.status < 300:
             raise RuntimeError(
-                "successful x402 response has no PAYMENT-RESPONSE settlement hint; payment remains reserved")
+                f"successful {adapter.name} response has no settlement evidence; payment remains reserved")
+
+    def report_mcp(
+        self,
+        operation: PayerRequestContext,
+        payment: AuthorizedPayment,
+        meta: object,
+    ) -> None:
+        if payment.intent.protocol != payment.credential.protocol:
+            raise RuntimeError("outbound payment protocol binding is invalid")
+        protocol_name, evidence = self._protocols.mcp_merchant_evidence(
+            meta, self.config.max_challenge_bytes
+        )
+        if evidence is None or protocol_name != payment.intent.protocol:
+            raise RuntimeError(
+                f"successful {payment.intent.protocol} MCP response has no matching settlement evidence; "
+                "payment remains reserved"
+            )
+        self._report_outbound_response(
+            operation.operation_context(self.config.scenario_id),
+            payment.intent.id,
+            protocol_name,
+            evidence.header_name,
+            evidence.header_value,
+        )
+
+    async def deliver(
+        self,
+        operation: PayerRequestContext,
+        payment: AuthorizedPayment,
+        send: Callable[[int], Awaitable[_ResponseT]],
+        view: Callable[[_ResponseT], PayerHttpResponse],
+        discard: Callable[[_ResponseT], Awaitable[None]],
+        report_response: Callable[[_ResponseT], Awaitable[None]] | None = None,
+    ) -> _ResponseT:
+        """Run the protocol-neutral bounded paid-request retry state machine."""
+        for attempt in range(self.config.delivery_retries + 1):
+            self._delivery_event(operation, payment, attempt + 1)
+            response = await send(attempt + 1)
+            response_view = view(response)
+            try:
+                if report_response is None:
+                    await asyncio.to_thread(self.report, operation, payment, response_view)
+                else:
+                    await report_response(response)
+            except BaseException:
+                await discard(response)
+                raise
+            if response_view.status != 503 or attempt == self.config.delivery_retries:
+                return response
+            await discard(response)
+        raise RuntimeError("payer retry loop ended unexpectedly")
+
+    @staticmethod
+    def _delivery_event(
+        operation: PayerRequestContext, payment: AuthorizedPayment, attempt_no: int,
+    ) -> None:
+        _LOG.info(
+            "agentvault.sdk.payer.retrying run.id=%s payment.intent.id=%s attempt.no=%s",
+            operation.run_id, payment.intent.id, attempt_no,
+            extra={
+                "event_name": "agentvault.sdk.payer.retrying",
+                "run_id": operation.run_id,
+                "intent_id": payment.intent.id,
+                "attempt_no": attempt_no,
+            },
+        )
 
     def credential_header(
         self, payment: AuthorizedPayment, origin: str, existing: Mapping[str, str],
     ) -> tuple[str, str]:
-        delivery = payment.credential.http
-        if delivery is None:
-            raise RuntimeError("Vault credential has no HTTP delivery material")
+        adapter = self._protocols.get(payment.credential.protocol)
+        delivery = adapter.credential(payment.credential)
         bound = delivery.bound_origin
         name = delivery.header_name
         value = delivery.header_value
@@ -138,10 +305,14 @@ class PayerMiddleware:
             time.sleep(min(self.config.approval_poll_interval, remaining))
 
     def _report_outbound_response(
-        self, context: OperationContext, intent_id: str, payment_response: str,
+        self, context: OperationContext, intent_id: str, protocol: str,
+        header_name: str, header_value: str,
     ) -> ReportOutboundResponseResponse:
         _required_query("intent_id", intent_id)
-        request = ReportOutboundResponseRequest(context, payment_response)
+        request = ReportOutboundResponseRequest(
+            context, protocol=protocol,
+            evidence=ProtocolEvidence(header_name, header_value),
+        )
         path = f"/api/v1/payments/{urllib.parse.quote(intent_id, safe='')}/outbound-response"
         value = self._transport.request("POST", path, request.wire())
         return ReportOutboundResponseResponse.from_wire(value)

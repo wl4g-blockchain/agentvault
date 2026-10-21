@@ -8,9 +8,11 @@
     <jackson.version>2.20.0</jackson.version><junit.version>5.14.0</junit.version>
     <spring.version>6.1.14</spring.version>
     <grpc.version>1.76.0</grpc.version>
+    <mpp.version>0.1.6</mpp.version>
   </properties>
   <dependencies>
     <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>${jackson.version}</version></dependency>
+    <dependency><groupId>com.stripe</groupId><artifactId>mpp-java</artifactId><version>${mpp.version}</version></dependency>
     <dependency><groupId>org.eclipse.paho</groupId><artifactId>org.eclipse.paho.client.mqttv3</artifactId><version>1.2.5</version></dependency>
     <dependency><groupId>io.grpc</groupId><artifactId>grpc-netty-shaded</artifactId><version>${grpc.version}</version></dependency>
     <dependency><groupId>io.grpc</groupId><artifactId>grpc-protobuf</artifactId><version>${grpc.version}</version></dependency>

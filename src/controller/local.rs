@@ -42,7 +42,7 @@ const MAX_HEADER_COUNT: usize = 16;
 const MAX_HEADER_NAME_BYTES: usize = 64;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const RESPONSE_CACHE_CAPACITY: usize = 4_096;
-const RESPONSE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const RESPONSE_CACHE_TTL: Duration = Duration::from_mins(5);
 const OVERLOAD_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const UNKNOWN_REQUEST_SPAN_ID: &str = "0000000000000001";
 

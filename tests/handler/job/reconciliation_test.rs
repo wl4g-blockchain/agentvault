@@ -11,7 +11,7 @@ use crate::{
     model::{AssetIdentity, PaymentDirection},
     storage::{
         AuthorizationRecord, AuthorizationWrite, BudgetSnapshot, ChallengeWrite, IdempotentWrite,
-        OutboundEvidenceWrite, Page, PaymentQuery, VerificationWrite,
+        OutboundEvidenceWrite, Page, PaymentQuery, ReconciliationClaim, VerificationWrite,
     },
 };
 
@@ -116,6 +116,7 @@ struct MockState {
     lease_owner: Option<String>,
     lease_until: Option<i64>,
     last_claim_at: Option<i64>,
+    reconcile_attempts: u32,
     releases: Vec<i64>,
     commits: u32,
     ledger: Vec<PaymentLedgerEntry>,
@@ -226,7 +227,7 @@ impl PaymentStorage for MockStorage {
         })
     }
 
-    async fn claim_reconciliation(&self, request: &ReconciliationLeaseRequest) -> Result<Vec<PaymentIntent>> {
+    async fn claim_reconciliation(&self, request: &ReconciliationLeaseRequest) -> Result<Vec<ReconciliationClaim>> {
         let mut state = self.state.lock().unwrap();
         let available = state.intent.as_ref().is_some_and(|intent| {
             ((intent.needs_reconciliation() && intent.next_reconcile_at.is_none_or(|due| due <= request.now))
@@ -240,7 +241,16 @@ impl PaymentStorage for MockStorage {
         state.lease_owner = Some(request.owner.clone());
         state.lease_until = Some(request.lease_until);
         state.last_claim_at = Some(request.now);
-        Ok(state.intent.clone().into_iter().collect())
+        state.reconcile_attempts = state.reconcile_attempts.saturating_add(1);
+        Ok(state
+            .intent
+            .clone()
+            .map(|intent| ReconciliationClaim {
+                intent,
+                attempt_no: state.reconcile_attempts,
+            })
+            .into_iter()
+            .collect())
     }
 
     async fn renew_reconciliation_lease(&self, intent_id: &str, owner: &str, lease_until: i64) -> Result<()> {
@@ -378,7 +388,8 @@ async fn confirmed_evidence_atomically_settles_and_posts_once() {
                 effect_ref: Some("log:7".to_owned()),
                 confirmations: 3,
                 minimum_confirmations: 1,
-                effective_at: 99,
+                // Exercise accepted one-second chain/local clock skew.
+                effective_at: 89,
             },
         )))])),
     });
@@ -391,7 +402,9 @@ async fn confirmed_evidence_atomically_settles_and_posts_once() {
     let state = storage.state.lock().unwrap();
     assert_eq!(state.commits, 1);
     assert_eq!(state.ledger.len(), 1);
+    assert_eq!(state.ledger[0].effective_at, 89);
     assert_eq!(state.intent.as_ref().unwrap().status, PaymentStatus::Settled);
+    assert_eq!(state.intent.as_ref().unwrap().settled_at, Some(90));
     assert_eq!(
         state.intent.as_ref().unwrap().reservation_status,
         ReservationStatus::Consumed
@@ -453,6 +466,8 @@ async fn trusted_chain_evidence_recovers_after_local_commit_failure_and_restart(
     let state = storage.state.lock().unwrap();
     assert_eq!(state.ledger.len(), 1);
     assert_eq!(state.intent.as_ref().unwrap().status, PaymentStatus::Settled);
+    assert_eq!(state.reconcile_attempts, 2);
+    assert_eq!(state.events[0].attempt_no, 2);
 }
 
 #[test]
@@ -506,6 +521,7 @@ async fn submitted_verify_recovery_advances_to_pending_settlement() {
     assert_eq!(state.intent.as_ref().unwrap().next_reconcile_at, Some(105));
     assert_eq!(state.events.len(), 1);
     assert_eq!(state.events[0].event_type, PaymentEventType::CredentialVerified);
+    assert_eq!(state.events[0].attempt_no, 1);
     assert!(state.ledger.is_empty());
 }
 
@@ -531,6 +547,7 @@ async fn expired_inbound_challenge_releases_reserved_capacity() {
     assert_eq!(expired.status, PaymentStatus::Expired);
     assert_eq!(expired.reservation_status, ReservationStatus::Released);
     assert_eq!(state.events[0].event_type, PaymentEventType::Failed);
+    assert_eq!(state.events[0].attempt_no, 1);
     assert!(state.ledger.is_empty());
 }
 
@@ -557,6 +574,7 @@ async fn proven_expired_inbound_authorization_releases_reserved_capacity() {
     assert_eq!(expired.status, PaymentStatus::Expired);
     assert_eq!(expired.reservation_status, ReservationStatus::Released);
     assert_eq!(state.events[0].event_type, PaymentEventType::Failed);
+    assert_eq!(state.events[0].attempt_no, 1);
     assert_eq!(state.events[0].payload["stage"], "settlement_authorization_expiry");
     assert!(state.ledger.is_empty());
 }

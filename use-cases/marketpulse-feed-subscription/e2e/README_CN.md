@@ -78,14 +78,20 @@ JWT 只在 AgentVault 内部使用；Approval 表保存 `jti`、Claims Hash 和�
 
 - `payer`：Anvil + Solana，不启动 Facilitator；
 - `payee`：Anvil + Solana + 官方 x402 Facilitator；
+- `tempo`：只由显式 MPP `charge` 门禁启动、固定镜像摘要的官方 Tempo localnet；
 - `infra`：PostgreSQL、EMQX、Jaeger；
 - `apps`：AgentVault、审批 UI、只读审计器；
 - `payee-{go,rust,python,java,typescript}`：选择一个收款后端；
 - `ingestor-{go,rust,python,java,typescript}`：选择一个付款后端。
 
-完整资金验收使用 x402 v2 / EVM / EIP-3009 与编译后的 TestUSDC。Solana 是
-真实 Validator 健康依赖，但本用例不虚报 Solana 支付覆盖。Broker、RPC、
-Facilitator 均非 Mock。MarketPulse 还会以规范十进制 Unix 秒返回 AgentVault
+五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 TestUSDC。独立的
+`mpp-tempo` 场景验证 Vault 签出的 Tempo type-0x76 `charge`、外部 HTTP
+verify/settle、结算响应丢失后的只读恢复、单次广播、回执绑定，以及包含 pathUSD
+计价 Gas 的余额守恒。显式的 `x402-solana` 场景会在固定版本的本地 Validator 上
+创建真实 SPL mint 与关联账户，再通过固定版本的上游 x402 v2 client/facilitator
+执行 verify 和唯一一次 settle，并校验精确 SPL 增减、Token 总量守恒、Payer 的
+Lamport 不变，以及 Facilitator 的 Lamport 减量与已确认交易手续费完全一致。
+Broker、RPC、Facilitator 均非 Mock。MarketPulse 还会以规范十进制 Unix 秒返回 AgentVault
 x402 Profile 的 `payment-expires-at`；审批轮询始终复用这个绝对值，因此同一份
 官方 x402 Body 在所有重试中映射到同一个持久 Challenge Hash。
 
@@ -138,6 +144,8 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
+python3 runner.py -s mpp-tempo
+python3 runner.py -s x402-solana
 python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -178,8 +186,15 @@ plan 与既有 Checkpoint，拒绝 scope/身份不匹配或损坏证据，只执
    绑定 Receipt 及 Settlement/Reconciliation Event；
 5. 两条 MarketPulse 持久交付和两条 QuantStream 持久采集记录；
 6. 当前 Payer 的两个 EOA 各精确减少 1 USDC，其余八个 Payer EOA 保持不变，
-   Gateway/Payee 精确增加 2 USDC，总量守恒，且 AgentVault 对十个钱包的定时余额
-   快照最终全部与链上值一致。
+   Gateway/Payee 精确增加 2 USDC，总量守恒；四条 Ledger 与两张 Anvil Receipt、
+   Facilitator 的精确原生币 Gas 支出一致，且 AgentVault 对十个钱包的定时余额快照
+   最终全部与链上值一致。
 
-手续费/退款/充值/转账/冲正矩阵、MPP/Tempo 结算与 Solana 支付不在本用例中
-冒充已完成；它们需要各自真实 Provider Fixture 与独立验收场景。
+`mpp-tempo` 与 `x402-solana` 均与上述 EVM SDK 矩阵明确分离：前者以真实节点及由
+官方 `mpp` Rust server/Tempo provider 原语支撑的本地 HTTP 结算服务，验证已实现的
+MPP Tempo `charge` 核心；支持的 direct-charge 流程先做无状态变更的验证，再通过
+Tempo RPC 唯一广播一次，不虚构 x402 式 Facilitator 或重复商户合约。后者验证固定版本
+的上游 x402 Solana exact client/facilitator 与真实 SPL 记账边界；五 SDK 共享夹具
+另行覆盖两种 Transport、两种协议和两个角色。MPP session/split/fee-payer/
+delegated method 及手续费/退款/充值/转账/冲正矩阵仍明确 Unsupported，或需要
+独立验收场景。

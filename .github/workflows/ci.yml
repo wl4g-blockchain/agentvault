@@ -79,7 +79,7 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            BUILDER_IMAGE=docker.io/library/rust:1.91.1-bookworm
+            BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
             RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
@@ -174,7 +174,8 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check --editable 'src/adapters/python[test]'
           for suite in tests/agentvault tests/agentvault/config tests/agentvault/model \
-            tests/agentvault/payer tests/agentvault/payee tests/agentvault/transport; do
+            tests/agentvault/payer tests/agentvault/payee tests/agentvault/protocol \
+            tests/agentvault/transport; do
             python3 -m unittest discover -s "src/adapters/python/${suite}" -p '*_test.py' -v
           done
           python3 -m compileall -q src/adapters/python/agentvault
