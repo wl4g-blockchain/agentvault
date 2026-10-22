@@ -389,7 +389,7 @@ impl X402Adapter {
             .get("selected")
             .ok_or_else(|| Error::PaymentProtocol("x402 selected requirement is missing".to_owned()))?;
         let integrity = self.decode_challenge_wire(&challenge.resource, raw_wire, Some(stored_selected))?;
-        let expected_hash = x402_challenge_hash(&challenge.resource, challenge.expires_at, raw_wire)?;
+        let expected_hash = x402_challenge_hash(&challenge.resource, challenge.expires_at, raw_wire, &challenge.nonce)?;
         let outer_recipient = canonicalize_payment_recipient(&challenge.asset.network, &challenge.recipient)
             .map_err(|_| Error::PaymentProtocol("x402 outer recipient is invalid".to_owned()))?;
 
@@ -398,7 +398,6 @@ impl X402Adapter {
             || challenge.recipient != outer_recipient
             || challenge.recipient != integrity.recipient
             || challenge.challenge_hash != expected_hash
-            || challenge.nonce != expected_hash
             || challenge.expires_at <= 0
         {
             return Err(Error::PaymentProtocol(
@@ -712,7 +711,8 @@ impl PaymentProtocol for X402Adapter {
                 "x402 payment-expires-at is outside the advertised timeout window".to_owned(),
             ));
         }
-        let challenge_hash = x402_challenge_hash(expected_resource, expires_at, wire)?;
+        let nonce = x402_deterministic_challenge_nonce(expected_resource, expires_at, wire)?;
+        let challenge_hash = x402_challenge_hash(expected_resource, expires_at, wire, &nonce)?;
         let challenge = PaymentChallenge {
             scenario_id: scenario_id.to_owned(),
             offer_id: None,
@@ -721,7 +721,7 @@ impl PaymentProtocol for X402Adapter {
             asset: integrity.asset,
             amount: integrity.amount,
             recipient: integrity.recipient,
-            nonce: challenge_hash.clone(),
+            nonce,
             challenge_hash,
             expires_at,
             payload: json!({
@@ -961,7 +961,7 @@ impl PaymentProtocol for X402Adapter {
             accepts: vec![raw],
         };
         let wire = serde_json::to_value(&required)?;
-        let challenge_hash = x402_challenge_hash(&offer.resource, expires_at, &wire)?;
+        let (nonce, challenge_hash) = x402_server_challenge_identity(&offer.resource, expires_at, &wire)?;
         let challenge = PaymentChallenge {
             scenario_id: offer.scenario_id.clone(),
             offer_id: Some(offer.id.clone()),
@@ -970,7 +970,7 @@ impl PaymentProtocol for X402Adapter {
             asset: offer.asset.clone(),
             amount: offer.amount,
             recipient,
-            nonce: challenge_hash.clone(),
+            nonce,
             challenge_hash,
             expires_at,
             payload: json!({"payment_required": wire, "selected": selected_wire}),
@@ -1420,7 +1420,33 @@ pub fn verify_eip3009_signature(payload: &Value) -> Result<String> {
     Ok(format!("0x{}", hex::encode(&hash[12..])))
 }
 
-fn x402_challenge_hash(resource: &str, expires_at: i64, raw_wire: &Value) -> Result<String> {
+fn x402_deterministic_challenge_nonce(resource: &str, expires_at: i64, raw_wire: &Value) -> Result<String> {
+    let expires_at = expires_at.to_string();
+    let canonical_wire = canonical_json(raw_wire);
+    Ok(hash_values(&[
+        b"agentvault.x402.challenge.nonce.v2",
+        resource.as_bytes(),
+        expires_at.as_bytes(),
+        &serde_json::to_vec(&canonical_wire)?,
+    ]))
+}
+
+fn x402_server_challenge_identity(resource: &str, expires_at: i64, raw_wire: &Value) -> Result<(String, String)> {
+    let mut nonce = [0_u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    let nonce = hex::encode(nonce);
+    let challenge_hash = x402_challenge_hash(resource, expires_at, raw_wire, &nonce)?;
+    Ok((nonce, challenge_hash))
+}
+
+fn x402_challenge_hash(resource: &str, expires_at: i64, raw_wire: &Value, nonce: &str) -> Result<String> {
+    if nonce.len() != 64
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::PaymentProtocol("x402 challenge nonce is invalid".to_owned()));
+    }
     let expires_at = expires_at.to_string();
     let canonical_wire = canonical_json(raw_wire);
     Ok(hash_values(&[
@@ -1428,6 +1454,7 @@ fn x402_challenge_hash(resource: &str, expires_at: i64, raw_wire: &Value) -> Res
         resource.as_bytes(),
         expires_at.as_bytes(),
         &serde_json::to_vec(&canonical_wire)?,
+        nonce.as_bytes(),
     ]))
 }
 

@@ -48,9 +48,9 @@ fn rehash(challenge: &mut PaymentChallenge) {
         &challenge.resource,
         challenge.expires_at,
         &challenge.payload["payment_required"],
+        &challenge.nonce,
     )
     .unwrap();
-    challenge.nonce = hash.clone();
     challenge.challenge_hash = hash;
 }
 
@@ -65,12 +65,24 @@ fn challenge_hash_is_stable_across_object_key_order() {
     )
     .unwrap();
     let resource = "https://merchant.example/paid";
-    let first_hash = x402_challenge_hash(resource, 160, &first).unwrap();
-    assert_eq!(first_hash, x402_challenge_hash(resource, 160, &reordered).unwrap());
+    let nonce = "11".repeat(32);
+    let first_hash = x402_challenge_hash(resource, 160, &first, &nonce).unwrap();
+    assert_eq!(
+        first_hash,
+        x402_challenge_hash(resource, 160, &reordered, &nonce).unwrap()
+    );
 
     let mut tampered = reordered;
     tampered["accepts"][0]["amount"] = Value::String("1000001".to_owned());
-    assert_ne!(first_hash, x402_challenge_hash(resource, 160, &tampered).unwrap());
+    assert_ne!(
+        first_hash,
+        x402_challenge_hash(resource, 160, &tampered, &nonce).unwrap()
+    );
+    assert_ne!(
+        first_hash,
+        x402_challenge_hash(resource, 160, &first, &"22".repeat(32)).unwrap()
+    );
+    assert!(x402_challenge_hash(resource, 160, &first, "not-a-nonce").is_err());
 }
 
 fn signed_payload(challenge: &PaymentChallenge) -> Value {
@@ -226,6 +238,8 @@ async fn challenge_binds_server_owned_offer_fields() {
     assert_eq!(challenge.recipient, recipient);
     assert_eq!(challenge.amount, Amount::new(1_000_000));
     assert_eq!(challenge.offer_id.as_deref(), Some("offer-1"));
+    assert_eq!(challenge.nonce.len(), 64);
+    assert_ne!(challenge.nonce, challenge.challenge_hash);
 
     let parsed = adapter()
         .parse_challenge(
@@ -238,7 +252,7 @@ async fn challenge_binds_server_owned_offer_fields() {
         .await
         .unwrap();
     assert_eq!(parsed.recipient, recipient);
-    assert_eq!(parsed.challenge_hash, challenge.challenge_hash);
+    assert_ne!(parsed.challenge_hash, challenge.challenge_hash);
 
     let replay = adapter()
         .parse_challenge(
@@ -251,6 +265,7 @@ async fn challenge_binds_server_owned_offer_fields() {
         .await
         .unwrap();
     assert_eq!(replay.challenge_hash, parsed.challenge_hash);
+    assert_eq!(replay.nonce, parsed.nonce);
     assert_eq!(replay.expires_at, parsed.expires_at);
     assert!(adapter()
         .parse_challenge(
@@ -264,7 +279,12 @@ async fn challenge_binds_server_owned_offer_fields() {
         .is_err());
 
     let second = adapter().build_challenge(&offer(), recipient, 100).await.unwrap();
-    assert_eq!(second.challenge_hash, challenge.challenge_hash);
+    assert_eq!(
+        second.payload["payment_required"],
+        challenge.payload["payment_required"]
+    );
+    assert_ne!(second.nonce, challenge.nonce);
+    assert_ne!(second.challenge_hash, challenge.challenge_hash);
 
     let mut tampered = challenge.payload["payment_required"].clone();
     tampered["accepts"][0]["payTo"] = Value::String("0x3333333333333333333333333333333333333333".to_owned());
