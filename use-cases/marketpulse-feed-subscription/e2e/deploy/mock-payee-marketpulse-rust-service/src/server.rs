@@ -52,6 +52,21 @@ impl MarketPulseServer {
         })
     }
 
+    /// Checks the local HTTP health endpoint without constructing payment state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured listener is invalid, unreachable,
+    /// or does not report success.
+    pub async fn healthcheck() -> Result<(), Box<dyn std::error::Error>> {
+        let port = parse_bind(&required_env("MARKETPULSE_BIND")?)?.port();
+        let status = reqwest::get(format!("http://127.0.0.1:{port}/healthz")).await?.status();
+        if !status.is_success() {
+            return Err(format!("MarketPulse health endpoint returned {status}").into());
+        }
+        Ok(())
+    }
+
     /// Starts the listener until process shutdown.
     ///
     /// # Errors

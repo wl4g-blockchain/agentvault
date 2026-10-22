@@ -25,6 +25,28 @@ import type {
   ProtocolHttpResponse,
 } from './adapter.js';
 
+type Eip3009PaymentPayload = PaymentPayload & {
+  accepted: PaymentPayload['accepted'] & { network: `eip155:${string}` };
+  payload: {
+    signature: string;
+    authorization: {
+      from: string;
+      to: string;
+      value: string;
+      validAfter: string;
+      validBefore: string;
+      nonce: string;
+    };
+  };
+};
+
+type SolanaExactPaymentPayload = PaymentPayload & {
+  accepted: PaymentPayload['accepted'] & { network: `solana:${string}` };
+  payload: { transaction: string };
+};
+
+type ExactPaymentPayload = Eip3009PaymentPayload | SolanaExactPaymentPayload;
+
 /** x402 v2 wire adapter. Signing and settlement authority stay in AgentVault. */
 export class X402Adapter implements McpPaymentProtocol {
   readonly name = 'x402';
@@ -207,7 +229,54 @@ export class X402Adapter implements McpPaymentProtocol {
     if (!parsed.success || parsed.data.x402Version !== 2) {
       throw new Error(`${label} is not an official x402 v2 PaymentPayload`);
     }
-    return parsed.data as PaymentPayload;
+    const payload = parsed.data as PaymentPayload;
+    this.validateExactPayload(payload, label);
+    return payload;
+  }
+
+  private validateExactPayload(
+    payload: PaymentPayload,
+    label: string,
+  ): asserts payload is ExactPaymentPayload {
+    if (payload.accepted.scheme !== 'exact') {
+      throw new Error(`${label} uses an unsupported x402 scheme`);
+    }
+    if (payload.accepted.network.startsWith('eip155:')) {
+      const authorization = this.isRecord(payload.payload.authorization)
+        ? payload.payload.authorization
+        : undefined;
+      if (!this.hasOnlyKeys(payload.payload, ['signature', 'authorization']) ||
+          typeof payload.payload.signature !== 'string' || !payload.payload.signature ||
+          !authorization || !this.hasOnlyKeys(authorization, [
+            'from', 'to', 'value', 'validAfter', 'validBefore', 'nonce',
+          ]) || !['from', 'to', 'value', 'validAfter', 'validBefore', 'nonce']
+            .every((name) => typeof authorization[name] === 'string' && authorization[name] !== '')) {
+        throw new Error(`${label} is not an official EIP-3009 payload`);
+      }
+      const extra = payload.accepted.extra;
+      if (typeof extra.name !== 'string' || !extra.name ||
+          typeof extra.version !== 'string' || !extra.version) {
+        throw new Error(`${label} has no EIP-3009 domain metadata`);
+      }
+      return;
+    }
+    if (payload.accepted.network.startsWith('solana:')) {
+      const transaction = payload.payload.transaction;
+      if (!this.hasOnlyKeys(payload.payload, ['transaction']) ||
+          typeof transaction !== 'string' || !transaction) {
+        throw new Error(`${label} is not an official Solana exact payload`);
+      }
+      const decoded = Buffer.from(transaction, 'base64');
+      if (decoded.length === 0 || decoded.toString('base64') !== transaction) {
+        throw new Error(`${label} has no canonical base64 Solana transaction`);
+      }
+      if (typeof payload.accepted.extra.feePayer !== 'string' ||
+          !payload.accepted.extra.feePayer) {
+        throw new Error(`${label} has no Solana facilitator fee payer`);
+      }
+      return;
+    }
+    throw new Error(`${label} uses an unsupported x402 network`);
   }
 
   private paymentSettlement(payment: SettledIncomingPayment): SettleResponse {
@@ -259,5 +328,10 @@ export class X402Adapter implements McpPaymentProtocol {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  private hasOnlyKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+    const keys = Object.keys(value);
+    return keys.length === expected.length && keys.every((key) => expected.includes(key));
   }
 }

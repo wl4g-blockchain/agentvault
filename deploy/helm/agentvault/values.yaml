@@ -17,6 +17,8 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 topologySpreadConstraints: []
+extraContainers: []
+extraVolumes: []
 
 service:
   type: ClusterIP

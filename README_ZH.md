@@ -102,7 +102,7 @@ docker compose --env-file deploy/docker/.env \
 - MarketPulse Payee：免费昨日新闻 MCP Tool 与付费实时新闻 Tool。
 - QuantStream Payer：逻辑等价的 Rust、Go、Python、TypeScript、Java 采集服务和管理员审批 UI。
 
-x402 SDK 矩阵使用 PostgreSQL、带认证/ACL 的 EMQX、官方 x402 Facilitator、Anvil/TestUSDC、AgentVault、Payee 和 SDK 进程，验证 402 重试、MQTT/gRPC 签名、日限额审批、一次性 Grant、EVM 结算、Receipt/Ledger/交易绑定、Facilitator 精确 Gas 与交付恢复。显式 x402 Solana 门禁让固定版本的上游 client/facilitator 访问真实本地 Validator，并验证 SPL 与 Lamport 手续费精确守恒。独立 MPP 门禁使用固定镜像摘要的官方 Tempo localnet 和由官方 MPP Rust SDK 支撑的 HTTP 结算边界，验证 Vault 签名 type-0x76 charge、verify/settle、丢响应恢复、单次广播、回执及包含 Gas 的 pathUSD 守恒。
+x402 SDK 矩阵使用 PostgreSQL、带认证/ACL 的 EMQX、官方 x402 Facilitator、Anvil/E2EUSDC、AgentVault、Payee 和 SDK 进程，验证 402 重试、MQTT/gRPC 签名、日限额审批、一次性 Grant、EVM 结算、Receipt/Ledger/交易绑定、Facilitator 精确 Gas 与交付恢复。显式 x402 Solana 门禁让固定版本的上游 client/facilitator 访问真实本地 Validator，并验证 SPL 与 Lamport 手续费精确守恒。独立 MPP 门禁使用固定镜像摘要的官方 Tempo localnet 和由官方 MPP Rust SDK 支撑的 HTTP 结算边界，验证 Vault 签名 type-0x76 charge、verify/settle、丢响应恢复、单次广播、回执及包含 Gas 的 pathUSD 守恒。
 
 五种 SDK 的协议 Provider 均以 x402 v2 处理 HTTP（`PAYMENT-REQUIRED`，兼容 JSON body 且冲突即拒绝）和 MCP JSON-RPC（`structuredContent`/文本 Challenge 及协议自有 `_meta` 凭据/回执）。MPP 同样通过官方 paymentauth wire 类型覆盖 HTTP 与 MCP；付款认证头不得覆盖无关的业务 Bearer。进入受保护业务 Handler 前会移除协议自有付款凭据元数据。
 

@@ -81,6 +81,9 @@ spec:
               mountPath: {{ include "agentvault.csiSecretsMountPath" . }}
               readOnly: true
             {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: config
           configMap: { name: {{ include "agentvault.fullname" . }}-config }
@@ -93,6 +96,9 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: {{ printf "%s-%s-secrets" (include "agentvault.fullname" .) $provider }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}

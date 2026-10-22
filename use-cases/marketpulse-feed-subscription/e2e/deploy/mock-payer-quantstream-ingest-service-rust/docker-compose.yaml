@@ -10,6 +10,7 @@ services:
         HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
         NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
         E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     command: ["--once"]
     environment:
       MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}

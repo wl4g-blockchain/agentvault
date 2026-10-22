@@ -15,13 +15,17 @@ spec:
   ingress:
     {{- if $middleware.enabled }}
     - from:
-        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
-          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+        - namespaceSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
       ports: [{ protocol: TCP, port: {{ .Values.service.apiPort }} }]
     {{- if .Values.runtime.grpc.enabled }}
     - from:
-        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
-          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+        - namespaceSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
       ports: [{ protocol: TCP, port: {{ .Values.service.grpcPort }} }]
     {{- end }}
     {{- else }}
@@ -35,11 +39,15 @@ spec:
         {{- end }}
     {{- end }}
     - from:
-        - namespaceSelector: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 12 }}
-          podSelector: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 12 }}
+        - namespaceSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
       ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
     - from:
-        - namespaceSelector: {{ toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
-          podSelector: {{ toYaml .Values.networkPolicy.monitoringPodSelector | nindent 12 }}
+        - namespaceSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels: {{ toYaml .Values.networkPolicy.monitoringPodSelector | nindent 14 }}
       ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
 {{- end }}

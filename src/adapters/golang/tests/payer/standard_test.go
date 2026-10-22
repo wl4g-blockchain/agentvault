@@ -23,12 +23,20 @@ func TestStandardPayerMiddlewareRetriesPaidRequest(t *testing.T) {
 		"scheme": "exact", "network": "eip155:31337", "amount": "1000",
 		"payTo": "0x0000000000000000000000000000000000000001", "maxTimeoutSeconds": 60,
 		"asset": "0x0000000000000000000000000000000000000002",
+		"extra": map[string]any{"name": "USDC", "version": "2"},
 	}
 	requiredBody, _ := json.Marshal(map[string]any{
 		"x402Version": 2, "resource": map[string]any{"url": "mcp://tool/test"}, "accepts": []any{requirements},
 	})
 	payloadBody, _ := json.Marshal(map[string]any{
-		"x402Version": 2, "accepted": requirements, "payload": map[string]any{"signature": "0x01"},
+		"x402Version": 2, "accepted": requirements, "payload": map[string]any{
+			"signature": "0x" + strings.Repeat("ab", 65),
+			"authorization": map[string]any{
+				"from": "0x0000000000000000000000000000000000000003",
+				"to":   "0x0000000000000000000000000000000000000001", "value": "1000",
+				"validAfter": "0", "validBefore": "2000000000", "nonce": "0x" + strings.Repeat("42", 32),
+			},
+		},
 	})
 	paymentSignature := base64.StdEncoding.EncodeToString(payloadBody)
 	settlementBody, _ := json.Marshal(map[string]any{

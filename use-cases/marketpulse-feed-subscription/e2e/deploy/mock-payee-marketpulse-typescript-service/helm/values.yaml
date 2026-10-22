@@ -4,20 +4,20 @@ workload:
   backoffLimit: 0
   restartPolicy: Always
 image:
-  repository: "marketpulse-typescript-e2e"
+  repository: "localhost/marketpulse-typescript-e2e"
   tag: "local"
-  pullPolicy: IfNotPresent
+  pullPolicy: Never
 command: []
 args: []
 env:
   MARKETPULSE_BIND: "0.0.0.0:8081"
   AGENTVAULT_TRANSPORT: "mqtt"
-  AGENTVAULT_GRPC_ENDPOINT: "agentvault.example:443"
-  AGENTVAULT_GRPC_TLS: "true"
+  AGENTVAULT_GRPC_ENDPOINT: "agentvault.e2e-agentvault-system.svc.cluster.local:50051"
+  AGENTVAULT_GRPC_TLS: "false"
   AGENTVAULT_GRPC_TIMEOUT_SECONDS: "15"
-  AGENTVAULT_MQTT_HOST: "emqx.example"
-  AGENTVAULT_MQTT_PORT: "8883"
-  AGENTVAULT_MQTT_TLS: "true"
+  AGENTVAULT_MQTT_HOST: "emqx.e2e-agentvault-infra-system.svc.cluster.local"
+  AGENTVAULT_MQTT_PORT: "1883"
+  AGENTVAULT_MQTT_TLS: "false"
   AGENTVAULT_MQTT_USERNAME: "marketpulse-payee"
   AGENTVAULT_MQTT_CLIENT_ID: "client-marketpulse"
   AGENTVAULT_MQTT_TIMEOUT_SECONDS: "15"

@@ -17,6 +17,28 @@ import (
 
 type X402Adapter struct{}
 
+// These private projections decode only the opaque Payload field of the
+// official x402types.PaymentPayload envelope. Importing the upstream mechanism
+// packages solely for these DTOs would also pull EVM/Solana RPC clients into
+// this transport-only SDK boundary.
+type x402EIP3009Authorization struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	ValidAfter  string `json:"validAfter"`
+	ValidBefore string `json:"validBefore"`
+	Nonce       string `json:"nonce"`
+}
+
+type x402EIP3009Payload struct {
+	Signature     string                   `json:"signature"`
+	Authorization x402EIP3009Authorization `json:"authorization"`
+}
+
+type x402SolanaExactPayload struct {
+	Transaction string `json:"transaction"`
+}
+
 func (adapter *X402Adapter) Name() string { return "x402" }
 
 func (adapter *X402Adapter) CredentialHeaderNames() []string { return []string{"payment-signature"} }
@@ -331,7 +353,56 @@ func (adapter *X402Adapter) paymentPayload(value any, label string) (any, error)
 		payload.Accepted.Asset == "" || payload.Accepted.MaxTimeoutSeconds <= 0 {
 		return nil, fmt.Errorf("%s is not a valid x402 v2 PaymentPayload", label)
 	}
+	if payload.Accepted.Scheme != "exact" {
+		return nil, fmt.Errorf("%s uses an unsupported x402 scheme", label)
+	}
+	if err := adapter.validateExactPayload(payload, label); err != nil {
+		return nil, err
+	}
 	return value, nil
+}
+
+func (adapter *X402Adapter) validateExactPayload(payload *x402types.PaymentPayload, label string) error {
+	body, err := json.Marshal(payload.Payload)
+	if err != nil {
+		return fmt.Errorf("%s payload cannot be encoded", label)
+	}
+	decode := func(target any) error {
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		return decoder.Decode(target)
+	}
+	switch {
+	case strings.HasPrefix(payload.Accepted.Network, "eip155:"):
+		var wire x402EIP3009Payload
+		if err := decode(&wire); err != nil || wire.Signature == "" ||
+			wire.Authorization.From == "" || wire.Authorization.To == "" || wire.Authorization.Value == "" ||
+			wire.Authorization.ValidAfter == "" || wire.Authorization.ValidBefore == "" ||
+			wire.Authorization.Nonce == "" {
+			return fmt.Errorf("%s is not an official EIP-3009 payload", label)
+		}
+		name, hasName := payload.Accepted.Extra["name"].(string)
+		version, hasVersion := payload.Accepted.Extra["version"].(string)
+		if !hasName || !hasVersion || name == "" || version == "" {
+			return fmt.Errorf("%s has no EIP-3009 domain metadata", label)
+		}
+	case strings.HasPrefix(payload.Accepted.Network, "solana:"):
+		var wire x402SolanaExactPayload
+		if err := decode(&wire); err != nil || wire.Transaction == "" {
+			return fmt.Errorf("%s is not an official Solana exact payload", label)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(wire.Transaction)
+		if err != nil || len(decoded) == 0 || base64.StdEncoding.EncodeToString(decoded) != wire.Transaction {
+			return fmt.Errorf("%s has no canonical base64 Solana transaction", label)
+		}
+		feePayer, ok := payload.Accepted.Extra["feePayer"].(string)
+		if !ok || feePayer == "" {
+			return fmt.Errorf("%s has no Solana facilitator fee payer", label)
+		}
+	default:
+		return fmt.Errorf("%s uses an unsupported x402 network", label)
+	}
+	return nil
 }
 
 func (adapter *X402Adapter) paymentSettlement(payment *model.SettledIncomingPayment) (x402.SettleResponse, error) {

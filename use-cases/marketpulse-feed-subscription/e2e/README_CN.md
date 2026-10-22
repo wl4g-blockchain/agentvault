@@ -40,7 +40,7 @@ QuantStream（Go/Rust/Python/Java/TS）
                     → 原子消费/复查/签名           │
        ← Credential，重试完全相同的 MCP 请求      │
                          MarketPulse 卖方 ←───────┘
-                           → 官方 Facilitator → Anvil/TestUSDC
+                           → 官方 Facilitator → Anvil/E2EUSDC
                            → Receipt + 双向 Ledger
 ```
 
@@ -84,7 +84,7 @@ JWT 只在 AgentVault 内部使用；Approval 表保存 `jti`、Claims Hash 和�
 - `payee-{go,rust,python,java,typescript}`：选择一个收款后端；
 - `ingestor-{go,rust,python,java,typescript}`：选择一个付款后端。
 
-五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 TestUSDC。独立的
+五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 E2EUSDC。独立的
 `mpp-tempo` 场景验证 Vault 签出的 Tempo type-0x76 `charge`、外部 HTTP
 verify/settle、结算响应丢失后的只读恢复、单次广播、回执绑定，以及包含 pathUSD
 计价 Gas 的余额守恒。显式的 `x402-solana` 场景会在固定版本的本地 Validator 上
@@ -151,6 +151,7 @@ python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <已完成的Matrix运行目录>
 python3 runner.py cleanup
+python3 runner.py --cleanup
 ```
 
 `runner.py` 是唯一外层编排入口，统一负责构建、部署、健康检查、场景选择、诊断和
@@ -158,6 +159,51 @@ python3 runner.py cleanup
 `reports/<yyyyMMddHHmmss>/<module>/` 分层证据及该次运行的 `summary.md`。部署默认
 保留以便人工验收和诊断；需要自动回收时显式加 `--cleanup-after-run`，之后回收则
 运行 `runner.py cleanup`。
+`cleanup` 子命令与 `--cleanup` 参数完全等价：删除 shared/worker Compose 容器、由
+Compose project label 明确归属的命名卷/匿名卷、白名单内本地构建的
+AgentVault/MarketPulse/QuantStream `*:local` 镜像，以及清单中声明且带 E2E 标签的
+`e2e-agentvault-*` 命名空间内 Helm release。Helm 会先执行有界的正常卸载；仅在正常
+卸载失败时，才清除该 release 标签范围内资源的 finalizer、禁用 hook 重试卸载，并强制
+删除仍然滞留的 Pod。命名空间及 bootstrap 对象保留，便于干净重部署。该清理不会 prune
+外部基础镜像、镜像仓库、无关卷、全局 builder cache，亦不会触碰上述命名空间之外的资源。
+
+`--cleanup-after-run` 刻意保持更窄范围：只回收当前 Docker E2E 容器和卷，保留镜像及
+单独部署、用于人工验收的 Kubernetes 环境。
+
+十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
+二进制或裁剪后的 JRE 及应用复制到 non-root distroless，Python 只把安装后的依赖复制到
+non-root distroless Python 3.11 runtime，TypeScript 只把裁剪后的生产依赖复制到 non-root
+Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进制加 Alpine runtime。
+
+## Kubernetes Namespace 契约
+
+`runner.py` 目前只公开 Docker backend，但各组件 Helm Chart 已强制 Kubernetes 部署
+边界：渲染出的 Deployment、Job、ConfigMap 和 Service 都从固定 Chart annotation
+取得并显式写入 `e2e-agentvault-*` namespace；当 Helm release namespace 不一致时
+Chart 也会拒绝安装，防止 Helm release Secret 泄漏到 `default` 等其他 namespace。
+安装任何 E2E release 前先创建完整集合：
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl apply -f deploy/namespaces.yaml
+```
+
+| 工作负载组 | Namespace |
+| --- | --- |
+| AgentVault | `e2e-agentvault-system` |
+| 独立 AuthGuard 及其 middleware | `e2e-agentvault-authguard-system` |
+| PostgreSQL、EMQX、Jaeger | `e2e-agentvault-infra-system` |
+| Anvil、EVM fixture、Facilitator、Solana | `e2e-agentvault-payment-system` |
+| 全部 QuantStream mock payer 服务及 UI | `e2e-agentvault-mock-payer` |
+| 全部 MarketPulse mock payee 服务 | `e2e-agentvault-mock-payee` |
+
+正式 AgentVault Chart 必须安装到 `e2e-agentvault-system`；其他组件 Chart 的
+`--namespace` 也必须使用表内对应值，否则渲染会失败关闭。本支付直连 E2E 继续关闭
+umbrella AuthGuard dependency；启用 IAM 的变体必须把 AuthGuard 作为独立 release 安装到
+`e2e-agentvault-authguard-system`，不得与 AgentVault 混放。namespace 是唯一的 E2E
+命名边界；workload、Pod、Service、ConfigMap 均直接使用正式风格的组件名，不再增加
+`e2e-` 或 `e2e-agentvault-` 前缀。结构门禁会拒绝 namespace 缺失、组件归属错误、
+组件名前缀回流，或不再为资源显式设置 namespace 的模板。
 
 `web` 场景沿用 AuthGuard 的浏览器验证模式：先确认 `s21`、`s22`、`s24`、`s30`
 包含所选 SDK scope 下完全相同的已完成 Matrix Case，再把不可变报告事实映射成生产 Dashboard

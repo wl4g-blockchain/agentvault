@@ -10,6 +10,7 @@ from common.project import E2E_ROOT, REPOSITORY_ROOT
 
 REQUIRED = (
     "runner.py",
+    "deploy/namespaces.yaml",
     "common/deploy/base.py",
     "common/deploy/docker.py",
     "common/payer_identity.py",
@@ -102,6 +103,32 @@ DEPLOY_COMPONENTS = (
     "solana",
 )
 
+E2E_NAMESPACE_GROUPS = {
+    "e2e-agentvault-infra-system": ("postgres", "emqx", "jaeger"),
+    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana"),
+    "e2e-agentvault-mock-payee": (
+        "mock-payee-marketpulse-golang-service",
+        "mock-payee-marketpulse-java-service",
+        "mock-payee-marketpulse-python-service",
+        "mock-payee-marketpulse-rust-service",
+        "mock-payee-marketpulse-typescript-service",
+    ),
+    "e2e-agentvault-mock-payer": (
+        "mock-payer-quantstream-ingest-service-golang",
+        "mock-payer-quantstream-ingest-service-java",
+        "mock-payer-quantstream-ingest-service-python",
+        "mock-payer-quantstream-ingest-service-rust",
+        "mock-payer-quantstream-ingest-service-typescript",
+        "mock-payer-quantstream-ingest-ui",
+    ),
+}
+
+REQUIRED_E2E_NAMESPACES = frozenset({
+    "e2e-agentvault-system",
+    "e2e-agentvault-authguard-system",
+    *E2E_NAMESPACE_GROUPS,
+})
+
 COMPONENT_MANIFESTS = (
     "docker-compose.yaml",
     "helm/Chart.yaml",
@@ -149,7 +176,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "transport/VaultTransport.java", "transport/GrpcVaultTransport.java", "transport/MqttVaultTransport.java",
         "transport/VaultTransportFactory.java", "protocol/PaymentProtocol.java",
         "protocol/PaymentProtocolFactory.java", "protocol/ProtocolRegistry.java",
-        "protocol/X402Adapter.java", "protocol/MppAdapter.java",
+        "protocol/X402Adapter.java", "protocol/X402ExactPayload.java", "protocol/MppAdapter.java",
     },
 }
 
@@ -567,6 +594,15 @@ PAYER_ROUTE_FILES = (
     "deploy/mock-payer-quantstream-ingest-service-typescript/src/route/ingestion.ts",
 )
 
+LANGUAGE_IMAGE_COMPONENTS = (
+    *(f"mock-payee-marketpulse-{language}-service" for language in (
+        "rust", "golang", "java", "python", "typescript",
+    )),
+    *(f"mock-payer-quantstream-ingest-service-{language}" for language in (
+        "rust", "golang", "java", "python", "typescript",
+    )),
+)
+
 PAYER_FORBIDDEN_SELECTION_TOKENS = (
     "wallet_id",
     "walletId",
@@ -633,12 +669,68 @@ def verify(_context: VerificationContext) -> str:
     _verify_payer_chain_boundary()
     _verify_wallet_pool_contract()
     _verify_run_identity_contract()
+    _verify_kubernetes_namespace_boundaries()
+    _verify_runtime_image_boundaries()
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
         "18 component deployment pairs, the production AgentVault chart, "
         "five strict SDK matrices, and five aligned payer/payee implementations"
     )
+
+
+def _verify_runtime_image_boundaries() -> None:
+    errors: list[str] = []
+    for component in LANGUAGE_IMAGE_COMPONENTS:
+        dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
+        stages = [
+            line.strip()
+            for line in dockerfile.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("FROM ")
+        ]
+        if len(stages) != 2 or " AS builder" not in stages[0]:
+            errors.append(f"{component} must have exactly one builder and one runtime stage")
+        elif "_RUNTIME_IMAGE}" not in stages[1] or "_BUILD_IMAGE}" in stages[1]:
+            errors.append(f"{component} runtime stage must not reuse its build image")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
+def _verify_kubernetes_namespace_boundaries() -> None:
+    namespace_manifest = (E2E_ROOT / "deploy" / "namespaces.yaml").read_text(encoding="utf-8")
+    declared = frozenset(re.findall(r"(?m)^  name: (e2e-agentvault-[a-z0-9-]+)$", namespace_manifest))
+    if declared != REQUIRED_E2E_NAMESPACES:
+        missing = sorted(REQUIRED_E2E_NAMESPACES - declared)
+        extra = sorted(declared - REQUIRED_E2E_NAMESPACES)
+        raise RuntimeError(f"invalid E2E namespaces: missing={missing}, extra={extra}")
+
+    errors: list[str] = []
+    agentvault_values = (E2E_ROOT / "common" / "agentvault-values.yaml").read_text(encoding="utf-8")
+    if not re.search(r"(?m)^fullnameOverride: agentvault$", agentvault_values):
+        errors.append("AgentVault E2E resources must use the production-style agentvault name")
+    for namespace, components in E2E_NAMESPACE_GROUPS.items():
+        for component in components:
+            chart_root = E2E_ROOT / "deploy" / component / "helm"
+            chart = (chart_root / "Chart.yaml").read_text(encoding="utf-8")
+            annotation = f"agentvault.io/e2e-namespace: {namespace}"
+            if annotation not in chart:
+                errors.append(f"{component} must target {namespace}")
+            name_match = re.search(r"(?m)^name: ([a-z0-9-]+)$", chart)
+            if name_match is None or name_match.group(1).startswith("e2e-"):
+                errors.append(f"{component} must use a production-style Chart name")
+            template = (chart_root / "templates" / "resources.yaml").read_text(encoding="utf-8")
+            if 'index .Chart.Annotations "agentvault.io/e2e-namespace"' not in template:
+                errors.append(f"{component} does not source its namespace from the Chart contract")
+            if template.count("namespace: {{ $namespace }}") != 4:
+                errors.append(f"{component} must namespace its workload, ConfigMap, and Service")
+            if 'hasPrefix "e2e-agentvault-" $namespace' not in template:
+                errors.append(f"{component} does not reject a non-E2E namespace")
+            if "ne .Release.Namespace $namespace" not in template:
+                errors.append(f"{component} does not bind Helm release state to its resource namespace")
+            if "{{- $name := .Chart.Name -}}" not in template:
+                errors.append(f"{component} must not prefix resource names with its E2E release")
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def _verify_sdk_sources() -> None:

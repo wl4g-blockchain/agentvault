@@ -6,7 +6,7 @@
         "jsonrpc": "2.0",
         "id": 1,
         "result": {
-          "content": [{"type": "text", "text": "{\"x402Version\":2,\"resource\":{\"url\":\"mcp://tool/marketpulse.realtime\",\"mimeType\":\"application/json\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:42431\",\"amount\":\"1000\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":60,\"asset\":\"0x2222222222222222222222222222222222222222\"}]}"}],
+          "content": [{"type": "text", "text": "{\"x402Version\":2,\"resource\":{\"url\":\"mcp://tool/marketpulse.realtime\",\"mimeType\":\"application/json\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:42431\",\"amount\":\"1000\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":60,\"asset\":\"0x2222222222222222222222222222222222222222\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"}}]}"}],
           "structuredContent": {
             "x402Version": 2,
             "resource": {"url": "mcp://tool/marketpulse.realtime", "mimeType": "application/json"},
@@ -16,7 +16,8 @@
               "amount": "1000",
               "payTo": "0x1111111111111111111111111111111111111111",
               "maxTimeoutSeconds": 60,
-              "asset": "0x2222222222222222222222222222222222222222"
+              "asset": "0x2222222222222222222222222222222222222222",
+              "extra": {"name": "USDC", "version": "2"}
             }]
           },
           "isError": true
@@ -32,9 +33,20 @@
             "amount": "1000",
             "payTo": "0x1111111111111111111111111111111111111111",
             "maxTimeoutSeconds": 60,
-            "asset": "0x2222222222222222222222222222222222222222"
+            "asset": "0x2222222222222222222222222222222222222222",
+            "extra": {"name": "USDC", "version": "2"}
           },
-          "payload": {"signature": "0x01", "authorization": {"from": "0x3333333333333333333333333333333333333333"}}
+          "payload": {
+            "signature": "0xababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+            "authorization": {
+              "from": "0x3333333333333333333333333333333333333333",
+              "to": "0x1111111111111111111111111111111111111111",
+              "value": "1000",
+              "validAfter": "0",
+              "validBefore": "2000000000",
+              "nonce": "0x4242424242424242424242424242424242424242424242424242424242424242"
+            }
+          }
         }
       },
       "receipt_meta": {

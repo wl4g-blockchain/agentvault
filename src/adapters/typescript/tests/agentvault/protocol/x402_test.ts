@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { decodePaymentRequiredHeader } from '@x402/core/http';
-import type { PaymentChallenge } from '../../../src/agentvault/model/base.js';
+import { PaymentCredential, type PaymentChallenge } from '../../../src/agentvault/model/base.js';
 import { X402Adapter } from '../../../src/agentvault/protocol/x402.js';
 
 test('X402Adapter uses only native x402 challenge headers', () => {
@@ -56,4 +56,60 @@ test('X402Adapter ignores unrelated tool errors and compares MCP challenges stru
       content: [{ type: 'text', text: JSON.stringify(reordered) }],
     },
   }, 64 * 1024));
+});
+
+test('X402Adapter preserves chain-specific v2 payloads and rejects crossovers', () => {
+  const fixture = JSON.parse(readFileSync(
+    new URL('../../../../fixtures/x402_v2_chain_payloads.json', import.meta.url),
+    'utf8',
+  )) as {
+    cases: Record<string, { payment_payload: Record<string, unknown> }>;
+  };
+  const evm = fixture.cases.evm_eip3009!.payment_payload;
+  const solana = fixture.cases.solana_spl_exact!.payment_payload;
+  const adapter = new X402Adapter();
+
+  for (const [name, payload] of [
+    ['evm_eip3009', evm],
+    ['solana_spl_exact', solana],
+  ] as const) {
+    const header = Buffer.from(JSON.stringify(payload)).toString('base64');
+    const delivery = {
+      bound_origin: 'https://merchant.example',
+      header_name: 'PAYMENT-SIGNATURE',
+      header_value: header,
+    };
+    const credential = new PaymentCredential(
+      'x402', 'challenge', 'credential', payload, delivery,
+    );
+
+    assert.deepEqual(adapter.credential(credential), delivery, `${name} payer HTTP`);
+    const metadata = adapter.mcpCredential(credential);
+    assert.equal(metadata.key, 'x402/payment', `${name} payer MCP key`);
+    assert.deepEqual(metadata.value, payload, `${name} payer MCP value`);
+    assert.deepEqual(
+      adapter.presentedCredential(new Headers({ 'payment-signature': header }), 64 * 1024),
+      payload,
+      `${name} payee HTTP`,
+    );
+    assert.deepEqual(
+      adapter.presentedMcpCredential({ [metadata.key]: metadata.value }, 64 * 1024),
+      payload,
+      `${name} payee MCP`,
+    );
+  }
+
+  const crossover = structuredClone(solana);
+  crossover.accepted = evm.accepted;
+  assert.throws(
+    () => adapter.presentedMcpCredential({ 'x402/payment': crossover }, 64 * 1024),
+    /EIP-3009/,
+  );
+
+  const expanded = structuredClone(evm);
+  (expanded.payload as Record<string, unknown>).unexpected = true;
+  assert.throws(
+    () => adapter.presentedMcpCredential({ 'x402/payment': expanded }, 64 * 1024),
+    /EIP-3009/,
+  );
 });

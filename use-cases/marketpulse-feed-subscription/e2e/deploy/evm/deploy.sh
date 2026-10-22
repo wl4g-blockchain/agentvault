@@ -5,7 +5,7 @@ RPC_URL=${E2E_EVM_RPC_URL:-http://anvil:8545}
 DEPLOYER_PRIVATE_KEY=${E2E_EVM_DEPLOYER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
 TOKEN_ADDRESS=${E2E_EVM_USDC_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}
 INITIAL_SUPPLY=${E2E_EVM_PAYER_INITIAL_USDC:-1000000000000}
-BYTECODE_FILE=${E2E_EVM_USDC_BYTECODE:-/fixture/artifacts/TestUSDC.bin}
+BYTECODE_FILE=${E2E_EVM_USDC_BYTECODE:-/fixture/artifacts/E2EUSDC.bin}
 ARTIFACT_MANIFEST=${E2E_EVM_ARTIFACT_MANIFEST:-/fixture/artifacts/contracts.sha256}
 
 die() {
@@ -13,7 +13,7 @@ die() {
   exit 1
 }
 
-test -r "$BYTECODE_FILE" || die "missing compiled TestUSDC bytecode: $BYTECODE_FILE"
+test -r "$BYTECODE_FILE" || die "missing compiled E2EUSDC bytecode: $BYTECODE_FILE"
 test -r "$ARTIFACT_MANIFEST" || die "missing EVM artifact checksum manifest"
 (cd "$(dirname "$ARTIFACT_MANIFEST")" && sha256sum --check "$(basename "$ARTIFACT_MANIFEST")") \
   >/dev/null || die "EVM fixture artifact checksum verification failed"
@@ -64,16 +64,16 @@ CONTRACTS
 code=$(cast code --rpc-url "$RPC_URL" "$TOKEN_ADDRESS")
 if test "$code" = "0x"; then
   bytecode=$(tr -d '\r\n' <"$BYTECODE_FILE")
-  test -n "$bytecode" || die "compiled TestUSDC bytecode is empty"
+  test -n "$bytecode" || die "compiled E2EUSDC bytecode is empty"
   cast send --rpc-url "$RPC_URL" --private-key "$DEPLOYER_PRIVATE_KEY" \
     --create "0x${bytecode#0x}" 'constructor(address,uint256)' "${PAYER_ADDRESSES[0]}" "$INITIAL_SUPPLY" \
-    >/tmp/agentvault-test-usdc-deploy.log
+    >/tmp/agentvault-e2e-usdc-deploy.log
 fi
 
 code=$(cast code --rpc-url "$RPC_URL" "$TOKEN_ADDRESS")
-test "$code" != "0x" || die "TestUSDC deployment did not create code"
+test "$code" != "0x" || die "E2EUSDC deployment did not create code"
 # Every language owns two EOAs. Give all ten native gas headroom and the same
-# TestUSDC balance so no payer can borrow another SDK's wallet pool.
+# E2EUSDC balance so no payer can borrow another SDK's wallet pool.
 for address in "${PAYER_ADDRESSES[@]}"; do
   cast rpc --rpc-url "$RPC_URL" anvil_setBalance "$address" 0x3635C9ADC5DEA00000 >/dev/null
   balance=$(cast call --rpc-url "$RPC_URL" "$TOKEN_ADDRESS" \

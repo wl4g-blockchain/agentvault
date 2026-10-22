@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
-from typing import Mapping
+from typing import Mapping, TypedDict, cast
 
 from x402.http.utils import (
     decode_payment_response_header,
@@ -27,6 +29,29 @@ from .adapter import (
     MerchantEvidence,
     PaymentProtocol,
 )
+
+
+# These private projections cover only the opaque payload inside the official
+# x402.schemas.PaymentPayload envelope. Importing the mechanism modules solely
+# for their dataclasses requires x402[evm,svm] and would pull chain RPC/signing
+# dependencies into this transport-only SDK boundary.
+_Eip3009AuthorizationPayload = TypedDict("_Eip3009AuthorizationPayload", {
+    "from": str,
+    "to": str,
+    "value": str,
+    "validAfter": str,
+    "validBefore": str,
+    "nonce": str,
+})
+
+
+class _Eip3009ExactPayload(TypedDict):
+    signature: str
+    authorization: _Eip3009AuthorizationPayload
+
+
+class _SolanaExactPayload(TypedDict):
+    transaction: str
 
 
 class X402Adapter(PaymentProtocol):
@@ -150,6 +175,7 @@ class X402Adapter(PaymentProtocol):
         payload = extract_payment_from_meta({"_meta": meta})
         if not isinstance(payload, PaymentPayload) or payload.x402_version != 2:
             raise ValueError("MCP x402 payment metadata is not PaymentPayload v2")
+        self._validate_exact_payload(payload, "MCP x402 payment metadata")
         return payload.model_dump(by_alias=True, exclude_none=True)
 
     def mcp_payment_required(self, challenge: PaymentChallenge) -> McpPaymentRequired:
@@ -205,7 +231,56 @@ class X402Adapter(PaymentProtocol):
             raise ValueError(f"{label} is not valid x402") from error
         if not isinstance(payload, PaymentPayload) or payload.x402_version != 2:
             raise ValueError(f"{label} is not PaymentPayload v2")
+        self._validate_exact_payload(payload, label)
         return payload
+
+    @staticmethod
+    def _validate_exact_payload(payload: PaymentPayload, label: str) -> None:
+        if payload.accepted.scheme != "exact":
+            raise ValueError(f"{label} uses an unsupported x402 scheme")
+        network = payload.accepted.network
+        wire = payload.payload
+        if network.startswith("eip155:"):
+            if set(wire) != {"signature", "authorization"}:
+                raise ValueError(f"{label} is not an official EIP-3009 payload")
+            authorization = wire.get("authorization")
+            if not isinstance(authorization, dict) or set(authorization) != {
+                "from", "to", "value", "validAfter", "validBefore", "nonce",
+            }:
+                raise ValueError(f"{label} is not an official EIP-3009 payload")
+            typed = cast(_Eip3009ExactPayload, wire)
+            authorization = typed["authorization"]
+            if (
+                not isinstance(typed["signature"], str)
+                or not typed["signature"]
+                or not all(isinstance(value, str) and value for value in authorization.values())
+            ):
+                raise ValueError(f"{label} is not an official EIP-3009 payload")
+            extra = payload.accepted.extra
+            if (
+                not isinstance(extra.get("name"), str)
+                or not extra["name"]
+                or not isinstance(extra.get("version"), str)
+                or not extra["version"]
+            ):
+                raise ValueError(f"{label} has no EIP-3009 domain metadata")
+            return
+        if network.startswith("solana:"):
+            if set(wire) != {"transaction"}:
+                raise ValueError(f"{label} is not an official Solana exact payload")
+            typed = cast(_SolanaExactPayload, wire)
+            transaction = typed["transaction"]
+            try:
+                decoded = base64.b64decode(transaction, validate=True)
+            except (binascii.Error, TypeError, ValueError) as error:
+                raise ValueError(f"{label} has no canonical base64 Solana transaction") from error
+            if not decoded or base64.b64encode(decoded).decode() != transaction:
+                raise ValueError(f"{label} has no canonical base64 Solana transaction")
+            fee_payer = payload.accepted.extra.get("feePayer")
+            if not isinstance(fee_payer, str) or not fee_payer:
+                raise ValueError(f"{label} has no Solana facilitator fee payer")
+            return
+        raise ValueError(f"{label} uses an unsupported x402 network")
 
     def _payment_settlement(self, payment: SettledIncomingPayment) -> SettleResponse:
         receipt = payment.receipt

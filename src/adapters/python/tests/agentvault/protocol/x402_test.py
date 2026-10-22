@@ -1,10 +1,17 @@
+import copy
 import json
 import unittest
 from pathlib import Path
 
-from x402.http.utils import decode_payment_required_header
+from x402.http.utils import decode_payment_required_header, encode_payment_signature_header
+from x402.schemas import PaymentPayload
 
-from agentvault.model import AssetIdentity, PaymentChallenge
+from agentvault.model import (
+    AssetIdentity,
+    HttpCredential,
+    PaymentChallenge,
+    PaymentCredential,
+)
 from agentvault.protocol import X402Adapter
 
 
@@ -38,3 +45,54 @@ class X402AdapterTest(unittest.TestCase):
             },
         }, 64 * 1024)
         self.assertIsNone(challenge)
+
+    def test_chain_specific_v2_payloads_and_crossovers(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).resolve().parents[4] / "fixtures" / "x402_v2_chain_payloads.json")
+            .read_text()
+        )
+        evm = fixture["cases"]["evm_eip3009"]["payment_payload"]
+        solana = fixture["cases"]["solana_spl_exact"]["payment_payload"]
+        adapter = X402Adapter()
+
+        for name, payload in (("evm_eip3009", evm), ("solana_spl_exact", solana)):
+            with self.subTest(name=name):
+                header = encode_payment_signature_header(PaymentPayload.model_validate(payload))
+                delivery = HttpCredential(
+                    "https://merchant.example", "PAYMENT-SIGNATURE", header,
+                )
+                credential = PaymentCredential(
+                    "x402", "challenge", "credential", payload, delivery,
+                )
+
+                self.assertEqual(adapter.credential(credential), delivery)
+                metadata = adapter.mcp_credential(credential)
+                self.assertEqual(metadata.key, "x402/payment")
+                self.assertEqual(metadata.value, payload)
+                self.assertEqual(
+                    adapter.presented_credential(
+                        {"PAYMENT-SIGNATURE": header}, 64 * 1024,
+                    ),
+                    payload,
+                )
+                self.assertEqual(
+                    adapter.presented_mcp_credential(
+                        {metadata.key: metadata.value}, 64 * 1024,
+                    ),
+                    payload,
+                )
+
+        crossover = copy.deepcopy(solana)
+        crossover["accepted"] = evm["accepted"]
+        with self.assertRaisesRegex(ValueError, "EIP-3009"):
+            adapter.presented_mcp_credential({"x402/payment": crossover}, 64 * 1024)
+
+        expanded = copy.deepcopy(evm)
+        expanded["payload"]["unexpected"] = True
+        with self.assertRaisesRegex(ValueError, "EIP-3009"):
+            adapter.presented_mcp_credential({"x402/payment": expanded}, 64 * 1024)
+
+        wrong_type = copy.deepcopy(evm)
+        wrong_type["payload"]["authorization"]["validAfter"] = 0
+        with self.assertRaisesRegex(ValueError, "EIP-3009"):
+            adapter.presented_mcp_credential({"x402/payment": wrong_type}, 64 * 1024)

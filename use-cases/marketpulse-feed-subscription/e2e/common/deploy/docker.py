@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
 from .base import E2EDeployer, FullFlowEvidence
 
 
+LOGGER = logging.getLogger("agentvault.e2e.runner.deployer")
 MATRIX_REPORTS = frozenset({
     "s20_full.md", "s21_payer_signing.md", "s22_payee_settlement.md",
     "s23_balance_sync.md", "s24_gateway_balance.md",
@@ -31,10 +33,27 @@ RUNTIME_ROOT = E2E_ROOT / "reports" / ".runtime"
 AGENTVAULT_CHART = REPOSITORY_ROOT / "deploy" / "helm" / "agentvault"
 AGENTVAULT_VALUES = E2E_ROOT / "common" / "agentvault-values.yaml"
 AGENTVAULT_CONFIG_TEMPLATE = "templates/platform/runtime-config-map.yaml"
+AGENTVAULT_NAMESPACE = "e2e-agentvault-system"
 TOKEN_CONTRACT = "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 PAYEE_ADDRESS = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
 FACILITATOR_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 SOLANA_CLI_ROOT = "/opt/solana/solana-release/bin"
+E2E_LOCAL_IMAGE_REFERENCES = frozenset({
+    "agentvault-e2e:local",
+    "marketpulse-e2e:local",
+    "marketpulse-go-e2e:local",
+    "marketpulse-golang-e2e:local",
+    "marketpulse-java-e2e:local",
+    "marketpulse-python-e2e:local",
+    "marketpulse-rust-e2e:local",
+    "marketpulse-typescript-e2e:local",
+    "quantstream-admin-ui-e2e:local",
+    "quantstream-ingestor-go-e2e:local",
+    "quantstream-ingestor-java-e2e:local",
+    "quantstream-ingestor-python-e2e:local",
+    "quantstream-ingestor-rust-e2e:local",
+    "quantstream-ingestor-typescript-e2e:local",
+})
 
 PAYER_PRIVATE_KEY_DEFAULTS = {
     "rust": (
@@ -227,7 +246,85 @@ class DockerE2EDeployer(E2EDeployer):
         self.compose = [*self.docker, "compose", "-p", self.project, "-f", str(COMPOSE_FILE)]
 
     def _run(self, command: Iterable[str], timeout: float | None = None, cwd: Path = E2E_ROOT) -> str:
-        return run(list(command), cwd, self.environment, timeout or self.context.timeout_seconds)
+        arguments = list(command)
+        operation = self._command_operation(arguments)
+        started_at = time.monotonic()
+        LOGGER.info("START command=%s", operation)
+        try:
+            output = run(arguments, cwd, self.environment, timeout or self.context.timeout_seconds)
+        except BaseException:
+            LOGGER.error("FAIL command=%s elapsed_seconds=%.1f", operation, time.monotonic() - started_at)
+            raise
+        LOGGER.info("PASS command=%s elapsed_seconds=%.1f", operation, time.monotonic() - started_at)
+        return output
+
+    @staticmethod
+    def _command_operation(command: list[str]) -> str:
+        """Return a useful operation name without logging command arguments or secrets."""
+        if not command:
+            return "unknown"
+        index = 0
+        if Path(command[0]).name == "sudo":
+            index = 1
+            while index < len(command) and command[index].startswith("-"):
+                index += 1
+        if index >= len(command):
+            return "unknown"
+        executable = Path(command[index]).name
+        arguments = command[index + 1:]
+        if executable in {"docker", "podman"}:
+            if "compose" in arguments:
+                compose_index = arguments.index("compose")
+                compose_arguments = arguments[compose_index + 1:]
+                actions = {"build", "config", "down", "exec", "logs", "ps", "pull", "run", "up"}
+                action = next((item for item in compose_arguments if item in actions), "command")
+                details: list[str] = []
+                profiles = [
+                    compose_arguments[position + 1]
+                    for position, item in enumerate(compose_arguments[:-1])
+                    if item == "--profile"
+                ]
+                if profiles:
+                    details.append(f"profiles={','.join(profiles)}")
+                target = DockerE2EDeployer._compose_target(compose_arguments, action)
+                if target:
+                    details.append(f"target={target}")
+                suffix = " " + " ".join(details) if details else ""
+                return f"{executable} compose {action}{suffix}"
+            first = next((item for item in arguments if not item.startswith("-")), "command")
+            if first in {"image", "volume"}:
+                tail = arguments[arguments.index(first) + 1:]
+                second = next((item for item in tail if not item.startswith("-")), "command")
+                return f"{executable} {first} {second}"
+            return f"{executable} {first}"
+        if executable in {"cargo", "helm"}:
+            action = next((item for item in arguments if not item.startswith("-")), "command")
+            if executable == "helm":
+                chart = next((Path(item) for item in arguments if (Path(item) / "Chart.yaml").is_file()), None)
+                if chart is not None:
+                    component = chart.parent.name if chart.name == "helm" else chart.name
+                    return f"{executable} {action} target={component}"
+            return f"{executable} {action}"
+        return executable
+
+    @staticmethod
+    def _compose_target(arguments: list[str], action: str) -> str | None:
+        if action not in {"build", "exec", "logs", "pull", "up"}:
+            return None
+        action_index = arguments.index(action)
+        skip_value = False
+        options_with_values = {"-e", "--env", "--entrypoint", "--name", "-u", "--user", "-w", "--workdir"}
+        for item in arguments[action_index + 1:]:
+            if skip_value:
+                skip_value = False
+                continue
+            if item in options_with_values:
+                skip_value = True
+                continue
+            if item.startswith("-"):
+                continue
+            return item
+        return None
 
     def _try(self, command: Iterable[str], timeout: float = 30, cwd: Path = E2E_ROOT) -> tuple[int, str]:
         completed = execute(list(command), cwd, self.environment, timeout)
@@ -262,17 +359,45 @@ class DockerE2EDeployer(E2EDeployer):
             )
         for compose in compose_files:
             self._run([*self.docker, "compose", "-f", str(compose), "config", "--quiet"])
-        for index, chart in enumerate(charts, 1):
-            self._run(["helm", "lint", str(chart)])
-            self._run(["helm", "template", f"agentvault-e2e-{index}", str(chart)])
+        for chart in charts:
+            namespace = self._chart_namespace(chart)
+            release_name = self._chart_name(chart)
+            self._run(["helm", "lint", "--namespace", namespace, str(chart)])
+            self._run([
+                "helm", "template", release_name, str(chart),
+                "--namespace", namespace,
+            ])
         lines.append(f"validated {len(compose_files)} component Compose manifests and Helm charts")
         return "\n".join(lines)
 
+    @staticmethod
+    def _chart_namespace(chart: Path) -> str:
+        metadata = (chart / "Chart.yaml").read_text(encoding="utf-8")
+        match = re.search(r"(?m)^  agentvault\.io/e2e-namespace: (e2e-agentvault-[a-z0-9-]+)$", metadata)
+        if match is None:
+            raise RuntimeError(f"component Chart does not declare its E2E namespace: {chart}")
+        return match.group(1)
+
+    @staticmethod
+    def _chart_name(chart: Path) -> str:
+        metadata = (chart / "Chart.yaml").read_text(encoding="utf-8")
+        match = re.search(r"(?m)^name: ([a-z0-9-]+)$", metadata)
+        if match is None:
+            raise RuntimeError(f"component Chart does not declare a valid name: {chart}")
+        name = match.group(1)
+        if name.startswith("e2e-"):
+            raise RuntimeError(f"component Chart name must rely on namespace isolation, got: {name}")
+        return name
+
     def _render_agentvault_config(self) -> str:
-        self._run(["helm", "lint", str(AGENTVAULT_CHART), "-f", str(AGENTVAULT_VALUES)])
+        self._run([
+            "helm", "lint", "--namespace", AGENTVAULT_NAMESPACE,
+            str(AGENTVAULT_CHART), "-f", str(AGENTVAULT_VALUES),
+        ])
         rendered = self._run(
             [
-                "helm", "template", "agentvault-e2e", str(AGENTVAULT_CHART),
+                "helm", "template", "agentvault", str(AGENTVAULT_CHART),
+                "--namespace", AGENTVAULT_NAMESPACE,
                 "-f", str(AGENTVAULT_VALUES), "--show-only", AGENTVAULT_CONFIG_TEMPLATE,
             ]
         )
@@ -344,6 +469,38 @@ class DockerE2EDeployer(E2EDeployer):
             )
         return output
 
+    def cleanup_images(self) -> str:
+        images = self._owned_images()
+        if not images:
+            return ""
+        if images == ["<image inventory unavailable>"]:
+            raise RuntimeError("E2E cleanup could not inventory its owned images")
+        status, output = self._try([*self.docker, "image", "rm", *images], 180)
+        remaining = self._owned_images()
+        if remaining:
+            raise RuntimeError(
+                f"E2E cleanup could not remove owned images {remaining}; exit={status}:\n{output[-4096:]}"
+            )
+        return output
+
+    def _owned_images(self) -> list[str]:
+        status, output = self._try([
+            *self.docker,
+            "image",
+            "ls",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ])
+        if status != 0:
+            return ["<image inventory unavailable>"]
+        images: list[str] = []
+        for line in output.splitlines():
+            reference = line.strip()
+            canonical = reference.removeprefix("localhost/")
+            if canonical in E2E_LOCAL_IMAGE_REFERENCES:
+                images.append(reference)
+        return sorted(set(images))
+
     def _owned_container_inventory(self) -> list[tuple[str, str, str]]:
         status, output = self._try([
             *self.docker,
@@ -413,21 +570,26 @@ class DockerE2EDeployer(E2EDeployer):
             self._diagnostics("rust", "rust")
             raise
 
-    def _dependency_up(self, role: str) -> None:
+    def _dependency_up(self, role: str, *, include_solana: bool = True) -> None:
         profiles = ("infra", role)
-        self._compose(profiles, "up", "-d", "anvil", "solana", "postgres", "emqx", "jaeger")
+        services = ["anvil", "postgres", "emqx", "jaeger"]
+        if include_solana:
+            services.insert(1, "solana")
+        self._compose(profiles, "up", "-d", *services)
         self._wait_rpc(self._url("E2E_ANVIL_PORT"), "eth_chainId", "0x7a69", 60)
-        self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 90)
+        if include_solana:
+            self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 90)
         self._compose(profiles, "up", "--no-deps", "evm-fixture")
         self._bootstrap_emqx()
         if role == "payee":
             self._compose(profiles, "up", "-d", "--no-deps", "facilitator")
             self._wait_http(self._url("E2E_FACILITATOR_PORT", "/health"), 60)
 
-    def _dependency_health(self, role: str) -> str:
+    def _dependency_health(self, role: str, *, include_solana: bool = True) -> str:
         profiles = ("infra", role)
         self._wait_rpc(self._url("E2E_ANVIL_PORT"), "eth_chainId", "0x7a69", 5)
-        self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 5)
+        if include_solana:
+            self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 5)
         self._compose(profiles, "exec", "-T", "postgres", "pg_isready", "-U", "agentvault", "-d", "agentvault")
         self._compose(profiles, "exec", "-T", "emqx", "/opt/emqx/bin/emqx", "ctl", "status")
         self._wait_http(self._url("E2E_JAEGER_UI_PORT"), 5)
@@ -437,7 +599,8 @@ class DockerE2EDeployer(E2EDeployer):
             output = self._compose(profiles, "ps", "facilitator")
             if "Up" in output:
                 raise RuntimeError("payer profile unexpectedly started the facilitator")
-        return f"dependency {role} smoke passed; real Anvil, Solana, PostgreSQL, EMQX and Jaeger are healthy"
+        chains = "Anvil and Solana" if include_solana else "Anvil"
+        return f"dependency {role} smoke passed; real {chains}, PostgreSQL, EMQX and Jaeger are healthy"
 
     def _facilitator_capabilities(self) -> str:
         status, _, raw = self._http(self._url("E2E_FACILITATOR_PORT", "/supported"))
@@ -1116,8 +1279,8 @@ class DockerE2EDeployer(E2EDeployer):
             self.cleanup()
         try:
             self._build_images(payer_language, payee_language)
-            self._dependency_up("payee")
-            self._dependency_health("payee")
+            self._dependency_up("payee", include_solana=False)
+            self._dependency_health("payee", include_solana=False)
             self._full(payer_language, payee_language, "up", "--no-deps", "agentvault-provision")
             self._full(payer_language, payee_language, "up", "-d", "--no-deps", "agentvault")
             self._wait_http(self._url("E2E_AGENTVAULT_MGMT_PORT", "/readyz"), 90)

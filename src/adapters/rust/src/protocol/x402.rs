@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
+use x402_chain_eip155::v2_eip155_exact::{ExactEvmPayload, PaymentPayload as Eip155PaymentPayload};
+use x402_chain_solana::v2_solana_exact::PaymentPayload as SolanaPaymentPayload;
 use x402_types::{
     proto::v2::{PaymentPayload as X402PaymentPayload, PaymentRequired as X402PaymentRequired, PaymentRequirements},
     util::b64::Base64Bytes,
@@ -76,9 +78,65 @@ impl X402Adapter {
     }
 
     fn payment_payload(value: Value, label: &str) -> Result<Value> {
-        serde_json::from_value::<X402PaymentPayload<PaymentRequirements, Value>>(value.clone())
+        let payload = serde_json::from_value::<X402PaymentPayload<PaymentRequirements, Value>>(value.clone())
             .map_err(|error| Error::InvalidArgument(format!("{label} is not a valid x402 v2 payload: {error}")))?;
+        let network = payload.accepted.network.to_string();
+        if payload.accepted.scheme != "exact" {
+            return Err(Error::InvalidArgument(format!(
+                "{label} uses an unsupported x402 scheme"
+            )));
+        }
+        if network.starts_with("eip155:") {
+            if !Self::has_exact_keys(&payload.payload, &["signature", "authorization"])
+                || !payload.payload.get("authorization").is_some_and(|authorization| {
+                    Self::has_exact_keys(
+                        authorization,
+                        &["from", "to", "value", "validAfter", "validBefore", "nonce"],
+                    )
+                })
+            {
+                return Err(Error::InvalidArgument(format!(
+                    "{label} is not an official EIP-3009 payload"
+                )));
+            }
+            let typed = serde_json::from_value::<Eip155PaymentPayload>(value.clone()).map_err(|error| {
+                Error::InvalidArgument(format!("{label} is not an official EIP-3009 payload: {error}"))
+            })?;
+            if !matches!(typed.payload, ExactEvmPayload::Eip3009(_)) {
+                return Err(Error::InvalidArgument(format!(
+                    "{label} is not an EIP-3009 payment payload"
+                )));
+            }
+        } else if network.starts_with("solana:") {
+            if !Self::has_exact_keys(&payload.payload, &["transaction"]) {
+                return Err(Error::InvalidArgument(format!(
+                    "{label} is not an official Solana exact payload"
+                )));
+            }
+            let typed = serde_json::from_value::<SolanaPaymentPayload>(value.clone()).map_err(|error| {
+                Error::InvalidArgument(format!("{label} is not an official Solana exact payload: {error}"))
+            })?;
+            let encoded = typed.payload.transaction;
+            let decoded = Base64Bytes::from(encoded.as_bytes())
+                .decode()
+                .map_err(|_| Error::InvalidArgument(format!("{label} has no canonical base64 Solana transaction")))?;
+            if decoded.is_empty() || Base64Bytes::encode(&decoded).to_string() != encoded {
+                return Err(Error::InvalidArgument(format!(
+                    "{label} has no canonical base64 Solana transaction"
+                )));
+            }
+        } else {
+            return Err(Error::InvalidArgument(format!(
+                "{label} uses an unsupported x402 network"
+            )));
+        }
         Ok(value)
+    }
+
+    fn has_exact_keys(value: &Value, expected: &[&str]) -> bool {
+        value.as_object().is_some_and(|object| {
+            object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+        })
     }
 
     fn decode_base64_json(encoded: &str, limit: usize, label: &str) -> Result<Value> {

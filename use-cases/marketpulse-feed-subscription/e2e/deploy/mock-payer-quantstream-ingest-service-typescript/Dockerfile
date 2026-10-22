@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
+ARG E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE=gcr.io/distroless/nodejs22-debian12:nonroot
 FROM ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE} AS builder
 WORKDIR /build
 COPY src/adapters/typescript /build/src/adapters/typescript
@@ -9,15 +10,19 @@ WORKDIR /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-qua
 RUN --mount=type=cache,target=/root/.npm \
     npm ci \
     && npm run build \
-    && npm prune --omit=dev
+    && npm prune --omit=dev \
+    && cd /build/src/adapters/typescript \
+    && npm prune --omit=dev \
+    && install -d -m 0700 /runtime/var/lib/quantstream
 
-FROM ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE}
+FROM ${E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE}
 WORKDIR /app
-COPY --from=builder /build/src/adapters/typescript /src/adapters/typescript
-COPY --from=builder /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/dist ./dist
-COPY --from=builder /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/node_modules ./node_modules
-COPY --from=builder /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/package.json ./package.json
-RUN chown -R 65532:65532 /app /src/adapters/typescript \
-    && install -d -o 65532 -g 65532 -m 0700 /var/lib/quantstream
+COPY --from=builder --chown=65532:65532 /build/src/adapters/typescript/dist /src/adapters/typescript/dist
+COPY --from=builder --chown=65532:65532 /build/src/adapters/typescript/node_modules /src/adapters/typescript/node_modules
+COPY --from=builder --chown=65532:65532 /build/src/adapters/typescript/package.json /src/adapters/typescript/package.json
+COPY --from=builder --chown=65532:65532 /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/dist ./dist
+COPY --from=builder --chown=65532:65532 /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/node_modules ./node_modules
+COPY --from=builder --chown=65532:65532 /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/package.json ./package.json
+COPY --from=builder --chown=65532:65532 /runtime/var/lib/quantstream /var/lib/quantstream
 USER 65532:65532
-ENTRYPOINT ["node", "dist/main.js"]
+ENTRYPOINT ["/nodejs/bin/node", "dist/main.js"]

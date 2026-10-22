@@ -32,10 +32,13 @@ config:
   mountPath: "/etc/component/config"
   content: |
     
+fixture:
+  enabled: true
+  scriptConfigMap: evm-fixture-script
+  artifactsConfigMap: evm-fixture-artifacts
 persistence:
   enabled: false
   mountPath: "/var/lib/component"
 resources:
   requests: { cpu: 20m, memory: 32Mi }
   limits: { cpu: 1000m, memory: 512Mi }
-

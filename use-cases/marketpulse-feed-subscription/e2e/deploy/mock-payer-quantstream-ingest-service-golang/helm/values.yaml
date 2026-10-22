@@ -4,9 +4,9 @@ workload:
   backoffLimit: 0
   restartPolicy: Never
 image:
-  repository: "quantstream-ingestor-golang-e2e"
+  repository: "localhost/quantstream-ingestor-golang-e2e"
   tag: "local"
-  pullPolicy: IfNotPresent
+  pullPolicy: Never
 command: []
 args:
   - "--once"
@@ -14,7 +14,7 @@ env:
   MARKETPULSE_URL: "http://marketpulse:8081/mcp"
   QUANTSTREAM_CLIENT_ID: "client-quantstream-go"
   QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-go-market-ingestion"
-  AGENTVAULT_MQTT_HOST: "emqx"
+  AGENTVAULT_MQTT_HOST: "emqx.e2e-agentvault-infra-system.svc.cluster.local"
   AGENTVAULT_MQTT_PORT: "1883"
   AGENTVAULT_MQTT_TLS: "false"
   AGENTVAULT_MQTT_USERNAME: "quantstream-go-workload"

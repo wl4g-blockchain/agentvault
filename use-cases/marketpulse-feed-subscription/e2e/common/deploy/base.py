@@ -62,3 +62,7 @@ class E2EDeployer(ABC):
     @abstractmethod
     def cleanup(self) -> str:
         """Remove only resources owned by this E2E deployment."""
+
+    @abstractmethod
+    def cleanup_images(self) -> str:
+        """Remove only locally built images owned by this E2E suite."""

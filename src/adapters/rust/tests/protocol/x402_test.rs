@@ -59,3 +59,63 @@ fn x402_adapter_does_not_misclassify_unrelated_mcp_tool_errors() {
         .expect("unrelated tool error")
         .is_none());
 }
+
+#[test]
+fn x402_adapter_preserves_chain_specific_v2_payloads_and_rejects_crossovers() {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/x402_v2_chain_payloads.json"
+    )))
+    .expect("shared x402 fixture");
+    for case in ["evm_eip3009", "solana_spl_exact"] {
+        let payload = fixture["cases"][case]["payment_payload"].clone();
+        let header = Base64Bytes::encode(serde_json::to_vec(&payload).expect("payment JSON")).to_string();
+        let delivery = HttpCredential {
+            bound_origin: "https://merchant.example".to_owned(),
+            header_name: "PAYMENT-SIGNATURE".to_owned(),
+            header_value: header.clone(),
+        };
+        let credential = PaymentCredential {
+            protocol: "x402".to_owned(),
+            challenge_hash: "challenge".to_owned(),
+            credential_hash: "credential".to_owned(),
+            payload: payload.clone(),
+            http: Some(delivery.clone()),
+        };
+
+        assert_eq!(
+            X402Adapter.credential(&credential).expect("payer HTTP credential"),
+            delivery
+        );
+        let metadata = X402Adapter.mcp_credential(&credential).expect("payer MCP credential");
+        assert_eq!(metadata.key, "x402/payment");
+        assert_eq!(metadata.value, payload);
+
+        assert_eq!(
+            X402Adapter
+                .presented_credential(&BTreeMap::from([("payment-signature".to_owned(), header)]), 64 * 1024,)
+                .expect("payee HTTP credential")
+                .expect("presented HTTP payload"),
+            payload
+        );
+        assert_eq!(
+            X402Adapter
+                .presented_mcp_credential(&json!({"x402/payment": metadata.value}), 64 * 1024)
+                .expect("payee MCP credential")
+                .expect("presented MCP payload"),
+            payload
+        );
+    }
+
+    let mut crossover = fixture["cases"]["solana_spl_exact"]["payment_payload"].clone();
+    crossover["accepted"] = fixture["cases"]["evm_eip3009"]["payment_payload"]["accepted"].clone();
+    assert!(X402Adapter
+        .presented_mcp_credential(&json!({"x402/payment": crossover}), 64 * 1024)
+        .is_err());
+
+    let mut expanded = fixture["cases"]["evm_eip3009"]["payment_payload"].clone();
+    expanded["payload"]["unexpected"] = Value::Bool(true);
+    assert!(X402Adapter
+        .presented_mcp_credential(&json!({"x402/payment": expanded}), 64 * 1024)
+        .is_err());
+}

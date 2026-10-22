@@ -181,6 +181,7 @@ public final class X402Adapter implements PaymentProtocol {
                 || !value.path("payload").isObject()) {
             throw new IllegalArgumentException(label + " is not an x402 v2 PaymentPayload");
         }
+        X402ExactPayload.parse(JSON, value.path("accepted"), value.path("payload"), label);
         return value;
     }
 

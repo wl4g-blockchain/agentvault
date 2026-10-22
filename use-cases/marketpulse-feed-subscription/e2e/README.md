@@ -47,7 +47,7 @@ QuantStream service (Go/Rust/Python/Java/TS)
                     → atomic consume/recheck/sign  │
        ← credential; retry identical MCP request  │
                          MarketPulse payee ←───────┘
-                           → official Facilitator → Anvil/TestUSDC
+                           → official Facilitator → Anvil/E2EUSDC
                            → receipt + inbound/outbound Ledger
 ```
 
@@ -102,7 +102,7 @@ Flowgent Anvil, Solana, and Facilitator deployments:
 - `ingestor-{go,rust,python,java,typescript}`: exactly one payer backend.
 
 The five-language business matrix asserts x402 v2 / EVM / EIP-3009 against
-compiled TestUSDC. The separate `mpp-tempo` scenario asserts a Vault-signed
+compiled E2EUSDC. The separate `mpp-tempo` scenario asserts a Vault-signed
 Tempo type-0x76 `charge`, external HTTP verify/settle, lost-response recovery,
 single broadcast, receipt binding, and pathUSD balance conservation including
 token-denominated gas. The explicit `x402-solana` scenario creates a real SPL
@@ -172,6 +172,7 @@ python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <completed-matrix-run>
 python3 runner.py cleanup
+python3 runner.py --cleanup
 ```
 
 `runner.py` is the only outer orchestration entry. It owns build, deployment,
@@ -179,6 +180,62 @@ health checks, scenario selection, diagnostics and cleanup, and writes immutable
 `reports/<yyyyMMddHHmmss>/<module>/` plus that run's `summary.md`. Deployments
 are retained by default for manual inspection. Use `--cleanup-after-run` for an
 explicit teardown after a run, or `runner.py cleanup` later.
+The `cleanup` command and `--cleanup` flag are equivalent. They remove the
+shared and worker Compose containers, project-labelled named/anonymous volumes,
+allowlisted local AgentVault/MarketPulse/QuantStream `*:local` images, and Helm
+releases inside manifest-declared, labelled `e2e-agentvault-*` namespaces. Helm
+gets a bounded graceful uninstall first. Only if that fails are release-labelled
+resource finalizers cleared, the uninstall retried without hooks, and stranded
+Pods force-deleted. Namespaces and bootstrap objects are retained for a clean
+redeploy. Cleanup never prunes external base images, registries, unrelated
+volumes, global builder caches, or resources outside those namespaces.
+
+`--cleanup-after-run` remains intentionally narrower: it removes only the
+current Docker E2E containers and volumes, preserving images and any separately
+deployed Kubernetes review environment.
+
+All ten language service images use separate builder and runtime stages. Rust
+and Java copy only their release/runtime artifacts into a non-root distroless
+base, Python copies only installed packages into a non-root distroless Python
+3.11 runtime, TypeScript copies pruned production dependencies into a non-root
+Node 22 distroless runtime without a duplicate ownership layer, and Go retains
+its static binary plus Alpine runtime.
+
+## Kubernetes namespace contract
+
+`runner.py` currently advertises only the Docker backend. The component Helm
+charts nevertheless enforce a deployment boundary for Kubernetes consumers:
+every rendered Deployment, Job, ConfigMap, and Service carries an explicit
+`e2e-agentvault-*` namespace sourced from a fixed Chart annotation. A Chart
+also rejects installation when the Helm release namespace differs, so Helm's
+release Secret cannot leak into `default` or another namespace. Bootstrap
+the namespace set before installing any E2E release:
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl apply -f deploy/namespaces.yaml
+```
+
+| Workload group | Namespace |
+| --- | --- |
+| AgentVault | `e2e-agentvault-system` |
+| standalone AuthGuard and its middleware | `e2e-agentvault-authguard-system` |
+| PostgreSQL, EMQX, Jaeger | `e2e-agentvault-infra-system` |
+| Anvil, EVM fixture, Facilitator, Solana | `e2e-agentvault-payment-system` |
+| all QuantStream mock payer services and UI | `e2e-agentvault-mock-payer` |
+| all MarketPulse mock payee services | `e2e-agentvault-mock-payee` |
+
+Install the production AgentVault chart into `e2e-agentvault-system`. Component
+charts must likewise be installed with `--namespace` set to the namespace in
+the table; the render fails closed otherwise. The AgentVault chart's
+umbrella AuthGuard dependency remains disabled for this direct payment E2E; an
+IAM-enabled variant must install AuthGuard as a standalone release in
+`e2e-agentvault-authguard-system`, rather than co-locating it with AgentVault.
+The namespace is the only E2E naming boundary: workload, Pod, Service, and
+ConfigMap names use their production-style component names without an `e2e-`
+or `e2e-agentvault-` prefix. The structure gate rejects missing namespaces,
+wrong component ownership, prefixed component names, and templates that stop
+applying the explicit namespace.
 
 The `web` scenario follows the AuthGuard browser-verifier pattern: it first
 validates that `s21`, `s22`, `s24` and `s30` contain the exact same completed

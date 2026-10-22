@@ -70,6 +70,70 @@ class BuildProxyEnvironmentTest(unittest.TestCase):
 
 
 class BuildBoundaryTest(unittest.TestCase):
+    def test_command_progress_operation_omits_sensitive_arguments(self) -> None:
+        operation = DockerE2EDeployer._command_operation([
+            "sudo", "-n", "-E", "docker", "compose", "--profile", "payer",
+            "exec", "agentvault", "client", "--private-key", "do-not-log",
+        ])
+
+        self.assertEqual(operation, "docker compose exec profiles=payer target=agentvault")
+        self.assertNotIn("do-not-log", operation)
+
+        run_operation = DockerE2EDeployer._command_operation([
+            "docker", "compose", "run", "--rm", "-e", "API_TOKEN=do-not-log", "quantstream-rust",
+        ])
+        self.assertEqual(run_operation, "docker compose run")
+        self.assertNotIn("do-not-log", run_operation)
+
+    def test_component_chart_namespace_is_explicit(self) -> None:
+        chart = E2E_ROOT / "deploy" / "anvil" / "helm"
+
+        self.assertEqual(
+            DockerE2EDeployer._chart_namespace(chart),
+            "e2e-agentvault-payment-system",
+        )
+        self.assertEqual(DockerE2EDeployer._chart_name(chart), "anvil")
+
+    def test_component_chart_without_namespace_fails_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            chart = Path(directory)
+            (chart / "Chart.yaml").write_text("apiVersion: v2\nname: unsafe\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "does not declare"):
+                DockerE2EDeployer._chart_namespace(chart)
+
+    def test_component_chart_rejects_e2e_resource_prefix(self) -> None:
+        with TemporaryDirectory() as directory:
+            chart = Path(directory)
+            (chart / "Chart.yaml").write_text(
+                "apiVersion: v2\nname: e2e-anvil\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "namespace isolation"):
+                DockerE2EDeployer._chart_name(chart)
+
+    def test_all_language_services_have_an_isolated_runtime_stage(self) -> None:
+        components = (
+            *(f"mock-payee-marketpulse-{language}-service" for language in (
+                "rust", "golang", "java", "python", "typescript",
+            )),
+            *(f"mock-payer-quantstream-ingest-service-{language}" for language in (
+                "rust", "golang", "java", "python", "typescript",
+            )),
+        )
+        for component in components:
+            dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
+            stages = [
+                line.strip()
+                for line in dockerfile.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("FROM ")
+            ]
+            self.assertEqual(len(stages), 2, f"{component} must have builder and runtime stages")
+            self.assertIn(" AS builder", stages[0])
+            self.assertIn("_RUNTIME_IMAGE}", stages[1])
+            self.assertNotIn("_BUILD_IMAGE}", stages[1])
+
     def test_source_runtime_is_built_by_default(self) -> None:
         self.assertEqual(_agentvault_build_targets({}), ("agentvault",))
 
@@ -288,6 +352,38 @@ class CleanupIsolationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "could not inventory"):
             deployer._remove_owned_volumes()
+
+    def test_image_inventory_accepts_only_known_local_e2e_images(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._try = Mock(return_value=(0, "\n".join((
+            "localhost/quantstream-ingestor-rust-e2e:local",
+            "marketpulse-go-e2e:local",
+            "example/unrelated-e2e:local",
+            "registry.cn-shenzhen.aliyuncs.com/wl4g/agentvault:latest",
+        ))))
+
+        self.assertEqual(
+            deployer._owned_images(),
+            [
+                "localhost/quantstream-ingestor-rust-e2e:local",
+                "marketpulse-go-e2e:local",
+            ],
+        )
+
+    def test_removes_only_allowlisted_local_e2e_images(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._owned_images = Mock(side_effect=[["localhost/marketpulse-rust-e2e:local"], []])
+        deployer._try = Mock(return_value=(0, "removed\n"))
+
+        output = deployer.cleanup_images()
+
+        self.assertEqual(output, "removed\n")
+        deployer._try.assert_called_once_with(
+            ["docker", "image", "rm", "localhost/marketpulse-rust-e2e:local"],
+            180,
+        )
 
 
 class MatrixCheckpointTest(unittest.TestCase):

@@ -25,7 +25,7 @@ probe:
   type: tcp
   path: "/"
   port: 1883
-  initialDelaySeconds: 5
+  initialDelaySeconds: 120
   periodSeconds: 5
 config:
   enabled: true
@@ -49,6 +49,17 @@ config:
       "agentvault/v1/clients/+/payments/events/+"
     ]}.
     
+    %% Payee is restricted to the MarketPulse client tree and payee commands.
+    {allow, {username, "marketpulse-payee"}, publish, [
+      "agentvault/v1/clients/client-marketpulse/commands/resolve-offer",
+      "agentvault/v1/clients/client-marketpulse/commands/create-challenge",
+      "agentvault/v1/clients/client-marketpulse/commands/verify-payment",
+      "agentvault/v1/clients/client-marketpulse/commands/settle-payment"
+    ]}.
+    {allow, {username, "marketpulse-payee"}, subscribe, [
+      "agentvault/v1/clients/client-marketpulse/results/+"
+    ]}.
+
     %% Five Payer workloads and approvers have mutually exclusive client trees.
     {allow, {username, "quantstream-rust-workload"}, publish, [
       "agentvault/v1/clients/client-quantstream-rust/commands/authorize",
@@ -127,4 +138,4 @@ persistence:
   mountPath: "/opt/emqx/data"
 resources:
   requests: { cpu: 20m, memory: 32Mi }
-  limits: { cpu: 1000m, memory: 512Mi }
+  limits: { cpu: 350m, memory: 512Mi }

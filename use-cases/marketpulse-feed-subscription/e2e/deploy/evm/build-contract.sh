@@ -23,8 +23,8 @@ mkdir -p "$SCRIPT_DIR/artifacts"
   --abi \
   --overwrite \
   --output-dir "$SCRIPT_DIR/artifacts" \
-  "$SCRIPT_DIR/src/TestUSDC.sol"
+  "$SCRIPT_DIR/src/E2EUSDC.sol"
 
 (cd "$SCRIPT_DIR/artifacts" && sha256sum --check contracts.sha256) >/dev/null
 
-printf 'Built TestUSDC with solc %s (%s)\n' "$SOLC_VERSION" "$SOLC_SHA256"
+printf 'Built E2EUSDC with solc %s (%s)\n' "$SOLC_VERSION" "$SOLC_SHA256"

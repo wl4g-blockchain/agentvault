@@ -3,7 +3,7 @@ pragma solidity 0.8.24;
 
 /// @notice Local-only ERC-20/EIP-3009 fixture used by AgentVault's real x402 E2E.
 /// @dev This is deliberately small and auditable. It is not a production token.
-contract TestUSDC {
+contract E2EUSDC {
     string public constant name = "USDC";
     string public constant symbol = "USDC";
     string public constant version = "2";

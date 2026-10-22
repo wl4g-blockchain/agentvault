@@ -28,6 +28,8 @@ tower = "0.5"
 tracing = "0.1"
 time = { version = "0.3", features = ["formatting"] }
 x402-types = "=1.4.11"
+x402-chain-eip155 = { version = "=1.4.11", default-features = false }
+x402-chain-solana = { version = "=1.4.11", default-features = false }
 zeroize = "1.8"
 
 [build-dependencies]
