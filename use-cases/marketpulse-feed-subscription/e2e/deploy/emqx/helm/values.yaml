@@ -14,7 +14,8 @@ env:
   EMQX_AUTHORIZATION__DENY_ACTION: "ignore"
 secret:
   name: marketpulse-e2e-secrets
-  env: {}
+  env:
+    EMQX_DASHBOARD__DEFAULT_PASSWORD: emqx-dashboard-password
 ports:
   - { name: mqtt, containerPort: 1883, servicePort: 1883 }
   - { name: dashboard, containerPort: 18083, servicePort: 18083 }

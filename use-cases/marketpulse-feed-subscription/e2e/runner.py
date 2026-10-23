@@ -174,6 +174,30 @@ def cleanup(
     comprehensive: bool = True,
 ) -> None:
     progress = progress or ProgressLogger()
+    if deployer == "kubernetes":
+        context = VerificationContext(
+            run_id="cleanup",
+            report_root=REPORT_ROOT,
+            deploy_root=DEPLOY_ROOT,
+            scenario="cleanup",
+            round_number=0,
+            payer_language="rust",
+            payee_language="rust",
+            transport="mqtt",
+            deployer=deployer,
+            timeout_seconds=timeout_seconds,
+            skip_build=True,
+            reuse_build=True,
+            e2e_sdk_scope=e2e_sdk_scope,
+            matrix_workers=1,
+        )
+        owned_deployer = create_deployer(context)
+        with progress.step("cleanup_kubernetes", scope="e2e-agentvault"):
+            owned_deployer.cleanup()
+        if comprehensive:
+            with progress.step("cleanup_images", deployer=deployer):
+                owned_deployer.cleanup_images()
+        return
     cleanup_workers = 2 if comprehensive else matrix_workers
     image_deployer = None
     for worker_slot in (None, *range(cleanup_workers)):
@@ -218,9 +242,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-r", "--rounds", type=int, default=1)
     result.add_argument(
         "--deployer",
-        choices=("docker",),
+        choices=("docker", "kubernetes"),
         default="docker",
-        help="isolated deployment backend; only implemented backends are advertised",
+        help="isolated deployment backend; Docker remains the CI default",
     )
     result.add_argument("--timeout", type=parse_duration, default=parse_duration("45m"))
     languages = ("rust", "go", "python", "typescript", "java")
@@ -269,6 +293,8 @@ def main() -> None:
             print(f"{scenario.name:14} {scenario.description}")
         return
     if args.command == "cleanup" or args.cleanup:
+        if args.cleanup_after_run:
+            raise SystemExit("--cleanup and --cleanup-after-run cannot be combined")
         cleanup(
             args.timeout,
             args.deployer,

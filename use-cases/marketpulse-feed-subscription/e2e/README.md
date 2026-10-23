@@ -171,6 +171,8 @@ python3 runner.py -s matrix --matrix-workers 2 # default simple: Rust/Go 2×2×2
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <completed-matrix-run>
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s full --payer-language rust --payee-language rust
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s matrix --matrix-workers 1
 python3 runner.py cleanup
 python3 runner.py --cleanup
 ```
@@ -190,9 +192,10 @@ Pods force-deleted. Namespaces and bootstrap objects are retained for a clean
 redeploy. Cleanup never prunes external base images, registries, unrelated
 volumes, global builder caches, or resources outside those namespaces.
 
-`--cleanup-after-run` remains intentionally narrower: it removes only the
-current Docker E2E containers and volumes, preserving images and any separately
-deployed Kubernetes review environment.
+`--cleanup-after-run` remains intentionally narrower. The Docker backend removes
+only current Compose containers and volumes; the Kubernetes backend uninstalls
+only the current E2E Helm releases. Both preserve locally built images. Docker
+post-run cleanup never touches a separately deployed Kubernetes review environment.
 
 All ten language service images use separate builder and runtime stages. Rust
 and Java copy only their release/runtime artifacts into a non-root distroless
@@ -203,8 +206,11 @@ its static binary plus Alpine runtime.
 
 ## Kubernetes namespace contract
 
-`runner.py` currently advertises only the Docker backend. The component Helm
-charts nevertheless enforce a deployment boundary for Kubernetes consumers:
+`runner.py` exposes `--deployer docker|kubernetes`; Docker remains the CI
+default. The Kubernetes backend owns local-image build/import, Helm lifecycle,
+port forwards, payer Jobs, approval, and PostgreSQL/on-chain evidence. Matrix
+cases run serially on the shared cluster to prevent cross-case state leakage.
+The component Helm charts enforce a deployment boundary for Kubernetes consumers:
 every rendered Deployment, Job, ConfigMap, and Service carries an explicit
 `e2e-agentvault-*` namespace sourced from a fixed Chart annotation. A Chart
 also rejects installation when the Helm release namespace differs, so Helm's
@@ -221,7 +227,7 @@ kubectl apply -f deploy/namespaces.yaml
 | AgentVault | `e2e-agentvault-system` |
 | standalone AuthGuard and its middleware | `e2e-agentvault-authguard-system` |
 | PostgreSQL, EMQX, Jaeger | `e2e-agentvault-infra-system` |
-| Anvil, EVM fixture, Facilitator, Solana | `e2e-agentvault-payment-system` |
+| Anvil, Tempo, EVM fixture, Facilitator, Solana | `e2e-agentvault-payment-system` |
 | all QuantStream mock payer services and UI | `e2e-agentvault-mock-payer` |
 | all MarketPulse mock payee services | `e2e-agentvault-mock-payee` |
 

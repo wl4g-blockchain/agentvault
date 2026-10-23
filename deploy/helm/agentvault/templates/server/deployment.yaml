@@ -18,6 +18,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/platform/runtime-config-map.yaml") . | sha256sum }}
         checksum/secrets: {{ .Values.secrets | toJson | sha256sum }}
+        checksum/provisioning: {{ .Values.provisioning | toJson | sha256sum }}
         {{- if eq $provider "vault" }}
         {{- include "agentvault.vaultAnnotations" . | nindent 8 }}
         {{- end }}
@@ -41,6 +42,54 @@ spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.provisioning.enabled .Values.extraInitContainers }}
+      initContainers:
+        {{- if .Values.provisioning.enabled }}
+        - name: provision
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/agentvault/agentvault.yaml
+            - provision
+            - --manifest
+            - /etc/agentvault-provision/{{ .Values.provisioning.manifestKey }}
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          {{- if or (eq $provider "gcp") (eq $provider "aws") }}
+          env:
+            - name: AGENTVAULT_SECRETS_ENV_FILE
+              value: {{ include "agentvault.csiSecretsMountPath" . }}/env
+          {{- else if eq $provider "vault" }}
+          env:
+            - name: AGENTVAULT_SECRETS_ENV_FILE
+              value: /vault/secrets/env
+          {{- end }}
+          {{- if and (eq $provider "kubernetes") .Values.secrets.kubernetes.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.kubernetes.existingSecret | quote }}
+          {{- end }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/agentvault, readOnly: true }
+            # ConfigMap volumes are symlink projections, while provisioning
+            # deliberately opens manifests with O_NOFOLLOW. Mount the selected
+            # key as a file so the security check and Kubernetes projection
+            # semantics remain compatible.
+            - name: provisioning
+              mountPath: /etc/agentvault-provision/{{ .Values.provisioning.manifestKey }}
+              subPath: {{ .Values.provisioning.manifestKey | quote }}
+              readOnly: true
+            - { name: runtime, mountPath: /run/agentvault }
+            {{- if or (eq $provider "gcp") (eq $provider "aws") }}
+            - name: csi-secrets
+              mountPath: {{ include "agentvault.csiSecretsMountPath" . }}
+              readOnly: true
+            {{- end }}
+        {{- end }}
+        {{- with .Values.extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: agentvault
@@ -89,6 +138,14 @@ spec:
           configMap: { name: {{ include "agentvault.fullname" . }}-config }
         - name: runtime
           emptyDir: {}
+        {{- if .Values.provisioning.enabled }}
+        - name: provisioning
+          configMap:
+            name: {{ required "provisioning.manifestConfigMap is required when provisioning is enabled" .Values.provisioning.manifestConfigMap | quote }}
+            items:
+              - key: {{ .Values.provisioning.manifestKey | quote }}
+                path: {{ .Values.provisioning.manifestKey | quote }}
+        {{- end }}
         {{- if or (eq $provider "gcp") (eq $provider "aws") }}
         - name: csi-secrets
           csi:

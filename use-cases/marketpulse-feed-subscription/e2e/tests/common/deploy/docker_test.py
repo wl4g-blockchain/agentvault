@@ -85,6 +85,12 @@ class BuildBoundaryTest(unittest.TestCase):
         self.assertEqual(run_operation, "docker compose run")
         self.assertNotIn("do-not-log", run_operation)
 
+        helm_operation = DockerE2EDeployer._command_operation([
+            "sudo", "-n", "env", "KUBECONFIG=/private/path", "helm", "lint", "/tmp/chart",
+        ])
+        self.assertEqual(helm_operation, "helm lint")
+        self.assertNotIn("/private/path", helm_operation)
+
     def test_component_chart_namespace_is_explicit(self) -> None:
         chart = E2E_ROOT / "deploy" / "anvil" / "helm"
 

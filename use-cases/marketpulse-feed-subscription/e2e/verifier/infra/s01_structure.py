@@ -13,6 +13,8 @@ REQUIRED = (
     "deploy/namespaces.yaml",
     "common/deploy/base.py",
     "common/deploy/docker.py",
+    "common/deploy/kubernetes.py",
+    "common/deploy/kubernetes_deployer.py",
     "common/payer_identity.py",
     "verifier/payment/s20_full.py",
     "verifier/payment/s21_payer_signing.py",
@@ -101,11 +103,12 @@ DEPLOY_COMPONENTS = (
     "mock-payer-quantstream-ingest-ui",
     "postgres",
     "solana",
+    "tempo",
 )
 
 E2E_NAMESPACE_GROUPS = {
     "e2e-agentvault-infra-system": ("postgres", "emqx", "jaeger"),
-    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana"),
+    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana", "tempo"),
     "e2e-agentvault-mock-payee": (
         "mock-payee-marketpulse-golang-service",
         "mock-payee-marketpulse-java-service",
@@ -674,7 +677,7 @@ def verify(_context: VerificationContext) -> str:
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
-        "18 component deployment pairs, the production AgentVault chart, "
+        "19 component deployment pairs, the production AgentVault chart, "
         "five strict SDK matrices, and five aligned payer/payee implementations"
     )
 

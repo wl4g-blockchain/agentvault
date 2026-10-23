@@ -6,10 +6,17 @@ import unittest
 from contextlib import redirect_stderr
 from unittest.mock import Mock, patch
 
-from runner import ProgressLogger, cleanup, parser, selected_scenarios
+from runner import ProgressLogger, cleanup, main, parser, selected_scenarios
 
 
 class RunnerTest(unittest.TestCase):
+    def test_deployer_defaults_to_docker_and_accepts_kubernetes(self) -> None:
+        self.assertEqual(parser().parse_args([]).deployer, "docker")
+        self.assertEqual(
+            parser().parse_args(["--deployer", "kubernetes"]).deployer,
+            "kubernetes",
+        )
+
     def test_sdk_scope_defaults_to_simple(self) -> None:
         self.assertEqual(parser().parse_args(["-s", "matrix"]).e2e_sdk_scope, "simple")
 
@@ -25,6 +32,13 @@ class RunnerTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 parser().parse_args(["--cleanup-all"])
+
+    @patch("runner.cleanup")
+    def test_cleanup_rejects_cleanup_after_run(self, cleanup_runner: Mock) -> None:
+        with patch("sys.argv", ["runner.py", "--cleanup", "--cleanup-after-run"]):
+            with self.assertRaisesRegex(SystemExit, "cannot be combined"):
+                main()
+        cleanup_runner.assert_not_called()
 
     @patch("runner.KubernetesE2ECleaner")
     @patch("runner.create_deployer")
@@ -63,6 +77,26 @@ class RunnerTest(unittest.TestCase):
         for deployer in deployers:
             deployer.cleanup.assert_called_once_with()
             deployer.cleanup_images.assert_not_called()
+        kubernetes_cleaner.assert_not_called()
+
+    @patch("runner.KubernetesE2ECleaner")
+    @patch("runner.create_deployer")
+    def test_kubernetes_cleanup_uses_one_owned_deployer(
+        self,
+        create: Mock,
+        kubernetes_cleaner: Mock,
+    ) -> None:
+        deployer = create.return_value
+
+        cleanup(60, "kubernetes", matrix_workers=2)
+
+        create.assert_called_once()
+        context = create.call_args.args[0]
+        self.assertEqual(context.deployer, "kubernetes")
+        self.assertIsNone(context.worker_slot)
+        self.assertEqual(context.matrix_workers, 1)
+        deployer.cleanup.assert_called_once_with()
+        deployer.cleanup_images.assert_called_once_with()
         kubernetes_cleaner.assert_not_called()
 
     def test_advertises_explicit_mpp_tempo_gate(self) -> None:

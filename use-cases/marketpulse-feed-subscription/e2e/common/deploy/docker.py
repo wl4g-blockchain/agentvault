@@ -272,6 +272,13 @@ class DockerE2EDeployer(E2EDeployer):
             return "unknown"
         executable = Path(command[index]).name
         arguments = command[index + 1:]
+        if executable == "env":
+            while arguments and "=" in arguments[0] and not arguments[0].startswith("="):
+                arguments = arguments[1:]
+            if not arguments:
+                return "env"
+            executable = Path(arguments[0]).name
+            arguments = arguments[1:]
         if executable in {"docker", "podman"}:
             if "compose" in arguments:
                 compose_index = arguments.index("compose")
@@ -353,9 +360,10 @@ class DockerE2EDeployer(E2EDeployer):
                 self._full(payer, payee, "config", "--quiet")
         compose_files = sorted(self.context.deploy_root.glob("*/docker-compose.yaml"))
         charts = sorted(self.context.deploy_root.glob("*/helm"))
-        if len(compose_files) != 18 or len(charts) != len(compose_files):
+        if len(compose_files) != 19 or len(charts) != len(compose_files):
             raise RuntimeError(
-                f"expected 18 paired component manifests, found {len(compose_files)} Compose and {len(charts)} Helm"
+                "expected 19 paired component manifests, found "
+                f"{len(compose_files)} Compose and {len(charts)} Helm"
             )
         for compose in compose_files:
             self._run([*self.docker, "compose", "-f", str(compose), "config", "--quiet"])

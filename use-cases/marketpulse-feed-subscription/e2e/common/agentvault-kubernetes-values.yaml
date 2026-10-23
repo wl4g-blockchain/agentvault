@@ -3,6 +3,11 @@ image:
   tag: local
   pullPolicy: IfNotPresent
 
+provisioning:
+  enabled: true
+  manifestConfigMap: agentvault-e2e-provision
+  manifestKey: scenario.json
+
 extraContainers:
   - name: loopback-bridge
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4

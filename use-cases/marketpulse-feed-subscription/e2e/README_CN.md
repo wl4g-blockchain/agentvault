@@ -150,6 +150,8 @@ python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <已完成的Matrix运行目录>
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s full --payer-language rust --payee-language rust
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s matrix --matrix-workers 1
 python3 runner.py cleanup
 python3 runner.py --cleanup
 ```
@@ -167,8 +169,9 @@ AgentVault/MarketPulse/QuantStream `*:local` 镜像，以及清单中声明且�
 删除仍然滞留的 Pod。命名空间及 bootstrap 对象保留，便于干净重部署。该清理不会 prune
 外部基础镜像、镜像仓库、无关卷、全局 builder cache，亦不会触碰上述命名空间之外的资源。
 
-`--cleanup-after-run` 刻意保持更窄范围：只回收当前 Docker E2E 容器和卷，保留镜像及
-单独部署、用于人工验收的 Kubernetes 环境。
+`--cleanup-after-run` 刻意保持更窄范围：Docker backend 只回收当前 Compose 容器和卷，
+Kubernetes backend 只卸载当前 E2E Helm release；两者都保留本地构建镜像。单独部署、
+用于人工验收的 Kubernetes 环境不会被 Docker backend 的运行后清理触碰。
 
 十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
 二进制或裁剪后的 JRE 及应用复制到 non-root distroless，Python 只把安装后的依赖复制到
@@ -177,8 +180,11 @@ Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进
 
 ## Kubernetes Namespace 契约
 
-`runner.py` 目前只公开 Docker backend，但各组件 Helm Chart 已强制 Kubernetes 部署
-边界：渲染出的 Deployment、Job、ConfigMap 和 Service 都从固定 Chart annotation
+`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，默认仍为 CI 使用的
+Docker。Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
+Job、审批和 PostgreSQL/链上证据采集；共享集群上的 Matrix 会强制串行，避免跨 Case
+状态污染。各组件 Helm Chart 强制 Kubernetes 部署边界：渲染出的 Deployment、Job、
+ConfigMap 和 Service 都从固定 Chart annotation
 取得并显式写入 `e2e-agentvault-*` namespace；当 Helm release namespace 不一致时
 Chart 也会拒绝安装，防止 Helm release Secret 泄漏到 `default` 等其他 namespace。
 安装任何 E2E release 前先创建完整集合：
@@ -193,7 +199,7 @@ kubectl apply -f deploy/namespaces.yaml
 | AgentVault | `e2e-agentvault-system` |
 | 独立 AuthGuard 及其 middleware | `e2e-agentvault-authguard-system` |
 | PostgreSQL、EMQX、Jaeger | `e2e-agentvault-infra-system` |
-| Anvil、EVM fixture、Facilitator、Solana | `e2e-agentvault-payment-system` |
+| Anvil、Tempo、EVM fixture、Facilitator、Solana | `e2e-agentvault-payment-system` |
 | 全部 QuantStream mock payer 服务及 UI | `e2e-agentvault-mock-payer` |
 | 全部 MarketPulse mock payee 服务 | `e2e-agentvault-mock-payee` |
 

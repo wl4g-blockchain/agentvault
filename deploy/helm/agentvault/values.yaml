@@ -18,7 +18,16 @@ tolerations: []
 affinity: {}
 topologySpreadConstraints: []
 extraContainers: []
+extraInitContainers: []
 extraVolumes: []
+
+# Optional idempotent bootstrap executed before the server container starts.
+# The operator owns the manifest ConfigMap; the chart only mounts it and
+# reuses the same image, runtime configuration, and secret provider as serve.
+provisioning:
+  enabled: false
+  manifestConfigMap: ""
+  manifestKey: scenario.json
 
 service:
   type: ClusterIP

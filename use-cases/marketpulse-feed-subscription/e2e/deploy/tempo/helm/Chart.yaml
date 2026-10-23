@@ -1,0 +1,8 @@
+apiVersion: v2
+name: tempo
+description: MarketPulse subscription E2E Tempo localnet component
+type: application
+version: 0.1.0
+appVersion: "e2e"
+annotations:
+  agentvault.io/e2e-namespace: e2e-agentvault-payment-system
