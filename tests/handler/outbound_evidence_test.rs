@@ -1,33 +1,9 @@
 use super::*;
 
-fn encoded(value: &Value) -> String {
-    Base64Bytes::encode(serde_json::to_vec(value).unwrap()).to_string()
-}
-
-#[test]
-fn parses_only_the_official_settlement_response_wire() {
-    let response = decode_payment_response(&encoded(&json!({
-        "success": true,
-        "transaction": format!("0x{}", "11".repeat(32)),
-        "network": "eip155:8453",
-        "payer": format!("0x{}", "22".repeat(20)),
-    })))
-    .unwrap();
-    assert!(response.success);
-    assert_eq!(response.network, "eip155:8453");
-
-    assert!(decode_payment_response(&encoded(&json!({
-        "valid": true,
-        "transactionHash": format!("0x{}", "11".repeat(32)),
-        "network": "eip155:8453",
-    })))
-    .is_err());
-    assert!(decode_payment_response(&"A".repeat(MAX_PAYMENT_RESPONSE_BYTES + 1)).is_err());
-}
-
 #[test]
 fn evidence_hash_binds_the_stable_run_id() {
     let first = merchant_evidence_hash(
+        "x402",
         "intent-1",
         "run-1",
         "eip155:8453",
@@ -35,6 +11,7 @@ fn evidence_hash_binds_the_stable_run_id() {
         &format!("0x{}", "22".repeat(20)),
     );
     let changed = merchant_evidence_hash(
+        "x402",
         "intent-1",
         "different-run",
         "eip155:8453",
@@ -42,4 +19,17 @@ fn evidence_hash_binds_the_stable_run_id() {
         &format!("0x{}", "22".repeat(20)),
     );
     assert_ne!(first, changed);
+}
+
+#[test]
+fn protocol_evidence_hashes_are_isolated_without_changing_legacy_x402_identity() {
+    let transaction = format!("0x{}", "11".repeat(32));
+    let payer = format!("0x{}", "22".repeat(20));
+    let x402 = merchant_evidence_hash("x402", "intent-1", "run-1", "eip155:8453", &transaction, &payer);
+    let mpp = merchant_evidence_hash("mpp", "intent-1", "run-1", "eip155:8453", &transaction, &payer);
+    assert_ne!(x402, mpp);
+    assert_ne!(
+        merchant_event_id("x402", "intent-1"),
+        merchant_event_id("mpp", "intent-1")
+    );
 }

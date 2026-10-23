@@ -1,5 +1,6 @@
 package io.agentvault.sdk.payee;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.agentvault.sdk.config.Config.PayeeConfig;
 import io.agentvault.sdk.model.Base;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
@@ -17,19 +18,89 @@ import io.agentvault.sdk.model.Payee.ResolveOfferRequest;
 import io.agentvault.sdk.model.Payee.SettlePaymentRequest;
 import io.agentvault.sdk.model.Payee.SettledIncomingPayment;
 import io.agentvault.sdk.model.Payee.VerifyPaymentRequest;
+import io.agentvault.sdk.protocol.PaymentProtocol;
+import io.agentvault.sdk.protocol.PaymentProtocolFactory;
+import io.agentvault.sdk.protocol.ProtocolRegistry;
 
 /** Transport-neutral inbound challenge, verification, and settlement state machine. */
 public final class PayeeMiddleware {
     private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
     private final VaultTransport transport;
     private final PayeeConfig config;
+    private final ProtocolRegistry protocols;
 
     public PayeeMiddleware(VaultTransport transport, PayeeConfig config) {
         this.transport = java.util.Objects.requireNonNull(transport, "transport");
         this.config = java.util.Objects.requireNonNull(config, "config");
+        this.protocols = new PaymentProtocolFactory().create(config.protocols());
     }
 
     public PayeeConfig config() { return config; }
+
+    public PaymentProtocol protocol(String name) { return protocols.get(name); }
+
+    public java.util.List<String> credentialHeaderNames() {
+        return protocols.credentialHeaderNames();
+    }
+
+    public java.util.List<String> merchantEvidenceHeaderNames() {
+        return protocols.merchantEvidenceHeaderNames();
+    }
+
+    public JsonNode presentedCredential(String protocol, java.util.Map<String, String> headers) {
+        protocols.get(protocol);
+        ProtocolRegistry.McpCredential selected =
+                protocols.presentedCredential(headers, config.maxBodyBytes());
+        if (selected != null && !selected.protocol().equals(protocol)) {
+            throw new IllegalArgumentException(
+                    "payment credential protocol does not match the protected route");
+        }
+        return selected == null ? null : selected.value();
+    }
+
+    public JsonNode presentedMcpCredential(String protocol, JsonNode metadata) {
+        ProtocolRegistry.McpCredential selected =
+                protocols.presentedMcpCredential(metadata, config.maxBodyBytes());
+        if (selected != null && !selected.protocol().equals(protocol)) {
+            throw new IllegalArgumentException(
+                    "MCP payment credential protocol does not match the protected route");
+        }
+        return selected == null ? null : selected.value();
+    }
+
+    public java.util.List<String> mcpRequestMetadataKeys() {
+        return protocols.mcpRequestMetadataKeys();
+    }
+
+    public java.util.List<String> mcpRootRequestMetadataKeys() {
+        return protocols.mcpRootRequestMetadataKeys();
+    }
+
+    public java.util.List<String> mcpReceiptMetadataKeys() {
+        return protocols.mcpReceiptMetadataKeys();
+    }
+
+    public PaymentProtocol.McpPaymentRequired mcpPaymentRequired(
+            PaymentChallenge challenge, boolean rejected) {
+        PaymentProtocol adapter = protocols.get(challenge.protocol());
+        return rejected
+                ? adapter.mcpPaymentRejected(
+                        challenge, "AgentVault rejected the presented payment")
+                : adapter.mcpPaymentRequired(challenge);
+    }
+
+    public PaymentProtocol.McpMetadata mcpReceipt(
+            PaymentChallenge challenge, SettledIncomingPayment payment) {
+        return protocols.get(payment.receipt().protocol()).mcpReceipt(challenge, payment);
+    }
+
+    public ProtocolRegistry.McpEvidence mcpMerchantEvidence(JsonNode metadata) {
+        return protocols.mcpMerchantEvidence(metadata, config.maxBodyBytes());
+    }
+
+    public ProtocolRegistry.McpEvidence merchantEvidence(java.util.Map<String, String> headers) {
+        return protocols.merchantEvidence(headers);
+    }
 
     public StandardPayeeMiddleware standard() {
         return new StandardPayeeMiddleware(this);
@@ -59,7 +130,7 @@ public final class PayeeMiddleware {
                 new VerifyPaymentRequest(operation.challengeContext(), challengeHash, operation.requestHash(), credential),
                 PaymentVerification.class);
         if (!verification.valid()) {
-            throw new SecurityException("AgentVault rejected the presented payment");
+            throw new InvalidPaymentException(challenge);
         }
         if (verification.verificationRef() == null || verification.verificationRef().isBlank()) {
             throw new IllegalStateException("valid AgentVault verification omitted verification_ref");
@@ -73,7 +144,7 @@ public final class PayeeMiddleware {
                 SettledIncomingPayment.class);
         validateSettlementBinding(operation, verification, payment);
         event("agentvault.sdk.payee.settled", operation.runId(), payment.intent().id());
-        return new Authorized(payment);
+        return new Authorized(challenge, payment);
     }
 
     private static void event(String event, String runId, String evidence) {
@@ -161,5 +232,16 @@ public final class PayeeMiddleware {
                 || payment.receipt().status() != Base.PaymentStatus.SETTLED) {
             throw new IllegalStateException("invalid AgentVault settlement response");
         }
+    }
+
+    public static final class InvalidPaymentException extends SecurityException {
+        private final PaymentChallenge challenge;
+
+        public InvalidPaymentException(PaymentChallenge challenge) {
+            super("AgentVault rejected the presented payment");
+            this.challenge = java.util.Objects.requireNonNull(challenge, "challenge");
+        }
+
+        public PaymentChallenge challenge() { return challenge; }
     }
 }

@@ -1,0 +1,27 @@
+{
+  "schema": "agentvault.sdk.protocol-http.v1",
+  "protocols": {
+    "x402": {
+      "credential_headers": ["payment-signature"],
+      "challenge_header": "payment-required",
+      "evidence_header": "payment-response"
+    },
+    "mpp": {
+      "credential_headers": ["payment-authorization", "authorization"],
+      "challenge_header": "www-authenticate",
+      "evidence_header": "payment-receipt",
+      "application_authorization": "Bearer app-token",
+      "payment_authorization": "Payment credential"
+    }
+  },
+  "matrix": [
+    {"transport": "grpc", "protocol": "x402", "role": "payer"},
+    {"transport": "grpc", "protocol": "x402", "role": "payee"},
+    {"transport": "grpc", "protocol": "mpp", "role": "payer"},
+    {"transport": "grpc", "protocol": "mpp", "role": "payee"},
+    {"transport": "mqtt", "protocol": "x402", "role": "payer"},
+    {"transport": "mqtt", "protocol": "x402", "role": "payee"},
+    {"transport": "mqtt", "protocol": "mpp", "role": "payer"},
+    {"transport": "mqtt", "protocol": "mpp", "role": "payee"}
+  ]
+}

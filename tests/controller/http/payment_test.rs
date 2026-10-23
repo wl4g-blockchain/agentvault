@@ -99,35 +99,48 @@ fn advertised_expiry_accepts_only_canonical_unix_seconds() {
     }
 }
 
-fn required(protocol_hint: Option<&str>, headers: &[(&str, &str)]) -> PaymentRequiredDto {
-    PaymentRequiredDto {
-        protocol_hint: protocol_hint.map(str::to_owned),
-        origin: "https://merchant.example".to_owned(),
-        resource: "https://merchant.example/mcp".to_owned(),
-        content_type: "application/json".to_owned(),
-        headers: headers
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-            .collect(),
-        body: "{}".to_owned(),
-        expires_at: None,
-    }
-}
-
 #[test]
-fn payment_protocol_comes_only_from_captured_402_metadata() {
-    assert_eq!(payment_protocol(&required(Some("x402"), &[])).unwrap(), "x402");
-    assert_eq!(
-        payment_protocol(&required(None, &[("WWW-Authenticate", "Payment abc")])).unwrap(),
-        "mpp"
-    );
-    assert_eq!(payment_protocol(&required(None, &[])).unwrap(), "x402");
-    for invalid in ["", " X402", "X402", "unknown"] {
-        assert!(matches!(
-            payment_protocol(&required(Some(invalid), &[])),
-            Err(Error::PaymentProtocol(_))
-        ));
+fn outbound_evidence_supports_legacy_x402_and_protocol_owned_headers() {
+    let context = OperationContextDto {
+        scenario_id: "scenario-1".to_owned(),
+        run_id: "run-1".to_owned(),
+    };
+    let legacy = ReportOutboundResponseRequest {
+        context: context.clone(),
+        payment_response: Some("YWJjZA==".to_owned()),
+        protocol: None,
+        evidence: None,
     }
+    .evidence()
+    .expect("legacy x402 evidence");
+    assert_eq!(legacy.protocol, "x402");
+    assert_eq!(legacy.header_name, "payment-response");
+
+    let mpp = ReportOutboundResponseRequest {
+        context: context.clone(),
+        payment_response: None,
+        protocol: Some("mpp".to_owned()),
+        evidence: Some(ProtocolEvidenceDto {
+            header_name: "payment-receipt".to_owned(),
+            header_value: "receipt".to_owned(),
+        }),
+    }
+    .evidence()
+    .expect("MPP evidence");
+    assert_eq!(mpp.protocol, "mpp");
+    assert_eq!(mpp.header_name, "payment-receipt");
+
+    assert!(ReportOutboundResponseRequest {
+        context,
+        payment_response: Some("legacy".to_owned()),
+        protocol: Some("x402".to_owned()),
+        evidence: Some(ProtocolEvidenceDto {
+            header_name: "payment-response".to_owned(),
+            header_value: "modern".to_owned(),
+        }),
+    }
+    .evidence()
+    .is_err());
 }
 
 #[test]
@@ -258,7 +271,18 @@ fn http_credential_debug_and_delivery_never_expose_nested_secrets() {
         credential_hash: "credential-secret".to_owned(),
         payload: json!({"signature":"signature-secret"}),
     };
-    let dto = PaymentCredentialDto::for_http(credential, "https://merchant.example").expect("HTTP credential");
+    let adapter = crate::protocol::x402::X402Adapter::new(
+        vec![crate::protocol::x402::X402Asset {
+            network: "eip155:31337".to_owned(),
+            contract: "0x1111111111111111111111111111111111111111".to_owned(),
+            symbol: "USDC".to_owned(),
+            decimals: 6,
+        }],
+        60,
+    )
+    .expect("x402 adapter");
+    let dto =
+        PaymentCredentialDto::for_http(credential, "https://merchant.example", &adapter).expect("HTTP credential");
     let debug = format!("{dto:?}");
     assert!(!debug.contains("challenge-secret"));
     assert!(!debug.contains("credential-secret"));
@@ -266,7 +290,9 @@ fn http_credential_debug_and_delivery_never_expose_nested_secrets() {
     assert!(!debug.contains(&dto.http.as_ref().expect("delivery").header_value));
 
     let encoded = dto.http.expect("delivery").header_value;
-    let decoded = Base64Bytes::from(encoded.as_bytes()).decode().expect("standard base64");
+    let decoded = x402_types::util::b64::Base64Bytes::from(encoded.as_bytes())
+        .decode()
+        .expect("standard base64");
     assert_eq!(
         serde_json::from_slice::<Value>(&decoded).unwrap(),
         json!({"signature":"signature-secret"})

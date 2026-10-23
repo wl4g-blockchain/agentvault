@@ -1,8 +1,15 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_JAVA_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17
-ARG E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre
+ARG E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
 FROM ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE} AS builder
 WORKDIR /build
+RUN "${JAVA_HOME}/bin/jlink" \
+    --add-modules ALL-MODULE-PATH \
+    --strip-debug \
+    --no-man-pages \
+    --no-header-files \
+    --compress=2 \
+    --output /opt/e2e-jre
 COPY src/adapters/java ./src/adapters/java
 RUN --mount=type=cache,target=/root/.m2 mvn -q -f src/adapters/java/pom.xml -DskipTests install
 COPY use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-java ./use-case
@@ -10,14 +17,15 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn -q -f use-case/pom.xml -DskipTests package dependency:copy-dependencies \
     && mkdir -p /application \
     && cp -R use-case/target/classes /application/classes \
-    && cp -R use-case/target/dependency /application/lib
+    && cp -R use-case/target/dependency /application/lib \
+    && install -d -m 0700 /runtime/var/lib/quantstream
 
 FROM ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE}
+ENV JAVA_HOME=/opt/java
 WORKDIR /app
+COPY --from=builder /opt/e2e-jre /opt/java
 COPY --from=builder /application/classes ./classes
 COPY --from=builder /application/lib ./lib
-RUN mkdir -p /var/lib/quantstream \
-    && chown 65532:65532 /var/lib/quantstream \
-    && chmod 0700 /var/lib/quantstream
+COPY --from=builder --chown=65532:65532 /runtime/var/lib/quantstream /var/lib/quantstream
 USER 65532:65532
-ENTRYPOINT ["java", "-cp", "/app/classes:/app/lib/*", "io.agentvault.e2e.Application"]
+ENTRYPOINT ["/opt/java/bin/java", "-cp", "/app/classes:/app/lib/*", "io.agentvault.e2e.Application"]

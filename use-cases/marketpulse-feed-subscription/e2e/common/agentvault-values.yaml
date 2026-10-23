@@ -1,4 +1,5 @@
 replicaCount: 1
+fullnameOverride: agentvault
 
 web:
   enabled: false
@@ -11,7 +12,7 @@ authguard-middleware:
 
 runtime:
   server:
-    serviceName: agentvault-e2e
+    serviceName: agentvault
     maxBodyBytes: 262144
     requestTimeout: 15s
   postgres:

@@ -1,0 +1,45 @@
+services:
+  tempo:
+    image: ${E2E_TEMPO_IMAGE:-ghcr.io/tempoxyz/tempo-localnet@sha256:86f199f161be85d3610d990e5bc2653ece29de3ee9c91e8c8e768cf2b8c05c3b}
+    entrypoint: ["/usr/local/bin/tempo"]
+    command:
+      - node
+      - --dev
+      - --dev.block-time
+      - 1ms
+      - --datadir
+      - /data
+      - --tempo.bootnodes-endpoint
+      - none
+      - --disable-discovery
+      - --no-persist-peers
+      - --http
+      - --http.addr
+      - 0.0.0.0
+      - --http.port
+      - "8545"
+      - --http.api
+      - all
+      - --http.corsdomain
+      - "*"
+      - --builder.gaslimit
+      - "3000000000"
+      - --faucet.enabled
+      - --faucet.private-key
+      - ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - --faucet.amount
+      - "1000000000000000"
+      - --faucet.node-address
+      - http://127.0.0.1:8545
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000000"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000001"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000002"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000003"
+    ports: ["127.0.0.1:${E2E_TEMPO_RPC_PORT:-28546}:8545"]
+    cpus: "0.75"
+    stop_grace_period: 1s
+    restart: "no"

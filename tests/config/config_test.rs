@@ -198,6 +198,7 @@ fn top_level_storage_and_cache_support_external_provider_refs() {
         contract: "0x0000000000000000000000000000000000001001".to_owned(),
         symbol: "USDC".to_owned(),
         decimals: 6,
+        fee_payer: None,
     }];
     config.agentvault.chains.insert(
         "eip155:8453".to_owned(),
@@ -316,6 +317,7 @@ fn payer_and_payee_adapters_are_enabled_independently() {
         contract: "0x0000000000000000000000000000000000001001".to_owned(),
         symbol: "USDC".to_owned(),
         decimals: 6,
+        fee_payer: None,
     }];
     config.agentvault.chains.insert(
         "eip155:8453".to_owned(),
@@ -338,15 +340,29 @@ fn payer_and_payee_adapters_are_enabled_independently() {
 }
 
 #[test]
-fn rejects_unimplemented_mpp_payer_at_startup() {
+fn accepts_implemented_mpp_tempo_payer_at_startup() {
     let mut config = AppConfig::default();
     config.agentvault.payer.enabled = true;
     config.agentvault.payer.mpp.enabled = true;
+    config.agentvault.payer.mpp.assets = vec![MppAssetConfig {
+        network: "eip155:42431".to_owned(),
+        currency: "0x0000000000000000000000000000000000001002".to_owned(),
+        symbol: "USDC".to_owned(),
+        token_contract: Some("0x0000000000000000000000000000000000001002".to_owned()),
+        decimals: 6,
+    }];
+    config.agentvault.chains.insert(
+        "eip155:42431".to_owned(),
+        ChainConfig {
+            rpc: ChainRpcConfig {
+                endpoint: "https://rpc.moderato.tempo.xyz/".to_owned(),
+                ..ChainRpcConfig::default()
+            },
+            ..ChainConfig::default()
+        },
+    );
 
-    assert!(matches!(
-        config.validate_agentvault(),
-        Err(Error::Config(message)) if message.contains("payer.mpp") && message.contains("signing")
-    ));
+    config.validate_agentvault().unwrap();
 }
 
 #[test]
@@ -366,6 +382,47 @@ fn shared_chain_registry_accepts_non_evm_families_without_enabling_unsupported_p
     );
 
     config.validate_agentvault().unwrap();
+}
+
+#[test]
+fn enabled_x402_solana_requires_a_matching_chain_and_fee_payer() {
+    let network = "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ";
+    let mut config = AppConfig::default();
+    config.agentvault.payer.enabled = true;
+    config.agentvault.payer.x402.enabled = true;
+    config.agentvault.payer.x402.assets = vec![X402AssetConfig {
+        network: network.to_owned(),
+        contract: "So11111111111111111111111111111111111111112".to_owned(),
+        symbol: "USDC".to_owned(),
+        decimals: 6,
+        fee_payer: Some("Vote111111111111111111111111111111111111111".to_owned()),
+    }];
+    config.agentvault.chains.insert(
+        network.to_owned(),
+        ChainConfig {
+            family: ChainFamily::Solana,
+            rpc: ChainRpcConfig {
+                endpoint: "https://solana-rpc.example/".to_owned(),
+                ..ChainRpcConfig::default()
+            },
+            ..ChainConfig::default()
+        },
+    );
+    config.validate_agentvault().unwrap();
+
+    let mut missing_fee_payer = config.clone();
+    missing_fee_payer.agentvault.payer.x402.assets[0].fee_payer = None;
+    assert!(matches!(
+        missing_fee_payer.validate_agentvault(),
+        Err(Error::Config(message)) if message.contains("x402 USDC asset")
+    ));
+
+    let mut wrong_family = config;
+    wrong_family.agentvault.chains.get_mut(network).unwrap().family = ChainFamily::Evm;
+    assert!(matches!(
+        wrong_family.validate_agentvault(),
+        Err(Error::Config(message)) if message.contains("chain family")
+    ));
 }
 
 #[test]

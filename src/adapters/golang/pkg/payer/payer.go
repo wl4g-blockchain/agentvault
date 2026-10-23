@@ -1,25 +1,75 @@
 package payer
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
+	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/protocol"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/transport"
 )
 
 // PayerMiddleware owns the transport-neutral 402, approval, credential, and
 // settlement-evidence state machine.
 type PayerMiddleware struct {
-	api    *transport.Client
-	config config.PayerConfig
+	api       *transport.Client
+	config    config.PayerConfig
+	protocols *protocol.Registry
+}
+
+func (m *PayerMiddleware) decodeMCPMessage(body []byte) (map[string]any, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var message map[string]any
+	if err := decoder.Decode(&message); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return message, true
+}
+
+func (m *PayerMiddleware) mcpCall(body []byte) (map[string]any, bool) {
+	message, ok := m.decodeMCPMessage(body)
+	if !ok || message["jsonrpc"] != "2.0" || message["method"] != "tools/call" {
+		return nil, false
+	}
+	if _, ok := message["params"].(map[string]any); !ok {
+		return nil, false
+	}
+	switch message["id"].(type) {
+	case string, json.Number:
+		return message, true
+	default:
+		return nil, false
+	}
+}
+
+func (m *PayerMiddleware) boundMCPResponse(body []byte, expectedID any, requireResult bool) (map[string]any, bool) {
+	message, ok := m.decodeMCPMessage(body)
+	if !ok || message["jsonrpc"] != "2.0" || !reflect.DeepEqual(message["id"], expectedID) {
+		return nil, false
+	}
+	if requireResult {
+		if _, ok := message["result"].(map[string]any); !ok {
+			return nil, false
+		}
+	}
+	return message, true
 }
 
 func NewPayerMiddleware(wire transport.Transport, settings config.PayerConfig) (*PayerMiddleware, error) {
@@ -30,7 +80,11 @@ func NewPayerMiddleware(wire transport.Transport, settings config.PayerConfig) (
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	return &PayerMiddleware{api: transport.NewClient(wire), config: settings}, nil
+	protocols, err := protocol.NewPaymentProtocolFactory().Create(settings.Protocols)
+	if err != nil {
+		return nil, err
+	}
+	return &PayerMiddleware{api: transport.NewClient(wire), config: settings, protocols: protocols}, nil
 }
 
 func (middleware *PayerMiddleware) Standard(client *http.Client) *StandardPayerMiddleware {
@@ -58,6 +112,11 @@ func (m *PayerMiddleware) Authorize(ctx context.Context, request model.PayerHTTP
 		return nil, errors.New("payment challenge is oversized or not UTF-8")
 	}
 	protocolHint := header(response.Headers, "payment-protocol")
+	if protocolHint != "" {
+		if _, err := m.protocols.Get(protocolHint); err != nil {
+			return nil, err
+		}
+	}
 	contextValue, err := model.NewOperationContext(m.config.ScenarioID, operation.RunID)
 	if err != nil {
 		return nil, err
@@ -84,6 +143,9 @@ func (m *PayerMiddleware) Authorize(ctx context.Context, request model.PayerHTTP
 		}
 		credential := *authorization.Credential
 		intent := authorization.Intent
+		if _, err := m.protocols.Get(intent.Protocol); err != nil {
+			return nil, err
+		}
 		if intent.ID == "" || intent.ScenarioID != m.config.ScenarioID || intent.RunID != operation.RunID ||
 			intent.WalletID == nil || *intent.WalletID == "" || intent.PolicyID == "" ||
 			intent.Direction != model.PaymentDirectionOutbound ||
@@ -97,14 +159,157 @@ func (m *PayerMiddleware) Authorize(ctx context.Context, request model.PayerHTTP
 	}
 }
 
-func (m *PayerMiddleware) Report(ctx context.Context, operation model.PayerRequestContext, payment *model.AuthorizedPayment, response model.PayerHTTPResponse) error {
-	if payment.Credential.Protocol != "x402" {
-		return nil
+// AuthorizeMCP recognizes one official x402/MPP message-level challenge and
+// reuses the same Vault authorization state machine as HTTP 402.
+func (m *PayerMiddleware) AuthorizeMCP(
+	ctx context.Context,
+	request model.PayerHTTPRequest,
+	response model.PayerHTTPResponse,
+	operation model.PayerRequestContext,
+) (*model.AuthorizedPayment, error) {
+	if int64(len(response.Body)) > m.config.MaxChallengeBytes {
+		return nil, errors.New("MCP payment challenge exceeds configured limit")
 	}
-	value := header(response.Headers, "payment-response")
-	if value == "" {
+	requestMessage, ok := m.mcpCall(request.Body)
+	if !ok {
+		return nil, nil
+	}
+	message, ok := m.boundMCPResponse(response.Body, requestMessage["id"], false)
+	if !ok {
+		return nil, nil
+	}
+	adapter, challenge, err := m.protocols.MCPChallenge(message, m.config.MaxChallengeBytes)
+	if err != nil || challenge == nil {
+		return nil, err
+	}
+	if header(response.Headers, "payment-required") != "" {
+		return nil, errors.New("MCP payment challenge must not also declare PAYMENT-REQUIRED")
+	}
+	if advertised := header(response.Headers, "payment-protocol"); advertised != "" &&
+		!strings.EqualFold(advertised, adapter.Name()) {
+		return nil, errors.New("MCP payment challenge protocol metadata conflicts with its JSON-RPC payload")
+	}
+	headers := make(map[string]string, len(challenge.Headers)+2)
+	for name, value := range challenge.Headers {
+		headers[name] = value
+	}
+	headers["payment-protocol"] = adapter.Name()
+	if expiresAt := header(response.Headers, "payment-expires-at"); expiresAt != "" {
+		headers["payment-expires-at"] = expiresAt
+	}
+	if challenge.ContentType != "" {
+		headers["content-type"] = challenge.ContentType
+	}
+	return m.Authorize(ctx, request, model.PayerHTTPResponse{
+		Status: http.StatusPaymentRequired, Headers: headers, Body: challenge.Body,
+	}, operation)
+}
+
+// MCPCredential inserts a Vault-issued protocol credential into one replayable
+// JSON-RPC tools/call request while preserving unrelated metadata.
+func (m *PayerMiddleware) MCPCredential(payment *model.AuthorizedPayment, request []byte) ([]byte, error) {
+	if payment == nil || payment.Intent.Protocol != payment.Credential.Protocol {
+		return nil, errors.New("outbound payment protocol binding is invalid")
+	}
+	adapter, err := m.protocols.MCP(payment.Credential.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := adapter.MCPCredential(payment.Credential)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(request))
+	decoder.UseNumber()
+	var message map[string]any
+	if err := decoder.Decode(&message); err != nil || message["jsonrpc"] != "2.0" || message["method"] != "tools/call" {
+		return nil, errors.New("message-level payment is limited to MCP tools/call")
+	}
+	switch message["id"].(type) {
+	case string, json.Number:
+	default:
+		return nil, errors.New("message-level payment is limited to MCP tools/call")
+	}
+	params, ok := message["params"].(map[string]any)
+	if !ok {
+		return nil, errors.New("MCP tools/call params must be an object")
+	}
+	if raw, exists := message["_meta"]; exists {
+		rootMeta, ok := raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("JSON-RPC root _meta must be an object")
+		}
+		for _, key := range m.protocols.MCPRootRequestMetadataKeys() {
+			if _, exists := rootMeta[key]; exists {
+				return nil, errors.New("MCP request already contains root payment credential metadata")
+			}
+		}
+	}
+	meta, exists := params["_meta"].(map[string]any)
+	if params["_meta"] != nil && !exists {
+		return nil, errors.New("MCP params._meta must be an object")
+	}
+	if meta == nil {
+		meta = make(map[string]any)
+		params["_meta"] = meta
+	}
+	if protocolName, existing, err := m.protocols.PresentedMCPCredential(meta, m.config.MaxChallengeBytes); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return nil, fmt.Errorf("MCP request already contains %s payment credential metadata", protocolName)
+	}
+	if _, exists := meta[metadata.Key]; exists {
+		return nil, errors.New("MCP request already contains payment credential metadata")
+	}
+	meta[metadata.Key] = metadata.Value
+	return json.Marshal(message)
+}
+
+func (m *PayerMiddleware) Report(ctx context.Context, operation model.PayerRequestContext, payment *model.AuthorizedPayment, response model.PayerHTTPResponse) error {
+	if payment == nil || payment.Intent.Protocol != payment.Credential.Protocol {
+		return errors.New("outbound payment protocol binding is invalid")
+	}
+	adapter, err := m.protocols.Get(payment.Credential.Protocol)
+	if err != nil {
+		return err
+	}
+	protocolName, evidence, err := m.protocols.MerchantEvidence(response.Headers)
+	if err != nil {
+		return err
+	}
+	if evidence != nil && protocolName != adapter.Name() {
+		return errors.New("HTTP settlement receipt protocol does not match the paid credential")
+	}
+	var mcpEvidence *protocol.MerchantEvidence
+	if len(response.Body) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(response.Body))
+		decoder.UseNumber()
+		var message map[string]any
+		if err := decoder.Decode(&message); err == nil {
+			meta := any(map[string]any{})
+			if result, ok := message["result"].(map[string]any); ok && result["_meta"] != nil {
+				meta = result["_meta"]
+			}
+			protocolName, value, err := m.protocols.MCPMerchantEvidence(meta, m.config.MaxChallengeBytes)
+			if err != nil {
+				return err
+			}
+			if value != nil && protocolName != adapter.Name() {
+				return errors.New("MCP settlement receipt protocol does not match the paid credential")
+			}
+			mcpEvidence = value
+		}
+	}
+	if evidence != nil && mcpEvidence != nil &&
+		(evidence.HeaderName != mcpEvidence.HeaderName || evidence.HeaderValue != mcpEvidence.HeaderValue) {
+		return errors.New("HTTP and MCP settlement evidence conflict")
+	}
+	if evidence == nil {
+		evidence = mcpEvidence
+	}
+	if evidence == nil {
 		if response.Status >= 200 && response.Status < 300 {
-			return errors.New("successful x402 response has no PAYMENT-RESPONSE settlement hint; payment remains reserved")
+			return fmt.Errorf("successful %s response has no settlement evidence; payment remains reserved", adapter.Name())
 		}
 		return nil
 	}
@@ -114,16 +319,58 @@ func (m *PayerMiddleware) Report(ctx context.Context, operation model.PayerReque
 	}
 	_, err = m.reportOutboundResponse(ctx, payment.Intent.ID, model.ReportOutboundResponseRequest{
 		OperationContext: operationContext,
-		PaymentResponse:  value,
+		Protocol:         adapter.Name(),
+		Evidence: &model.ProtocolEvidence{
+			HeaderName: evidence.HeaderName, HeaderValue: evidence.HeaderValue,
+		},
 	})
 	return err
+}
+
+// Deliver owns the bounded paid-request retry state machine. Framework
+// adapters only create replayable requests and expose their response shape.
+func (m *PayerMiddleware) Deliver(
+	ctx context.Context,
+	operation model.PayerRequestContext,
+	payment *model.AuthorizedPayment,
+	send func(attemptNo int) (model.PayerHTTPResponse, error),
+	discard func(),
+) error {
+	if send == nil || discard == nil {
+		return errors.New("payer delivery callbacks are not configured")
+	}
+	for attempt := 0; attempt <= m.config.DeliveryRetries; attempt++ {
+		slog.Info("payer middleware is delivering signed request",
+			"event.name", "agentvault.sdk.payer.retrying", "run.id", operation.RunID,
+			"attempt.no", attempt+1, "payment.intent_id", payment.Intent.ID)
+		response, err := send(attempt + 1)
+		if err != nil {
+			return err
+		}
+		if err := m.Report(ctx, operation, payment, response); err != nil {
+			discard()
+			return err
+		}
+		if response.Status != http.StatusServiceUnavailable || attempt == m.config.DeliveryRetries {
+			return nil
+		}
+		discard()
+	}
+	return errors.New("payer retry loop ended unexpectedly")
 }
 
 func (m *PayerMiddleware) CredentialHeader(payment *model.AuthorizedPayment, origin string, existing map[string]string) (string, string, error) {
 	if payment == nil || payment.Credential.HTTP == nil {
 		return "", "", errors.New("Vault credential has no HTTP delivery material")
 	}
-	delivery := payment.Credential.HTTP
+	adapter, err := m.protocols.Get(payment.Credential.Protocol)
+	if err != nil {
+		return "", "", err
+	}
+	delivery, err := adapter.Credential(payment.Credential)
+	if err != nil {
+		return "", "", err
+	}
 	if !strings.EqualFold(delivery.BoundOrigin, origin) || !validHeaderName(delivery.HeaderName) ||
 		strings.ContainsAny(delivery.HeaderValue, "\r\n") || reservedHeader(delivery.HeaderName) ||
 		header(existing, delivery.HeaderName) != "" {
@@ -273,7 +520,7 @@ func validHeaderName(name string) bool {
 
 func reservedHeader(name string) bool {
 	for _, reserved := range []string{
-		"host", "content-length", "authorization", "connection", "transfer-encoding", "upgrade",
+		"host", "content-length", "connection", "transfer-encoding", "upgrade",
 		"proxy-authorization", "proxy-authenticate", "te", "trailer", "accept", "content-type",
 	} {
 		if strings.EqualFold(name, reserved) {

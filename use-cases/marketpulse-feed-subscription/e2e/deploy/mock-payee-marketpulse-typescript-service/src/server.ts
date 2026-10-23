@@ -2,10 +2,8 @@ import {
   AgentVault,
   ExpressPayeeMiddleware,
   GrpcConfig,
-  GrpcVaultTransport,
   MqttConfig,
-  MqttVaultTransport,
-  type VaultTransport,
+  type VaultTransportConfig,
   mcpToolRoute,
 } from '@agentvault/sdk';
 import express, { type Express } from 'express';
@@ -19,14 +17,15 @@ export class MarketPulseServer {
   private constructor(
     readonly application: Express,
     private readonly storage: FeedSQLiteStorage,
+    private readonly vault: AgentVault,
     private readonly host: string,
     private readonly port: number,
   ) {}
 
   static fromEnvironment(): MarketPulseServer {
     const [host, port] = parseBind(required('MARKETPULSE_BIND'));
-    const transport = payeeTransport();
-    const payee = new AgentVault(transport).payee();
+    const vault = payeeVault();
+    const payee = vault.payee();
     const middleware: ExpressPayeeMiddleware = payee.express([mcpToolRoute(
       '/mcp',
       'marketpulse.realtime_news',
@@ -45,7 +44,7 @@ export class MarketPulseServer {
     application.use(...middleware.handlers());
     new FeedRouter(handler).register(application);
     application.post('/mcp', handler.mcp);
-    return new MarketPulseServer(application, storage, host, port);
+    return new MarketPulseServer(application, storage, vault, host, port);
   }
 
   run(): HttpServer {
@@ -54,8 +53,12 @@ export class MarketPulseServer {
     });
   }
 
-  close(): void {
-    this.storage.close();
+  async close(): Promise<void> {
+    try {
+      await this.vault.close();
+    } finally {
+      this.storage.close();
+    }
   }
 }
 
@@ -76,10 +79,11 @@ export function parseBind(bind: string): readonly [string, number] {
   return [host, port] as const;
 }
 
-function payeeTransport(): VaultTransport {
+function payeeVault(): AgentVault {
   const transport = (process.env.AGENTVAULT_TRANSPORT ?? 'mqtt').trim().toLowerCase();
+  let config: VaultTransportConfig;
   if (transport === 'mqtt') {
-    return new MqttVaultTransport(new MqttConfig(
+    config = { provider: 'mqtt', mqtt: new MqttConfig(
       required('AGENTVAULT_MQTT_HOST'),
       Number(required('AGENTVAULT_MQTT_PORT')),
       boolean('AGENTVAULT_MQTT_TLS'),
@@ -88,17 +92,18 @@ function payeeTransport(): VaultTransport {
       'marketpulse-typescript',
       required('AGENTVAULT_MQTT_CLIENT_ID'),
       Number(required('AGENTVAULT_MQTT_TIMEOUT_SECONDS')) * 1_000,
-    ));
-  }
-  if (transport === 'grpc') {
-    return new GrpcVaultTransport(new GrpcConfig(
+    ) };
+  } else if (transport === 'grpc') {
+    config = { provider: 'grpc', grpc: new GrpcConfig(
       required('AGENTVAULT_GRPC_ENDPOINT'),
       boolean('AGENTVAULT_GRPC_TLS'),
       undefined,
       Number(required('AGENTVAULT_GRPC_TIMEOUT_SECONDS')) * 1_000,
-    ));
+    ) };
+  } else {
+    throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
   }
-  throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
+  return AgentVault.fromConfig(config);
 }
 
 function boolean(name: string): boolean {

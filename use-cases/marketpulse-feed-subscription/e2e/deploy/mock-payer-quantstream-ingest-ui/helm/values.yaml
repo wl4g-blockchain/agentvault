@@ -4,9 +4,9 @@ workload:
   backoffLimit: 0
   restartPolicy: Always
 image:
-  repository: "quantstream-admin-ui-e2e"
+  repository: "localhost/quantstream-admin-ui-e2e"
   tag: "local"
-  pullPolicy: IfNotPresent
+  pullPolicy: Never
 command: []
 args: []
 env:
@@ -15,9 +15,10 @@ env:
   QUANTSTREAM_CLIENT_ID: "client-quantstream-rust"
   QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-rust-market-ingestion"
   QUANTSTREAM_APPROVER_PRINCIPAL: "principal-quantstream-rust-admin"
-  AGENTVAULT_MQTT_URL: "mqtt://emqx:1883"
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: "15"
+  AGENTVAULT_MQTT_URL: "mqtt://127.0.0.1:1883"
   AGENTVAULT_MQTT_APPROVER_USERNAME: "quantstream-rust-approver"
-  AGENTVAULT_URL: "http://agentvault-e2e:8080/api/v1"
+  AGENTVAULT_URL: "http://127.0.0.1:8080/api/v1"
 secret:
   name: marketpulse-e2e-secrets
   env:
@@ -46,3 +47,22 @@ persistence:
 resources:
   requests: { cpu: 20m, memory: 32Mi }
   limits: { cpu: 1000m, memory: 512Mi }
+
+extraContainers:
+  - name: loopback-bridge
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+    imagePullPolicy: IfNotPresent
+    args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: [ALL] }
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+    volumeMounts:
+      - { name: loopback-bridge-config, mountPath: /etc/envoy, readOnly: true }
+
+extraVolumes:
+  - name: loopback-bridge-config
+    configMap: { name: loopback-bridge }

@@ -5,10 +5,8 @@ import io.agentvault.e2e.storage.FeedSQLiteStorage;
 import io.agentvault.sdk.AgentVault;
 import io.agentvault.sdk.config.Config.GrpcConfig;
 import io.agentvault.sdk.config.Config.MqttConfig;
+import io.agentvault.sdk.config.Config.VaultTransportConfig;
 import io.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
-import io.agentvault.sdk.transport.GrpcVaultTransport;
-import io.agentvault.sdk.transport.MqttVaultTransport;
-import io.agentvault.sdk.transport.VaultTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.util.List;
@@ -35,8 +33,8 @@ public class MarketPulseServer {
     }
 
     @Bean
-    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(VaultTransport transport) {
-        var payee = new AgentVault(transport).payee();
+    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(AgentVault vault) {
+        var payee = vault.payee();
         var route = SpringInterceptorPayeeMiddleware.Route.mcpTool(
                 "/mcp",
                 "marketpulse.realtime_news",
@@ -51,10 +49,10 @@ public class MarketPulseServer {
     }
 
     @Bean(destroyMethod = "close")
-    VaultTransport payeeTransport() {
+    AgentVault payeeVault() {
         String transport = System.getenv().getOrDefault("AGENTVAULT_TRANSPORT", "mqtt").trim().toLowerCase();
         if ("mqtt".equals(transport)) {
-            return new MqttVaultTransport(new MqttConfig(
+            return AgentVault.fromConfig(VaultTransportConfig.mqtt(new MqttConfig(
                     required("AGENTVAULT_MQTT_HOST"),
                     integer("AGENTVAULT_MQTT_PORT"),
                     bool("AGENTVAULT_MQTT_TLS"),
@@ -63,15 +61,15 @@ public class MarketPulseServer {
                     "marketpulse-java",
                     required("AGENTVAULT_MQTT_CLIENT_ID"),
                     Duration.ofSeconds(integer("AGENTVAULT_MQTT_TIMEOUT_SECONDS")),
-                    2 * 1024 * 1024));
+                    2 * 1024 * 1024)));
         }
         if ("grpc".equals(transport)) {
-            return new GrpcVaultTransport(new GrpcConfig(
+            return AgentVault.fromConfig(VaultTransportConfig.grpc(new GrpcConfig(
                     required("AGENTVAULT_GRPC_ENDPOINT"),
                     bool("AGENTVAULT_GRPC_TLS"),
                     null,
                     Duration.ofSeconds(integer("AGENTVAULT_GRPC_TIMEOUT_SECONDS")),
-                    2 * 1024 * 1024));
+                    2 * 1024 * 1024)));
         }
         throw new IllegalStateException("AGENTVAULT_TRANSPORT must be mqtt or grpc");
     }

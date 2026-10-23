@@ -14,6 +14,7 @@ interface WireResponse {
 
 export class GrpcVaultTransport implements VaultTransport {
   private readonly client: grpc.Client;
+  private closed = false;
 
   constructor(public readonly config: GrpcConfig) {
     const credentials = config.tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
@@ -97,7 +98,9 @@ export class GrpcVaultTransport implements VaultTransport {
   }
 
   close(): void {
+    if (this.closed) return;
     this.client.close();
+    this.closed = true;
   }
 }
 

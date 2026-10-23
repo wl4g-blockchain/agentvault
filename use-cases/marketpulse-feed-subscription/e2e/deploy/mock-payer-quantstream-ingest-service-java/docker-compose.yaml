@@ -10,7 +10,7 @@ services:
         HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
         NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
         E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     command: ["--once"]
     environment:
       MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}

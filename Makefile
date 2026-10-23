@@ -50,7 +50,7 @@ ifeq ($(IMAGE_SOURCE),aliyun)
 BUILDER_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm
 RUNTIME_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-runtime:nonroot
 else
-BUILDER_IMAGE ?= docker.io/library/rust:1.91.1-bookworm
+BUILDER_IMAGE ?= docker.io/library/rust:1.95.0-bookworm
 RUNTIME_IMAGE ?= gcr.io/distroless/cc-debian12:nonroot
 endif
 

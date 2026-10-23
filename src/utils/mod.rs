@@ -6,6 +6,7 @@ mod error;
 pub(crate) mod runtime_identity;
 pub(crate) mod secret;
 pub mod secure_material;
+pub(crate) mod solana_rpc;
 
 pub use error::{Error, Result};
 

@@ -5,6 +5,17 @@ import re
 from dataclasses import dataclass
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_PROTOCOL = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+class _ProtocolNames:
+    @staticmethod
+    def validate(protocols: tuple[str, ...]) -> None:
+        if (
+            not protocols or len(set(protocols)) != len(protocols)
+            or any(not isinstance(protocol, str) or not _PROTOCOL.fullmatch(protocol) for protocol in protocols)
+        ):
+            raise ValueError("payment protocols must be unique safe lowercase names")
 
 
 def _loopback(host: str) -> bool:
@@ -23,6 +34,7 @@ class PayerConfig:
     approval_poll_interval: float = 1.0
     delivery_retries: int = 0
     max_challenge_bytes: int = 256 * 1024
+    protocols: tuple[str, ...] = ("x402", "mpp")
 
     def __post_init__(self) -> None:
         if not isinstance(self.scenario_id, str) or not self.scenario_id.strip():
@@ -34,15 +46,21 @@ class PayerConfig:
             or self.max_challenge_bytes <= 0
         ):
             raise ValueError("payer middleware retry, timeout, or challenge limits are invalid")
+        self._validate_protocols()
+
+    def _validate_protocols(self) -> None:
+        _ProtocolNames.validate(self.protocols)
 
 
 @dataclass(frozen=True)
 class PayeeConfig:
     max_body_bytes: int = 1024 * 1024
+    protocols: tuple[str, ...] = ("x402", "mpp")
 
     def __post_init__(self) -> None:
         if self.max_body_bytes <= 0:
             raise ValueError("payee middleware body limit must be positive")
+        _ProtocolNames.validate(self.protocols)
 
 
 @dataclass(frozen=True, repr=False)
@@ -99,3 +117,20 @@ class MqttConfig:
             f"username=<redacted>, password=<redacted>, connection_prefix={self.connection_prefix!r}, "
             f"vault_client_id={self.vault_client_id!r})"
         )
+
+
+@dataclass(frozen=True)
+class VaultTransportConfig:
+    provider: str
+    grpc: GrpcConfig | None = None
+    mqtt: MqttConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.provider == "grpc":
+            valid = self.grpc is not None and self.mqtt is None
+        elif self.provider == "mqtt":
+            valid = self.mqtt is not None and self.grpc is None
+        else:
+            valid = False
+        if not valid:
+            raise ValueError("transport provider requires exactly one matching configuration block")

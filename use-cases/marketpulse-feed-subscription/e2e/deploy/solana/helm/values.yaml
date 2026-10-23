@@ -39,6 +39,5 @@ persistence:
   enabled: true
   mountPath: "/tmp/solana-ledger"
 resources:
-  requests: { cpu: 20m, memory: 32Mi }
-  limits: { cpu: 1000m, memory: 512Mi }
-
+  requests: { cpu: 100m, memory: 512Mi }
+  limits: { cpu: 750m, memory: 2Gi }

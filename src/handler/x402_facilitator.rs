@@ -6,26 +6,36 @@
 //! `paymentRequirements`; a facilitator response cannot change the asset,
 //! amount, network, or recipient that is posted to the ledger.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, str::FromStr as _};
 
 use async_trait::async_trait;
 use reqwest::{header::HeaderMap, StatusCode};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
+use solana_signature::Signature as SolanaSignature;
 use x402_chain_eip155::{
     chain::AssetTransferMethod,
     v2_eip155_exact::{
         ExactEvmPayload, PaymentPayload as OfficialPaymentPayload, PaymentRequirements as OfficialPaymentRequirements,
     },
 };
+use x402_chain_solana::{
+    chain::SolanaChainReference,
+    v2_solana_exact::{
+        PaymentPayload as OfficialSolanaPaymentPayload, PaymentRequirements as OfficialSolanaPaymentRequirements,
+    },
+};
+use x402_types::chain::ChainId;
 use x402_types::proto::v2::{
     SettleResponse as OfficialSettleResponse, VerifyRequest as OfficialVerifyRequest,
     VerifyResponse as OfficialVerifyResponse, X402Version2,
 };
 
 use crate::{
-    model::{canonicalize_payment_recipient, Amount, AssetIdentity},
-    protocol::x402::{validate_payment_payload_wire, X402Asset},
+    model::{canonicalize_payment_recipient, payment_recipients_match, Amount, AssetIdentity},
+    protocol::x402::{
+        solana_payment_payer, validate_evm_payment_payload_wire, validate_solana_payment_payload_wire, X402Asset,
+    },
     Error, Result,
 };
 
@@ -58,7 +68,8 @@ impl X402FacilitatorProvider {
     /// # Errors
     ///
     /// Returns an error for unsafe HTTP configuration, an empty/ambiguous
-    /// registry, or an asset outside the supported v2 EVM USDC exact profile.
+    /// registry, or an asset outside the supported v2 EVM/Solana USDC exact
+    /// profiles.
     pub fn new(config: &SettlementProviderConfig, headers: HeaderMap, assets: Vec<X402Asset>) -> Result<Self> {
         if assets.is_empty() {
             return Err(Error::Config("x402 facilitator asset registry is empty".to_owned()));
@@ -67,15 +78,16 @@ impl X402FacilitatorProvider {
         for asset in assets {
             let contract = canonicalize_payment_recipient(&asset.network, &asset.contract)
                 .map_err(|_| Error::Config("x402 facilitator asset contract is invalid".to_owned()))?;
-            if !is_evm_network(&asset.network)
+            if !(is_evm_network(&asset.network) || is_solana_network(&asset.network))
                 || !asset.symbol.eq_ignore_ascii_case("USDC")
                 || asset.decimals != 6
                 || trusted.iter().any(|prior: &TrustedAsset| {
-                    prior.network == asset.network && prior.contract.eq_ignore_ascii_case(&contract)
+                    prior.network == asset.network
+                        && payment_recipients_match(&asset.network, &prior.contract, &contract)
                 })
             {
                 return Err(Error::Config(
-                    "x402 facilitator assets must be unique EVM USDC registrations".to_owned(),
+                    "x402 facilitator assets must be unique EVM or Solana USDC registrations".to_owned(),
                 ));
             }
             trusted.push(TrustedAsset {
@@ -97,6 +109,23 @@ impl X402FacilitatorProvider {
                 "x402 facilitator received a non-x402 provider request".to_owned(),
             ));
         }
+        let network = request
+            .payment_requirements
+            .get("network")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::Settlement("x402 paymentRequirements network is missing".to_owned()))?;
+        if is_evm_network(network) {
+            return self.validate_evm_request(request);
+        }
+        if is_solana_network(network) {
+            return self.validate_solana_request(request);
+        }
+        Err(Error::Settlement(
+            "x402 facilitator received an unsupported payment network".to_owned(),
+        ))
+    }
+
+    fn validate_evm_request(&self, request: &SettlementProviderRequest) -> Result<ValidatedPayment> {
         let requirements: OfficialPaymentRequirements = serde_json::from_value(request.payment_requirements.clone())
             .map_err(|error| Error::Settlement(format!("invalid x402 paymentRequirements: {error}")))?;
         let network = requirements.network.to_string();
@@ -113,11 +142,7 @@ impl X402FacilitatorProvider {
         }
         let contract = canonicalize_payment_recipient(&network, &requirements.asset.to_string())
             .map_err(|_| Error::Settlement("x402 paymentRequirements asset is invalid".to_owned()))?;
-        let registered = self
-            .assets
-            .iter()
-            .find(|asset| asset.network == network && asset.contract.eq_ignore_ascii_case(&contract))
-            .ok_or_else(|| Error::Settlement("x402 paymentRequirements asset is not registered".to_owned()))?;
+        let registered = self.trusted_asset(&network, &contract)?;
         let amount = Amount::new(
             u128::try_from(requirements.amount.0)
                 .map_err(|_| Error::Settlement("x402 paymentRequirements amount is invalid".to_owned()))?,
@@ -129,7 +154,7 @@ impl X402FacilitatorProvider {
         }
         let recipient = canonicalize_payment_recipient(&network, &requirements.pay_to.to_string())
             .map_err(|_| Error::Settlement("x402 paymentRequirements payTo is invalid".to_owned()))?;
-        validate_payment_payload_wire(&request.payment_payload)?;
+        validate_evm_payment_payload_wire(&request.payment_payload)?;
         let payment_payload: OfficialPaymentPayload = serde_json::from_value(request.payment_payload.clone())
             .map_err(|error| Error::Settlement(format!("invalid x402 paymentPayload: {error}")))?;
         if payment_payload.accepted != requirements {
@@ -174,6 +199,59 @@ impl X402FacilitatorProvider {
             payment_payload: request.payment_payload.clone(),
             payment_requirements: request.payment_requirements.clone(),
         })
+    }
+
+    fn validate_solana_request(&self, request: &SettlementProviderRequest) -> Result<ValidatedPayment> {
+        let requirements: OfficialSolanaPaymentRequirements =
+            serde_json::from_value(request.payment_requirements.clone())
+                .map_err(|error| Error::Settlement(format!("invalid x402 Solana paymentRequirements: {error}")))?;
+        let network = requirements.network.to_string();
+        if requirements.scheme.as_ref() != EXACT_SCHEME || !is_solana_network(&network) {
+            return Err(Error::Settlement(
+                "x402 facilitator supports only v2 Solana exact requirements".to_owned(),
+            ));
+        }
+        let contract = canonicalize_payment_recipient(&network, &requirements.asset.to_string())
+            .map_err(|_| Error::Settlement("x402 Solana paymentRequirements asset is invalid".to_owned()))?;
+        let registered = self.trusted_asset(&network, &contract)?;
+        let amount = Amount::new(u128::from(requirements.amount.inner()));
+        if amount.is_zero() || requirements.max_timeout_seconds == 0 {
+            return Err(Error::Settlement(
+                "x402 Solana paymentRequirements amount or timeout is invalid".to_owned(),
+            ));
+        }
+        let recipient = canonicalize_payment_recipient(&network, &requirements.pay_to.to_string())
+            .map_err(|_| Error::Settlement("x402 Solana paymentRequirements payTo is invalid".to_owned()))?;
+        validate_solana_payment_payload_wire(&request.payment_payload)?;
+        let payment_payload: OfficialSolanaPaymentPayload = serde_json::from_value(request.payment_payload.clone())
+            .map_err(|error| Error::Settlement(format!("invalid x402 Solana paymentPayload: {error}")))?;
+        if payment_payload.accepted != requirements {
+            return Err(Error::Settlement(
+                "x402 Solana paymentPayload does not bind the supplied paymentRequirements".to_owned(),
+            ));
+        }
+        let payer = canonicalize_payment_recipient(&network, &solana_payment_payer(&request.payment_payload)?)
+            .map_err(|_| Error::Settlement("x402 Solana paymentPayload payer is invalid".to_owned()))?;
+        Ok(ValidatedPayment {
+            asset: AssetIdentity {
+                network: registered.network.clone(),
+                asset: registered.symbol.clone(),
+                token_contract: Some(registered.contract.clone()),
+                decimals: registered.decimals,
+            },
+            amount,
+            recipient,
+            payer,
+            payment_payload: request.payment_payload.clone(),
+            payment_requirements: request.payment_requirements.clone(),
+        })
+    }
+
+    fn trusted_asset(&self, network: &str, contract: &str) -> Result<&TrustedAsset> {
+        self.assets
+            .iter()
+            .find(|asset| asset.network == network && payment_recipients_match(network, &asset.contract, contract))
+            .ok_or_else(|| Error::Settlement("x402 paymentRequirements asset is not registered".to_owned()))
     }
 
     async fn call(
@@ -253,7 +331,9 @@ impl X402FacilitatorProvider {
                 transaction,
                 network,
             } => {
-                if network != payment.asset.network || !valid_evm_transaction(&transaction) {
+                if network != payment.asset.network
+                    || !valid_settlement_transaction(&payment.asset.network, &transaction)
+                {
                     return Err(Error::Settlement(
                         "x402 /settle success response conflicts with paymentRequirements".to_owned(),
                     ));
@@ -397,8 +477,20 @@ fn is_evm_network(network: &str) -> bool {
         .is_some_and(|chain| !chain.is_empty() && chain.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn valid_evm_transaction(value: &str) -> bool {
-    valid_fixed_hex(value, 32)
+fn is_solana_network(network: &str) -> bool {
+    network
+        .parse::<ChainId>()
+        .ok()
+        .and_then(|chain| SolanaChainReference::try_from(chain).ok())
+        .is_some()
+}
+
+fn valid_settlement_transaction(network: &str, value: &str) -> bool {
+    if is_evm_network(network) {
+        return valid_fixed_hex(value, 32);
+    }
+    is_solana_network(network)
+        && SolanaSignature::from_str(value).is_ok_and(|signature| signature != SolanaSignature::default())
 }
 
 fn valid_fixed_hex(value: &str, bytes: usize) -> bool {
@@ -411,7 +503,11 @@ fn stable_effect_ref(asset: &AssetIdentity, amount: Amount, recipient: &str, tra
     let mut hash = Sha256::new();
     hash.update(b"agentvault.x402.exact.effect.v1");
     let amount = amount.to_string();
-    let transaction = transaction.to_ascii_lowercase();
+    let transaction = if is_evm_network(&asset.network) {
+        transaction.to_ascii_lowercase()
+    } else {
+        transaction.to_owned()
+    };
     for value in [
         asset.network.as_bytes(),
         asset.token_contract.as_deref().unwrap_or_default().as_bytes(),

@@ -1,21 +1,20 @@
-//! Outbound x402 merchant-response ingestion and reconciliation evidence.
+//! Outbound merchant-response ingestion and reconciliation evidence.
 //!
-//! The official `PAYMENT-RESPONSE` header is authenticated only as input from
-//! the caller's merchant connection. Its transaction is persisted as an
-//! untrusted locator; it never becomes an intent `tx_hash` or ledger fact until
-//! [`EvmReceiptSource`] independently confirms the exact on-chain transfer.
+//! A protocol receipt header is authenticated only as input from the caller's
+//! merchant connection. Its transaction is persisted as an untrusted locator;
+//! it never becomes an intent `tx_hash` or ledger fact until [`ReceiptSource`]
+//! independently confirms the exact on-chain transfer.
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
-use x402_types::{proto::v2::SettleResponse, util::b64::Base64Bytes};
 
 use crate::{
     model::{
         canonicalize_payment_recipient, PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEvent,
-        PaymentEventType, PaymentIntent, PaymentStatus,
+        PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentStatus,
     },
     storage::{EventStorage, IdempotentWrite, OutboundEvidenceWrite, PaymentStorage},
     utils::secure_material::{SealedSensitiveMaterial, SensitiveMaterialProtector},
@@ -24,18 +23,19 @@ use crate::{
 
 use super::{
     common::{outbound_credential_context, validate_identifier},
-    x402_wire::parse_settle_response,
-    EvmReceiptObservation, EvmReceiptSource, EvmTransferQuery, ProtocolRegistry, ScenarioHandler,
+    ProtocolRegistry, ReceiptObservation, ReceiptSource, ScenarioHandler, TransferQuery,
 };
 
-const MAX_PAYMENT_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_MERCHANT_EVIDENCE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct RecordOutboundPaymentResponse {
     pub scenario_id: String,
     pub run_id: String,
     pub intent_id: String,
-    pub payment_response: String,
+    pub protocol: String,
+    pub header_name: String,
+    pub header_value: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +43,13 @@ pub struct RecordedOutboundEvidence {
     pub intent: PaymentIntent,
     pub accepted: bool,
     pub replayed: bool,
+}
+
+struct ValidatedMerchantEvidence {
+    network: String,
+    transaction: String,
+    payer: String,
+    evidence_hash: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +78,7 @@ pub struct OutboundEvidenceDependencies {
     pub events: Arc<dyn EventStorage>,
     pub protocols: Arc<ProtocolRegistry>,
     pub material_protector: Arc<dyn SensitiveMaterialProtector>,
-    pub receipts: Arc<dyn EvmReceiptSource>,
+    pub receipts: Arc<dyn ReceiptSource>,
 }
 
 /// Coordinates the only accepted path from a merchant response to a trusted
@@ -82,7 +89,7 @@ pub struct OutboundEvidenceHandler {
     events: Arc<dyn EventStorage>,
     protocols: Arc<ProtocolRegistry>,
     material_protector: Arc<dyn SensitiveMaterialProtector>,
-    receipts: Arc<dyn EvmReceiptSource>,
+    receipts: Arc<dyn ReceiptSource>,
 }
 
 impl OutboundEvidenceHandler {
@@ -98,8 +105,8 @@ impl OutboundEvidenceHandler {
         }
     }
 
-    /// Persists an official x402 v2 settlement response as an untrusted hint.
-    /// A failure response is returned to the SDK but cannot release the
+    /// Persists one protocol-defined merchant receipt as an untrusted hint. A
+    /// negative response is returned to the SDK but cannot release the
     /// reservation or make a terminal state transition.
     ///
     /// # Errors
@@ -120,57 +127,20 @@ impl OutboundEvidenceHandler {
             .await?
             .ok_or_else(|| Error::NotFound("outbound payment intent".to_owned()))?;
         validate_intent_binding(&intent, command)?;
-        let response = decode_payment_response(&command.payment_response)?;
-        if response.network != intent.asset.network {
-            return Err(Error::PaymentConflict(
-                "merchant payment response network does not match the intent".to_owned(),
-            ));
-        }
-        if !response.success {
-            if !response.transaction.is_empty() {
-                return Err(Error::PaymentProtocol(
-                    "failed x402 settlement response contains a transaction".to_owned(),
-                ));
-            }
+        let Some(response) = self.validate_merchant_evidence(&intent, command).await? else {
             return Ok(RecordedOutboundEvidence {
                 intent,
                 accepted: false,
                 replayed: false,
             });
-        }
-        if response.error_reason.is_some() || !valid_transaction_hash(&response.transaction) {
-            return Err(Error::PaymentProtocol(
-                "successful x402 settlement response is malformed".to_owned(),
-            ));
-        }
-        let response_payer = response
-            .payer
-            .as_deref()
-            .ok_or_else(|| Error::PaymentProtocol("successful x402 settlement response has no payer".to_owned()))?;
-        let response_payer = canonicalize_payment_recipient(&intent.asset.network, response_payer)
-            .map_err(|_| Error::PaymentProtocol("x402 settlement payer is invalid".to_owned()))?;
-        let expected_payer = self.load_expected_payer(&intent).await?;
-        if response_payer != expected_payer {
-            return Err(Error::PaymentConflict(
-                "merchant payment response payer does not match the signed credential".to_owned(),
-            ));
-        }
-
-        let transaction = response.transaction.to_ascii_lowercase();
-        let evidence_hash = merchant_evidence_hash(
-            &intent.id,
-            &intent.run_id,
-            &response.network,
-            &transaction,
-            &response_payer,
-        );
+        };
         let updated_at = now.max(intent.updated_at.saturating_add(1));
         let mut pending = intent.clone();
         pending.status = PaymentStatus::PendingSettlement;
         pending.updated_at = updated_at;
         pending.next_reconcile_at = Some(updated_at);
         let event = PaymentEvent {
-            id: merchant_event_id(&intent.id),
+            id: merchant_event_id(&intent.protocol, &intent.id),
             intent_id: intent.id.clone(),
             event_type: PaymentEventType::Submitted,
             attempt_no: 0,
@@ -179,14 +149,15 @@ impl OutboundEvidenceHandler {
             // this trusted column. It remains payload-only until RPC confirms.
             tx_hash: None,
             payload: json!({
-                "source": "x402_payment_response",
-                "evidence_hash": evidence_hash,
+                "source": format!("{}_merchant_evidence", intent.protocol),
+                "evidence_hash": response.evidence_hash,
                 "run_id": intent.run_id,
                 "merchant_response": {
                     "success": true,
-                    "transaction": transaction,
+                    "protocol": intent.protocol,
+                    "transaction": response.transaction,
                     "network": response.network,
-                    "payer": response_payer,
+                    "payer": response.payer,
                 },
             }),
             created_at: updated_at,
@@ -196,7 +167,7 @@ impl OutboundEvidenceHandler {
             .record_outbound_evidence(OutboundEvidenceWrite {
                 intent: &pending,
                 expected_updated_at: intent.updated_at,
-                evidence_hash: &evidence_hash,
+                evidence_hash: &response.evidence_hash,
                 event: &event,
                 outbox: &[],
             })
@@ -212,13 +183,73 @@ impl OutboundEvidenceHandler {
         })
     }
 
+    async fn validate_merchant_evidence(
+        &self,
+        intent: &PaymentIntent,
+        command: &RecordOutboundPaymentResponse,
+    ) -> Result<Option<ValidatedMerchantEvidence>> {
+        let adapter = self.protocols.get(&intent.protocol)?;
+        if adapter.merchant_evidence_header().is_empty()
+            || !command
+                .header_name
+                .eq_ignore_ascii_case(adapter.merchant_evidence_header())
+        {
+            return Err(Error::PaymentProtocol(
+                "merchant evidence header does not match the payment protocol".to_owned(),
+            ));
+        }
+        let response = adapter.decode_merchant_evidence(&command.header_value)?;
+        if !response.accepted {
+            return Ok(None);
+        }
+        let network = response.network.unwrap_or_else(|| intent.asset.network.clone());
+        if network != intent.asset.network {
+            return Err(Error::PaymentConflict(
+                "merchant payment response network does not match the intent".to_owned(),
+            ));
+        }
+        let transaction = response
+            .transaction
+            .as_deref()
+            .and_then(|transaction| PaymentLedgerEntry::canonical_transaction(&intent.asset.network, transaction).ok())
+            .ok_or_else(|| Error::PaymentProtocol("successful merchant receipt has no valid transaction".to_owned()))?;
+        let expected_payer = self.load_expected_payer(intent).await?;
+        let response_payer = match response.payer.as_deref() {
+            Some(payer) => {
+                let payer = canonicalize_payment_recipient(&intent.asset.network, payer)
+                    .map_err(|_| Error::PaymentProtocol("merchant settlement payer is invalid".to_owned()))?;
+                if payer != expected_payer {
+                    return Err(Error::PaymentConflict(
+                        "merchant payment response payer does not match the signed credential".to_owned(),
+                    ));
+                }
+                payer
+            }
+            None => expected_payer,
+        };
+        let evidence_hash = merchant_evidence_hash(
+            &intent.protocol,
+            &intent.id,
+            &intent.run_id,
+            &network,
+            &transaction,
+            &response_payer,
+        );
+        Ok(Some(ValidatedMerchantEvidence {
+            network,
+            transaction,
+            payer: response_payer,
+            evidence_hash,
+        }))
+    }
+
     pub(crate) async fn reconciliation_observation(
         &self,
         intent: &PaymentIntent,
     ) -> Result<OutboundEvidenceObservation> {
-        if intent.direction != PaymentDirection::Outbound || intent.protocol != "x402" {
+        if intent.direction != PaymentDirection::Outbound || !self.protocols.contains(&intent.protocol) {
             return Err(Error::Settlement(
-                "outbound x402 evidence received an incompatible intent".to_owned(),
+                "outbound merchant evidence received an incompatible intent".to_owned(),
             ));
         }
         let Some(event) = self
@@ -227,7 +258,7 @@ impl OutboundEvidenceHandler {
             .await?
         else {
             return Ok(OutboundEvidenceObservation::Unavailable {
-                reason: "merchant PAYMENT-RESPONSE has not been durably reported".to_owned(),
+                reason: "merchant settlement evidence has not been durably reported".to_owned(),
             });
         };
         let stored = stored_response(&event, intent)?;
@@ -241,8 +272,8 @@ impl OutboundEvidenceHandler {
             .asset
             .token_contract
             .as_deref()
-            .ok_or_else(|| Error::Settlement("outbound x402 intent has no token contract".to_owned()))?;
-        let query = EvmTransferQuery {
+            .ok_or_else(|| Error::Settlement("outbound intent has no token contract".to_owned()))?;
+        let query = TransferQuery {
             network: intent.asset.network.clone(),
             transaction: stored.transaction,
             token_contract: token_contract.to_owned(),
@@ -251,7 +282,7 @@ impl OutboundEvidenceHandler {
             amount: intent.amount,
         };
         match self.receipts.lookup(&query).await? {
-            EvmReceiptObservation::Confirmed(evidence) => Ok(OutboundEvidenceObservation::Confirmed {
+            ReceiptObservation::Confirmed(evidence) => Ok(OutboundEvidenceObservation::Confirmed {
                 authority: evidence.authority,
                 transaction: evidence.transaction,
                 payer: query.payer,
@@ -260,8 +291,8 @@ impl OutboundEvidenceHandler {
                 minimum_confirmations: evidence.minimum_confirmations,
                 effective_at: evidence.effective_at,
             }),
-            EvmReceiptObservation::Pending => Ok(OutboundEvidenceObservation::Pending),
-            EvmReceiptObservation::Mismatch { reason } => Ok(OutboundEvidenceObservation::Unknown { reason }),
+            ReceiptObservation::Pending => Ok(OutboundEvidenceObservation::Pending),
+            ReceiptObservation::Mismatch { reason } => Ok(OutboundEvidenceObservation::Unknown { reason }),
         }
     }
 
@@ -287,61 +318,15 @@ impl OutboundEvidenceHandler {
     }
 }
 
-#[derive(Clone, Debug)]
-struct X402SettlementResponse {
-    success: bool,
-    error_reason: Option<String>,
-    transaction: String,
-    network: String,
-    payer: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredMerchantResponse {
     success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protocol: Option<String>,
     transaction: String,
     network: String,
     payer: String,
-}
-
-fn decode_payment_response(encoded: &str) -> Result<X402SettlementResponse> {
-    if encoded.is_empty()
-        || encoded.len() > MAX_PAYMENT_RESPONSE_BYTES
-        || !encoded.bytes().all(|byte| byte.is_ascii_graphic())
-    {
-        return Err(Error::InvalidRequest(
-            "x402 PAYMENT-RESPONSE header is invalid".to_owned(),
-        ));
-    }
-    let decoded = Base64Bytes::from(encoded.as_bytes())
-        .decode()
-        .map_err(|_| Error::PaymentProtocol("x402 PAYMENT-RESPONSE is not standard base64".to_owned()))?;
-    if decoded.is_empty() || decoded.len() > MAX_PAYMENT_RESPONSE_BYTES {
-        return Err(Error::InvalidRequest(
-            "x402 PAYMENT-RESPONSE payload is too large".to_owned(),
-        ));
-    }
-    match parse_settle_response(&decoded)? {
-        SettleResponse::Success {
-            payer,
-            transaction,
-            network,
-        } => Ok(X402SettlementResponse {
-            success: true,
-            error_reason: None,
-            transaction,
-            network,
-            payer: Some(payer),
-        }),
-        SettleResponse::Error { reason, network } => Ok(X402SettlementResponse {
-            success: false,
-            error_reason: Some(reason),
-            transaction: String::new(),
-            network,
-            payer: None,
-        }),
-    }
 }
 
 async fn expected_payer_from_events(
@@ -375,14 +360,9 @@ async fn expected_payer_from_events(
             "durable outbound credential fingerprint is inconsistent".to_owned(),
         ));
     }
-    let settlement = adapter.settle_payment(&challenge, &credential).await?;
-    let payer = settlement
-        .payment_payload
-        .pointer("/payload/authorization/from")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::PaymentProtocol("x402 signed payer is missing".to_owned()))?;
-    canonicalize_payment_recipient(&intent.asset.network, payer)
-        .map_err(|_| Error::PaymentProtocol("x402 signed payer is invalid".to_owned()))
+    let payer = adapter.credential_payer(&challenge, &credential)?;
+    canonicalize_payment_recipient(&intent.asset.network, &payer)
+        .map_err(|_| Error::PaymentProtocol("signed payer is invalid".to_owned()))
 }
 
 fn stored_response(event: &PaymentEvent, intent: &PaymentIntent) -> Result<StoredMerchantResponse> {
@@ -408,7 +388,9 @@ fn stored_response(event: &PaymentEvent, intent: &PaymentIntent) -> Result<Store
         .get("evidence_hash")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Storage("outbound merchant response hash is missing".to_owned()))?;
+    let protocol = response.protocol.as_deref().unwrap_or("x402");
     let expected_hash = merchant_evidence_hash(
+        protocol,
         &intent.id,
         run_id,
         &response.network,
@@ -417,8 +399,10 @@ fn stored_response(event: &PaymentEvent, intent: &PaymentIntent) -> Result<Store
     );
     if !response.success
         || run_id != intent.run_id
+        || protocol != intent.protocol
         || response.network != intent.asset.network
-        || !valid_transaction_hash(&response.transaction)
+        || !PaymentLedgerEntry::canonical_transaction(&response.network, &response.transaction)
+            .is_ok_and(|transaction| transaction == response.transaction)
         || !canonicalize_payment_recipient(&intent.asset.network, &response.payer)
             .is_ok_and(|payer| payer == response.payer)
         || evidence_hash != expected_hash
@@ -434,8 +418,18 @@ fn validate_command(command: &RecordOutboundPaymentResponse) -> Result<()> {
     validate_identifier("scenario_id", &command.scenario_id)?;
     validate_identifier("run_id", &command.run_id)?;
     validate_identifier("intent_id", &command.intent_id)?;
-    if command.payment_response.is_empty() {
-        return Err(Error::InvalidRequest("payment_response is required".to_owned()));
+    validate_identifier("protocol", &command.protocol)?;
+    if command.header_name.is_empty()
+        || command.header_name.len() > 64
+        || !command
+            .header_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        || command.header_value.is_empty()
+        || command.header_value.len() > MAX_MERCHANT_EVIDENCE_BYTES
+        || !command.header_value.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(Error::InvalidRequest("merchant evidence header is invalid".to_owned()));
     }
     Ok(())
 }
@@ -444,9 +438,9 @@ fn validate_intent_binding(intent: &PaymentIntent, command: &RecordOutboundPayme
     if intent.scenario_id != command.scenario_id || intent.run_id != command.run_id {
         return Err(Error::Forbidden);
     }
-    if intent.direction != PaymentDirection::Outbound || intent.protocol != "x402" {
+    if intent.direction != PaymentDirection::Outbound || intent.protocol != command.protocol {
         return Err(Error::InvalidTransition(
-            "merchant response is supported only for outbound x402 intents".to_owned(),
+            "merchant response protocol does not match the outbound intent".to_owned(),
         ));
     }
     if !matches!(
@@ -461,9 +455,27 @@ fn validate_intent_binding(intent: &PaymentIntent, command: &RecordOutboundPayme
     Ok(())
 }
 
-fn merchant_evidence_hash(intent_id: &str, run_id: &str, network: &str, transaction: &str, payer: &str) -> String {
+fn merchant_evidence_hash(
+    protocol: &str,
+    intent_id: &str,
+    run_id: &str,
+    network: &str,
+    transaction: &str,
+    payer: &str,
+) -> String {
+    if protocol == "x402" {
+        return hash_parts(&[
+            b"agentvault.x402.merchant-evidence.v1",
+            intent_id.as_bytes(),
+            run_id.as_bytes(),
+            network.as_bytes(),
+            transaction.as_bytes(),
+            payer.as_bytes(),
+        ]);
+    }
     hash_parts(&[
-        b"agentvault.x402.merchant-evidence.v1",
+        b"agentvault.protocol.merchant-evidence.v1",
+        protocol.as_bytes(),
         intent_id.as_bytes(),
         run_id.as_bytes(),
         network.as_bytes(),
@@ -472,8 +484,15 @@ fn merchant_evidence_hash(intent_id: &str, run_id: &str, network: &str, transact
     ])
 }
 
-fn merchant_event_id(intent_id: &str) -> String {
-    hash_parts(&[b"agentvault.x402.merchant-event.v1", intent_id.as_bytes()])
+fn merchant_event_id(protocol: &str, intent_id: &str) -> String {
+    if protocol == "x402" {
+        return hash_parts(&[b"agentvault.x402.merchant-event.v1", intent_id.as_bytes()]);
+    }
+    hash_parts(&[
+        b"agentvault.protocol.merchant-event.v1",
+        protocol.as_bytes(),
+        intent_id.as_bytes(),
+    ])
 }
 
 fn hash_parts(parts: &[&[u8]]) -> String {
@@ -483,10 +502,6 @@ fn hash_parts(parts: &[&[u8]]) -> String {
         hash.update(part);
     }
     hex::encode(hash.finalize())
-}
-
-fn valid_transaction_hash(value: &str) -> bool {
-    value.len() == 66 && value.starts_with("0x") && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

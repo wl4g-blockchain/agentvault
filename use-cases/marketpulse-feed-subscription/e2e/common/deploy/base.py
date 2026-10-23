@@ -15,6 +15,7 @@ class FullFlowEvidence:
     audit: dict[str, Any]
     initial_balances: dict[str, int]
     final_balances: dict[str, int]
+    chain_accounting: dict[str, Any]
     logs: dict[str, str]
     runtime: dict[str, str]
 
@@ -51,5 +52,17 @@ class E2EDeployer(ABC):
         """Run every supported language through the payment flow."""
 
     @abstractmethod
+    def mpp_tempo(self) -> str:
+        """Run the real MPP Tempo charge and recovery gate."""
+
+    @abstractmethod
+    def x402_solana(self) -> str:
+        """Run the real x402 v2 Solana exact payment gate."""
+
+    @abstractmethod
     def cleanup(self) -> str:
         """Remove only resources owned by this E2E deployment."""
+
+    @abstractmethod
+    def cleanup_images(self) -> str:
+        """Remove only locally built images owned by this E2E suite."""

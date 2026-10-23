@@ -19,21 +19,23 @@ mod settlement_handler;
 mod x402_facilitator;
 mod x402_wire;
 
+pub use crate::protocol::ProtocolRegistry;
 pub use approval_handler::{
     ApprovalDecisionResult, ApprovalGrantTokenService, ApprovalHandler, ApprovalPrincipalAuthorizer,
     JwtApprovalGrantTokenService, StoredApprovalPrincipalAuthorizer, SubmitApprovalDecision,
 };
 pub use balance_handler::{
-    EvmRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSnapshot, WalletBalanceSource, WalletBalanceSync,
-    WalletBalanceSyncRun, WalletBalanceSynchronizer,
+    EvmRpcBalanceSource, SolanaRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSnapshot, WalletBalanceSource,
+    WalletBalanceSync, WalletBalanceSyncRun, WalletBalanceSynchronizer,
 };
 pub use client_handler::ClientHandler;
 pub use evm_receipt::{
-    ConfirmedEvmTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery, EvmAuthorizationSource,
-    EvmEvidenceSource, EvmReceiptObservation, EvmReceiptRegistry, EvmReceiptSource, EvmRpcReceiptConfig,
-    EvmRpcReceiptSource, EvmTransferQuery,
+    ConfirmedEvmTransfer, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery,
+    EvmAuthorizationSource, EvmEvidenceSource, EvmReceiptObservation, EvmReceiptRegistry, EvmReceiptSource,
+    EvmRpcReceiptConfig, EvmRpcReceiptSource, EvmTransferQuery, ReceiptObservation, ReceiptRegistry, ReceiptSource,
+    SolanaRpcReceiptConfig, SolanaRpcReceiptSource, TransferQuery,
 };
-pub use offer_handler::{OfferHandler, ProtocolRegistry};
+pub use offer_handler::OfferHandler;
 pub(crate) use outbound_evidence::OutboundEvidenceObservation;
 pub use outbound_evidence::{
     OutboundEvidenceDependencies, OutboundEvidenceHandler, RecordOutboundPaymentResponse, RecordedOutboundEvidence,

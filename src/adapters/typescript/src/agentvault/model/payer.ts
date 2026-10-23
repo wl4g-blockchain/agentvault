@@ -33,9 +33,15 @@ export interface AuthorizePaymentResponse {
   approval?: ApprovalRequest;
 }
 
-export interface ReportOutboundResponseRequest extends OperationContext {
-  payment_response: string;
+export interface ProtocolEvidence {
+  header_name: string;
+  header_value: string;
 }
+
+export type ReportOutboundResponseRequest = OperationContext & (
+  | { payment_response: string; protocol?: never; evidence?: never }
+  | { payment_response?: never; protocol: string; evidence: ProtocolEvidence }
+);
 
 export interface ReportOutboundResponseResponse {
   intent: PaymentIntent;

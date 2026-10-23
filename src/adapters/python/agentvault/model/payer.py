@@ -109,20 +109,55 @@ class AuthorizePaymentResponse:
 
 
 @dataclass(frozen=True)
-class ReportOutboundResponseRequest:
-    context: OperationContext
-    payment_response: str
+class ProtocolEvidence:
+    header_name: str
+    header_value: str
 
     def __post_init__(self) -> None:
         if (
-            not self.payment_response
-            or len(self.payment_response) > 16 * 1024
+            not self.header_name or len(self.header_name) > 64
+            or not all(character.isalnum() or character == "-" for character in self.header_name)
+        ):
+            raise ValueError("evidence.header_name is invalid")
+        if (
+            not self.header_value or len(self.header_value) > 64 * 1024
+            or not all(0x21 <= ord(character) <= 0x7E for character in self.header_value)
+        ):
+            raise ValueError("merchant evidence must be a bounded HTTP header value")
+
+    def wire(self) -> dict[str, str]:
+        return {"header_name": self.header_name, "header_value": self.header_value}
+
+
+@dataclass(frozen=True)
+class ReportOutboundResponseRequest:
+    context: OperationContext
+    payment_response: str | None = None
+    protocol: str | None = None
+    evidence: ProtocolEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.payment_response is not None
+            and (self.protocol is not None or self.evidence is not None)
+        ) or (
+            self.payment_response is None
+            and (self.protocol is None or self.evidence is None)
+        ):
+            raise ValueError("provide either legacy payment_response or protocol evidence")
+        if self.payment_response is not None and (
+            not self.payment_response or len(self.payment_response) > 64 * 1024
             or not all(0x21 <= ord(character) <= 0x7E for character in self.payment_response)
         ):
             raise ValueError("payment_response must be a bounded official x402 header value")
+        if self.protocol is not None:
+            required("protocol", self.protocol)
 
     def wire(self) -> dict[str, Any]:
-        return {**self.context.wire(), "payment_response": self.payment_response}
+        if self.payment_response is not None:
+            return {**self.context.wire(), "payment_response": self.payment_response}
+        assert self.protocol is not None and self.evidence is not None
+        return {**self.context.wire(), "protocol": self.protocol, "evidence": self.evidence.wire()}
 
 
 @dataclass(frozen=True)
@@ -224,5 +259,5 @@ class AuthorizedPayment:
 __all__ = [
     "AuthorizationOutcome", "AuthorizePaymentRequest", "AuthorizePaymentResponse", "AuthorizedPayment",
     "BalanceQuery", "PayerHttpRequest", "PayerHttpResponse", "PayerRequestContext", "PaymentAuthorizationResult",
-    "PaymentBalance", "PaymentRequired", "ReportOutboundResponseRequest", "ReportOutboundResponseResponse",
+    "PaymentBalance", "PaymentRequired", "ProtocolEvidence", "ReportOutboundResponseRequest", "ReportOutboundResponseResponse",
 ]

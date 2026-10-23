@@ -14,10 +14,12 @@ export interface PayerConfig {
   approvalPollIntervalMs?: number;
   deliveryRetries?: number;
   maxChallengeBytes?: number;
+  protocols?: readonly string[];
 }
 
 export interface PayeeConfig {
   maxBodyBytes?: number;
+  protocols?: readonly string[];
 }
 
 export class GrpcConfig {
@@ -66,3 +68,7 @@ export class MqttConfig {
     return `MqttConfig { host: ${JSON.stringify(this.host)}, port: ${this.port}, tls: ${this.tls}, credentials: <redacted>, vaultClientId: ${JSON.stringify(this.vaultClientId)} }`;
   }
 }
+
+export type VaultTransportConfig =
+  | { provider: 'grpc'; grpc: GrpcConfig; mqtt?: never }
+  | { provider: 'mqtt'; mqtt: MqttConfig; grpc?: never };

@@ -83,7 +83,7 @@ export interface McpProtectionRequest extends OperationContext {
 
 export type ProtectionOutcome =
   | { outcome: 'payment_required'; challenge: PaymentChallenge }
-  | { outcome: 'authorized'; payment: SettledIncomingPayment };
+  | { outcome: 'authorized'; challenge: PaymentChallenge; payment: SettledIncomingPayment };
 
 export function validateResolveOfferRequest(request: ResolveOfferRequest): void {
   required('scenarioId', request.scenarioId);

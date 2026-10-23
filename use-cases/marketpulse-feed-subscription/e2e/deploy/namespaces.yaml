@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-system
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-authguard-system
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-infra-system
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-payment-system
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-mock-payer
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-agentvault-mock-payee
+  labels:
+    app.kubernetes.io/part-of: agentvault-e2e
+    agentvault.io/environment: e2e

@@ -10,8 +10,20 @@ from ..model import (
     SettlePaymentRequest, SettledIncomingPayment, VerifyPaymentRequest,
 )
 from ..transport import VaultTransport
+from ..protocol import (
+    McpMetadata,
+    McpPaymentRequired,
+    PaymentProtocol,
+    PaymentProtocolFactory,
+)
 
 _LOG = logging.getLogger("agentvault.sdk")
+
+
+class PaymentRejectedError(PermissionError):
+    def __init__(self, challenge: PaymentChallenge) -> None:
+        super().__init__("AgentVault rejected the presented payment")
+        self.challenge = challenge
 
 
 class PayeeMiddleware:
@@ -22,6 +34,7 @@ class PayeeMiddleware:
             raise ValueError("AgentVault transport is not configured")
         self._transport = transport
         self.config = config
+        self._protocols = PaymentProtocolFactory().create(config.protocols)
 
     def fast(self, app: "ASGIApp", routes: list["FastPayeeRoute"]) -> "FastPayeeMiddleware":
         from .fast import FastPayeeMiddleware
@@ -33,6 +46,76 @@ class PayeeMiddleware:
         from .standard import StandardPayeeMiddleware
 
         return StandardPayeeMiddleware(self)
+
+    def protocol(self, name: str) -> PaymentProtocol:
+        return self._protocols.get(name)
+
+    def credential_header_names(self) -> tuple[str, ...]:
+        return self._protocols.credential_header_names()
+
+    def merchant_evidence_header_names(self) -> tuple[str, ...]:
+        return self._protocols.merchant_evidence_header_names()
+
+    def presented_credential(
+        self, protocol: str, headers: dict[str, str],
+    ) -> object | None:
+        self._protocols.get(protocol)
+        selected, payload = self._protocols.presented_credential(
+            headers, self.config.max_body_bytes
+        )
+        if selected is not None and selected != protocol:
+            raise ValueError(
+                "payment credential protocol does not match the protected route"
+            )
+        return payload
+
+    def presented_mcp_credential(
+        self, protocol: str, meta: object,
+    ) -> object | None:
+        selected, payload = self._protocols.presented_mcp_credential(
+            meta, self.config.max_body_bytes
+        )
+        if selected is not None and selected != protocol:
+            raise ValueError(
+                "MCP payment credential protocol does not match the protected route"
+            )
+        return payload
+
+    def mcp_request_metadata_keys(self) -> tuple[str, ...]:
+        return self._protocols.mcp_request_metadata_keys()
+
+    def mcp_root_request_metadata_keys(self) -> tuple[str, ...]:
+        return self._protocols.mcp_root_request_metadata_keys()
+
+    def mcp_receipt_metadata_keys(self) -> tuple[str, ...]:
+        return self._protocols.mcp_receipt_metadata_keys()
+
+    def mcp_payment_required(
+        self, challenge: PaymentChallenge, rejected: bool = False,
+    ) -> McpPaymentRequired:
+        adapter = self._protocols.get(challenge.protocol)
+        if rejected:
+            return adapter.mcp_payment_rejected(
+                challenge, "AgentVault rejected the presented payment"
+            )
+        return adapter.mcp_payment_required(challenge)
+
+    def mcp_receipt(
+        self, challenge: PaymentChallenge, payment: SettledIncomingPayment,
+    ) -> McpMetadata:
+        return self._protocols.get(payment.receipt.protocol).mcp_receipt(
+            challenge, payment
+        )
+
+    def mcp_merchant_evidence(self, meta: object) -> tuple[str | None, object | None]:
+        return self._protocols.mcp_merchant_evidence(
+            meta, self.config.max_body_bytes
+        )
+
+    def merchant_evidence(
+        self, headers: dict[str, str],
+    ) -> tuple[str | None, object | None]:
+        return self._protocols.merchant_evidence(headers)
 
     def challenge(self, operation: PayeeOperation) -> PaymentChallenge:
         challenge = self._create_challenge(CreateChallengeRequest(
@@ -54,7 +137,7 @@ class PayeeMiddleware:
         verification = self._verify_payment(VerifyPaymentRequest(
             operation.challenge_context(), challenge.challenge_hash, operation.request_hash, credential))
         if not verification.valid:
-            raise PermissionError("AgentVault rejected the presented payment")
+            raise PaymentRejectedError(challenge)
         if verification.verification_ref is None:
             raise RuntimeError("valid AgentVault verification omitted settlement identity")
         _validate_verification_binding(operation, challenge, verification)
@@ -65,7 +148,7 @@ class PayeeMiddleware:
         _validate_settlement_binding(operation, verification, payment)
         _event("agentvault.sdk.payee.settled", run_id=operation.run_id,
                intent_id=payment.intent.id)
-        return ProtectionOutcome.authorized(payment)
+        return ProtectionOutcome.authorized(payment, challenge)
 
     def resolve_offer(self, request: ResolveOfferRequest) -> PaymentOffer:
         value = self._transport.request("POST", "/api/v1/offers/resolve", request.wire())

@@ -104,6 +104,10 @@ pub trait VaultTransport: Send + Sync {
         &self,
         request: TransportRequest,
     ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send;
+
+    fn close(&self) -> impl Future<Output = std::result::Result<(), TransportError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 #[derive(Deserialize)]
@@ -138,6 +142,10 @@ impl<T> ApiClient<T> {
 }
 
 impl<T: VaultTransport> ApiClient<T> {
+    pub(crate) async fn close(&self) -> std::result::Result<(), TransportError> {
+        self.transport.close().await
+    }
+
     pub(crate) async fn get<R: DeserializeOwned>(&self, path: String) -> SdkResult<R> {
         self.execute(TransportRequest {
             method: HttpMethod::Get,

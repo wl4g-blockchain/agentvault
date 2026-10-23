@@ -37,3 +37,7 @@ export class ApiError extends Error {
 export interface VaultTransport {
   request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T>;
 }
+
+export interface OwnedVaultTransport extends VaultTransport {
+  close(): void | Promise<void>;
+}

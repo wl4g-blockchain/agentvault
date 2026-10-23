@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Process-isolated EOA custody and AI-agent payment infrastructure"
-rust-version = "1.91"
+rust-version = "1.95"
 
 [lib]
 name = "agentvault"
@@ -17,12 +17,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 aes-gcm = "0.10"
+alloy = { version = "2.1.0", default-features = false }
 alloy-primitives = "1.4"
 alloy-sol-types = "1.4"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
 bigdecimal = "0.4"
+bincode = "1.3.3"
 clap = { version = "4.5", features = ["derive"] }
 config = { version = "0.15", default-features = false, features = ["convert-case", "yaml"] }
 hex = "0.4"
@@ -31,7 +33,7 @@ humantime-serde = "1.1"
 k256 = { version = "0.13", features = ["ecdsa"] }
 jsonwebtoken = { version = "9.3", default-features = false }
 libc = "0.2"
-mpp = { version = "0.15.1", default-features = false }
+mpp = { version = "=0.15.1", default-features = false, features = ["client", "tempo"] }
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
@@ -45,9 +47,18 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 sha3 = "0.10"
+solana-client = "=3.1.14"
+solana-keypair = "=3.1.2"
+solana-pubkey = "=4.4.0"
+solana-rpc-client = "=3.1.14"
+solana-signature = "=3.6.0"
+solana-signer = "=3.0.1"
+solana-transaction = "=3.1.0"
+solana-transaction-status-client-types = "=3.1.14"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "bigdecimal", "json"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting"] }
+tempo-alloy = { version = "=1.11.0", default-features = false }
 tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
 tonic = { version = "0.14", features = ["transport"] }
 tonic-prost = "0.14"
@@ -58,10 +69,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 uuid = { version = "1.18", features = ["serde", "v4"] }
 zeroize = "1.8"
 x402-chain-eip155 = { version = "=1.4.11", features = ["client"] }
+x402-chain-solana = { version = "=1.4.11", features = ["client"] }
 x402-types = "=1.4.11"
 
 [dev-dependencies]
+mpp = { version = "=0.15.1", default-features = false, features = ["client", "server", "tempo"] }
 tempfile = "3.21"
+tempo-primitives = { version = "=1.11.0", default-features = false }
+x402-chain-solana = { version = "=1.4.11", features = ["client", "facilitator"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

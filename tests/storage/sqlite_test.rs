@@ -579,6 +579,8 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].intent.id, current.id);
+    assert_eq!(claimed[0].attempt_no, 1);
     storage
         .renew_reconciliation_lease(&current.id, "sqlite-reconciler", submitted_at + 60)
         .await

@@ -14,11 +14,10 @@ from mcp.client.streamable_http import streamable_http_client
 from agentvault import (
     AgentVault,
     GrpcConfig,
-    GrpcVaultTransport,
     MqttConfig,
-    MqttVaultTransport,
     PayerConfig,
     PayerRequestContext,
+    VaultTransportConfig,
 )
 
 YESTERDAY_TOOL = "marketpulse.yesterday_news"
@@ -37,11 +36,11 @@ class MCPHelper:
 
     def __init__(self, stack: AsyncExitStack, session: ClientSession,
                  payer_transport: _PayerMCPTransport,
-                 vault_transport: Any, tools: set[str]) -> None:
+                 vault: AgentVault, tools: set[str]) -> None:
         self._stack = stack
         self._session = session
         self._payer_transport = payer_transport
-        self._vault_transport = vault_transport
+        self._vault = vault
         self.tools = frozenset(tools)
 
     @classmethod
@@ -49,7 +48,7 @@ class MCPHelper:
         timeout = float(_positive("AGENTVAULT_MQTT_TIMEOUT_SECONDS"))
         transport_name = os.environ.get("AGENTVAULT_TRANSPORT", "mqtt").strip().lower()
         if transport_name == "mqtt":
-            vault_transport = MqttVaultTransport(MqttConfig(
+            transport_config = VaultTransportConfig(provider="mqtt", mqtt=MqttConfig(
                 host=_required("AGENTVAULT_MQTT_HOST"),
                 port=_positive("AGENTVAULT_MQTT_PORT"),
                 tls=_boolean("AGENTVAULT_MQTT_TLS"),
@@ -59,16 +58,16 @@ class MCPHelper:
                 vault_client_id=_required("QUANTSTREAM_CLIENT_ID"),
                 timeout=timeout,
             ))
-            vault_transport.connect()
         elif transport_name == "grpc":
-            vault_transport = GrpcVaultTransport(GrpcConfig(
+            transport_config = VaultTransportConfig(provider="grpc", grpc=GrpcConfig(
                 endpoint=_required("AGENTVAULT_GRPC_ENDPOINT"),
                 tls=_boolean("AGENTVAULT_GRPC_TLS"), timeout=timeout,
             ))
         else:
             raise RuntimeError("AGENTVAULT_TRANSPORT must be mqtt or grpc")
+        vault = AgentVault.from_config(transport_config)
         LOG.info("agentvault.sdk.payer.transport_selected transport=%s", transport_name)
-        core = AgentVault(vault_transport).payer(PayerConfig(
+        core = vault.payer(PayerConfig(
             scenario_id=_required("QUANTSTREAM_SCENARIO_ID"),
             approval_timeout=float(_positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")),
             delivery_retries=1,
@@ -92,17 +91,17 @@ class MCPHelper:
             for required_tool in (YESTERDAY_TOOL, REALTIME_TOOL):
                 if required_tool not in tools:
                     raise RuntimeError(f"MarketPulse MCP server did not expose {required_tool}")
-            return cls(stack, session, payer_transport, vault_transport, tools)
+            return cls(stack, session, payer_transport, vault, tools)
         except BaseException:
             await stack.aclose()
             await payer.close()
-            vault_transport.close()
+            vault.close()
             raise
 
     async def close(self) -> None:
         await self._stack.aclose()
         await self._payer_transport.close()
-        self._vault_transport.close()
+        self._vault.close()
 
     async def yesterday_news(self, run_id: str) -> ToolResult:
         return await self._call(YESTERDAY_TOOL, run_id, False)

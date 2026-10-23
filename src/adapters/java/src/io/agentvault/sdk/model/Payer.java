@@ -66,16 +66,46 @@ public final class Payer {
             PaymentCredential credential,
             ApprovalRequest approval) {}
 
+    public record ProtocolEvidence(
+            @JsonProperty("header_name") String headerName,
+            @JsonProperty("header_value") String headerValue) {
+        public ProtocolEvidence {
+            if (headerName == null || !headerName.matches("[A-Za-z0-9-]{1,64}")
+                    || headerValue == null || headerValue.length() > 64 * 1024
+                    || !headerValue.matches("[\\x21-\\x7e]+")) {
+                throw new IllegalArgumentException("protocol merchant evidence is invalid");
+            }
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ReportOutboundResponseRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("payment_response") String paymentResponse) {
+            @JsonProperty("payment_response") String paymentResponse,
+            String protocol,
+            ProtocolEvidence evidence) {
+        public ReportOutboundResponseRequest(String scenarioId, String runId, String paymentResponse) {
+            this(scenarioId, runId, paymentResponse, null, null);
+        }
+
+        public ReportOutboundResponseRequest(
+                String scenarioId, String runId, String protocol, ProtocolEvidence evidence) {
+            this(scenarioId, runId, null, protocol, evidence);
+        }
+
         public ReportOutboundResponseRequest {
             new Base.OperationContext(scenarioId, runId);
-            if (paymentResponse == null || paymentResponse.length() > 16 * 1024
-                    || !paymentResponse.matches("[\\x21-\\x7e]+")) {
+            boolean legacy = paymentResponse != null && protocol == null && evidence == null;
+            boolean modern = paymentResponse == null && protocol != null && evidence != null;
+            if (!legacy && !modern) {
+                throw new IllegalArgumentException("provide either legacy payment_response or protocol evidence");
+            }
+            if (legacy && (paymentResponse.length() > 64 * 1024
+                    || !paymentResponse.matches("[\\x21-\\x7e]+"))) {
                 throw new IllegalArgumentException("payment_response must be a bounded official x402 header value");
             }
+            if (modern) Base.required("protocol", protocol);
         }
     }
 

@@ -40,7 +40,7 @@ QuantStream（Go/Rust/Python/Java/TS）
                     → 原子消费/复查/签名           │
        ← Credential，重试完全相同的 MCP 请求      │
                          MarketPulse 卖方 ←───────┘
-                           → 官方 Facilitator → Anvil/TestUSDC
+                           → 官方 Facilitator → Anvil/E2EUSDC
                            → Receipt + 双向 Ledger
 ```
 
@@ -78,14 +78,20 @@ JWT 只在 AgentVault 内部使用；Approval 表保存 `jti`、Claims Hash 和�
 
 - `payer`：Anvil + Solana，不启动 Facilitator；
 - `payee`：Anvil + Solana + 官方 x402 Facilitator；
+- `tempo`：只由显式 MPP `charge` 门禁启动、固定镜像摘要的官方 Tempo localnet；
 - `infra`：PostgreSQL、EMQX、Jaeger；
 - `apps`：AgentVault、审批 UI、只读审计器；
 - `payee-{go,rust,python,java,typescript}`：选择一个收款后端；
 - `ingestor-{go,rust,python,java,typescript}`：选择一个付款后端。
 
-完整资金验收使用 x402 v2 / EVM / EIP-3009 与编译后的 TestUSDC。Solana 是
-真实 Validator 健康依赖，但本用例不虚报 Solana 支付覆盖。Broker、RPC、
-Facilitator 均非 Mock。MarketPulse 还会以规范十进制 Unix 秒返回 AgentVault
+五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 E2EUSDC。独立的
+`mpp-tempo` 场景验证 Vault 签出的 Tempo type-0x76 `charge`、外部 HTTP
+verify/settle、结算响应丢失后的只读恢复、单次广播、回执绑定，以及包含 pathUSD
+计价 Gas 的余额守恒。显式的 `x402-solana` 场景会在固定版本的本地 Validator 上
+创建真实 SPL mint 与关联账户，再通过固定版本的上游 x402 v2 client/facilitator
+执行 verify 和唯一一次 settle，并校验精确 SPL 增减、Token 总量守恒、Payer 的
+Lamport 不变，以及 Facilitator 的 Lamport 减量与已确认交易手续费完全一致。
+Broker、RPC、Facilitator 均非 Mock。MarketPulse 还会以规范十进制 Unix 秒返回 AgentVault
 x402 Profile 的 `payment-expires-at`；审批轮询始终复用这个绝对值，因此同一份
 官方 x402 Body 在所有重试中映射到同一个持久 Challenge Hash。
 
@@ -138,11 +144,16 @@ python3 runner.py -s payer
 python3 runner.py -s payee
 python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
+python3 runner.py -s mpp-tempo
+python3 runner.py -s x402-solana
 python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
 python3 runner.py -s web --e2e-sdk-scope full --matrix-evidence-run <已完成的Matrix运行目录>
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s full --payer-language rust --payee-language rust
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 runner.py --deployer kubernetes -s matrix --matrix-workers 1
 python3 runner.py cleanup
+python3 runner.py --cleanup
 ```
 
 `runner.py` 是唯一外层编排入口，统一负责构建、部署、健康检查、场景选择、诊断和
@@ -150,6 +161,55 @@ python3 runner.py cleanup
 `reports/<yyyyMMddHHmmss>/<module>/` 分层证据及该次运行的 `summary.md`。部署默认
 保留以便人工验收和诊断；需要自动回收时显式加 `--cleanup-after-run`，之后回收则
 运行 `runner.py cleanup`。
+`cleanup` 子命令与 `--cleanup` 参数完全等价：删除 shared/worker Compose 容器、由
+Compose project label 明确归属的命名卷/匿名卷、白名单内本地构建的
+AgentVault/MarketPulse/QuantStream `*:local` 镜像，以及清单中声明且带 E2E 标签的
+`e2e-agentvault-*` 命名空间内 Helm release。Helm 会先执行有界的正常卸载；仅在正常
+卸载失败时，才清除该 release 标签范围内资源的 finalizer、禁用 hook 重试卸载，并强制
+删除仍然滞留的 Pod。命名空间及 bootstrap 对象保留，便于干净重部署。该清理不会 prune
+外部基础镜像、镜像仓库、无关卷、全局 builder cache，亦不会触碰上述命名空间之外的资源。
+
+`--cleanup-after-run` 刻意保持更窄范围：Docker backend 只回收当前 Compose 容器和卷，
+Kubernetes backend 只卸载当前 E2E Helm release；两者都保留本地构建镜像。单独部署、
+用于人工验收的 Kubernetes 环境不会被 Docker backend 的运行后清理触碰。
+
+十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
+二进制或裁剪后的 JRE 及应用复制到 non-root distroless，Python 只把安装后的依赖复制到
+non-root distroless Python 3.11 runtime，TypeScript 只把裁剪后的生产依赖复制到 non-root
+Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进制加 Alpine runtime。
+
+## Kubernetes Namespace 契约
+
+`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，默认仍为 CI 使用的
+Docker。Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
+Job、审批和 PostgreSQL/链上证据采集；共享集群上的 Matrix 会强制串行，避免跨 Case
+状态污染。各组件 Helm Chart 强制 Kubernetes 部署边界：渲染出的 Deployment、Job、
+ConfigMap 和 Service 都从固定 Chart annotation
+取得并显式写入 `e2e-agentvault-*` namespace；当 Helm release namespace 不一致时
+Chart 也会拒绝安装，防止 Helm release Secret 泄漏到 `default` 等其他 namespace。
+安装任何 E2E release 前先创建完整集合：
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl apply -f deploy/namespaces.yaml
+```
+
+| 工作负载组 | Namespace |
+| --- | --- |
+| AgentVault | `e2e-agentvault-system` |
+| 独立 AuthGuard 及其 middleware | `e2e-agentvault-authguard-system` |
+| PostgreSQL、EMQX、Jaeger | `e2e-agentvault-infra-system` |
+| Anvil、Tempo、EVM fixture、Facilitator、Solana | `e2e-agentvault-payment-system` |
+| 全部 QuantStream mock payer 服务及 UI | `e2e-agentvault-mock-payer` |
+| 全部 MarketPulse mock payee 服务 | `e2e-agentvault-mock-payee` |
+
+正式 AgentVault Chart 必须安装到 `e2e-agentvault-system`；其他组件 Chart 的
+`--namespace` 也必须使用表内对应值，否则渲染会失败关闭。本支付直连 E2E 继续关闭
+umbrella AuthGuard dependency；启用 IAM 的变体必须把 AuthGuard 作为独立 release 安装到
+`e2e-agentvault-authguard-system`，不得与 AgentVault 混放。namespace 是唯一的 E2E
+命名边界；workload、Pod、Service、ConfigMap 均直接使用正式风格的组件名，不再增加
+`e2e-` 或 `e2e-agentvault-` 前缀。结构门禁会拒绝 namespace 缺失、组件归属错误、
+组件名前缀回流，或不再为资源显式设置 namespace 的模板。
 
 `web` 场景沿用 AuthGuard 的浏览器验证模式：先确认 `s21`、`s22`、`s24`、`s30`
 包含所选 SDK scope 下完全相同的已完成 Matrix Case，再把不可变报告事实映射成生产 Dashboard
@@ -178,8 +238,15 @@ plan 与既有 Checkpoint，拒绝 scope/身份不匹配或损坏证据，只执
    绑定 Receipt 及 Settlement/Reconciliation Event；
 5. 两条 MarketPulse 持久交付和两条 QuantStream 持久采集记录；
 6. 当前 Payer 的两个 EOA 各精确减少 1 USDC，其余八个 Payer EOA 保持不变，
-   Gateway/Payee 精确增加 2 USDC，总量守恒，且 AgentVault 对十个钱包的定时余额
-   快照最终全部与链上值一致。
+   Gateway/Payee 精确增加 2 USDC，总量守恒；四条 Ledger 与两张 Anvil Receipt、
+   Facilitator 的精确原生币 Gas 支出一致，且 AgentVault 对十个钱包的定时余额快照
+   最终全部与链上值一致。
 
-手续费/退款/充值/转账/冲正矩阵、MPP/Tempo 结算与 Solana 支付不在本用例中
-冒充已完成；它们需要各自真实 Provider Fixture 与独立验收场景。
+`mpp-tempo` 与 `x402-solana` 均与上述 EVM SDK 矩阵明确分离：前者以真实节点及由
+官方 `mpp` Rust server/Tempo provider 原语支撑的本地 HTTP 结算服务，验证已实现的
+MPP Tempo `charge` 核心；支持的 direct-charge 流程先做无状态变更的验证，再通过
+Tempo RPC 唯一广播一次，不虚构 x402 式 Facilitator 或重复商户合约。后者验证固定版本
+的上游 x402 Solana exact client/facilitator 与真实 SPL 记账边界；五 SDK 共享夹具
+另行覆盖两种 Transport、两种协议和两个角色。MPP session/split/fee-payer/
+delegated method 及手续费/退款/充值/转账/冲正矩阵仍明确 Unsupported，或需要
+独立验收场景。

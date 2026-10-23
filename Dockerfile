@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG BUILDER_IMAGE=docker.io/library/rust:1.91.1-bookworm
+ARG BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
 
 FROM ${BUILDER_IMAGE} AS builder

@@ -10,7 +10,7 @@ services:
         HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}
         NO_PROXY: ${E2E_MARKETPULSE_BUILD_NO_PROXY:-127.0.0.1,localhost}
         E2E_MARKETPULSE_JAVA_BUILD_IMAGE: ${E2E_MARKETPULSE_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     environment:
       MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
       AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
@@ -32,6 +32,6 @@ services:
       MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION: ${E2E_MARKETPULSE_ALLOW_FAILURE_INJECTION:-true}
     ports: ["127.0.0.1:${E2E_MARKETPULSE_JAVA_PORT:-38085}:8081"]
     volumes: ["marketpulse-java-data:/var/lib/marketpulse"]
-    healthcheck: { test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"], interval: 3s, timeout: 3s, retries: 30 }
+    healthcheck: { test: ["CMD", "/opt/java/bin/java", "-jar", "/app/marketpulse.jar", "--healthcheck"], interval: 3s, timeout: 3s, retries: 30 }
 volumes:
   marketpulse-java-data: {}

@@ -61,7 +61,7 @@ const MAX_HEADER_NAME_BYTES: usize = 64;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const MAX_IN_FLIGHT: usize = 128;
 const MAX_IN_FLIGHT_PER_CLIENT: usize = 16;
-const RESPONSE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const RESPONSE_CACHE_TTL: Duration = Duration::from_mins(5);
 const OUTBOX_BATCH_SIZE: u32 = 64;
 const OUTBOX_LEASE_TTL: Duration = Duration::from_secs(30);
 const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -1791,7 +1791,7 @@ impl MqttSettings {
             delivery_timeout: self.request_timeout.max(Duration::from_secs(1)),
             poll_interval: Duration::from_secs(1),
             initial_backoff: Duration::from_secs(1),
-            max_backoff: Duration::from_secs(300),
+            max_backoff: Duration::from_mins(5),
             max_attempts: 32,
         }
     }

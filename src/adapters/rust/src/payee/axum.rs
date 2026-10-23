@@ -9,16 +9,15 @@ use axum::{
     body::{to_bytes, Body},
     http::{header, request::Parts, HeaderName, HeaderValue, Method, Request, Response, StatusCode},
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use tower::{Layer, Service};
 
-use crate::{Error, PayeeMiddleware, PayeeOperation, ProtectionOutcome, SettledIncomingPayment, VaultTransport};
+use crate::payee_core::PayeeProtectionError;
+use crate::{Error, PayeeMiddleware, PayeeOperation, ProtectionOutcome, VaultTransport};
 
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 const RUN_ID_HEADER: &str = "x-run-id";
-const PAYMENT_SIGNATURE_HEADER: &str = "payment-signature";
 
 /// Exact route binding for the Axum payee adapter. Pricing and recipient data
 /// remain in the server-owned Offer; request metadata cannot override them.
@@ -46,6 +45,19 @@ impl AxumPayeeRoute {
         resource: impl Into<String>,
         origin: impl Into<String>,
     ) -> Self {
+        Self::mcp_tool_with_protocol(path, tool, scenario_id, offer_id, resource, origin, "x402")
+    }
+
+    #[must_use]
+    pub fn mcp_tool_with_protocol(
+        path: impl Into<String>,
+        tool: impl Into<String>,
+        scenario_id: impl Into<String>,
+        offer_id: impl Into<String>,
+        resource: impl Into<String>,
+        origin: impl Into<String>,
+        protocol: impl Into<String>,
+    ) -> Self {
         Self {
             method: Method::POST,
             path: path.into(),
@@ -53,7 +65,7 @@ impl AxumPayeeRoute {
             offer_id: offer_id.into(),
             resource: resource.into(),
             origin: origin.into(),
-            protocol: "x402".to_owned(),
+            protocol: protocol.into(),
             mcp_tool: Some(tool.into()),
         }
     }
@@ -175,78 +187,311 @@ where
             "protected request body exceeds configured limit",
         ));
     };
-    if route
-        .mcp_tool
-        .as_deref()
-        .is_some_and(|tool| !is_mcp_tool_call(&body, tool))
-    {
-        return inner.call(Request::from_parts(parts, Body::from(body))).await;
-    }
-    let operation = match payment_operation(&route, &parts, &body, max_body_bytes) {
+    let mcp_call = if let Some(tool) = route.mcp_tool.as_deref() {
+        match McpCall::parse(
+            &body,
+            tool,
+            &core.mcp_request_metadata_keys(),
+            &core.mcp_root_request_metadata_keys(),
+        ) {
+            Ok(Some(call)) => Some(call),
+            Ok(None) => return inner.call(Request::from_parts(parts, Body::from(body))).await,
+            Err(error) => return Ok(error_response(error.status, error.code, &error.message)),
+        }
+    } else {
+        None
+    };
+    let operation = match payment_operation(core, &route, &parts, &body, mcp_call.as_ref()) {
         Ok(operation) => operation,
         Err(error) => return Ok(error_response(error.status, error.code, &error.message)),
     };
     let run_id = operation.run_id.clone();
-    match core.protect(&operation).await {
-        Ok(ProtectionOutcome::PaymentRequired { challenge }) => Ok(challenge_response(&challenge)),
-        Ok(ProtectionOutcome::Authorized { payment }) => {
-            let settlement = *payment;
-            let payment_response = match encode_payment_response(&settlement) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "SETTLEMENT_EVIDENCE_INVALID",
-                        &error,
-                    ))
-                }
-            };
-            let intent_id = settlement.intent.id.clone();
-            let mut request = Request::from_parts(parts, Body::from(body));
-            request.extensions_mut().insert(settlement);
-            let mut response = inner.call(request).await?;
-            if let Ok(value) = HeaderValue::from_str(&payment_response) {
-                response
-                    .headers_mut()
-                    .insert(HeaderName::from_static("payment-response"), value);
+    match core.protect_with_challenge(&operation).await {
+        Ok((ProtectionOutcome::PaymentRequired { challenge }, _)) => {
+            if let Some(call) = &mcp_call {
+                Ok(AxumProtocolResponse::mcp_challenge(core, &challenge, &call.id))
+            } else {
+                Ok(AxumProtocolResponse::challenge(core, &challenge))
             }
-            tracing::info!(
-                event.name = "agentvault.sdk.payee.resource_released",
-                run.id = %run_id,
-                payment.intent_id = %intent_id
-            );
-            Ok(response)
         }
-        Err(error) => Ok(sdk_error_response(error)),
+        Ok((ProtectionOutcome::Authorized { payment }, challenge)) => {
+            release_authorized(
+                inner,
+                core,
+                AuthorizedRelease {
+                    parts,
+                    body: &body,
+                    mcp_call: mcp_call.as_ref(),
+                    challenge: &challenge,
+                    settlement: *payment,
+                    max_body_bytes,
+                    run_id: &run_id,
+                },
+            )
+            .await
+        }
+        Err(PayeeProtectionError::Rejected { challenge, message }) => {
+            if let Some(call) = &mcp_call {
+                Ok(AxumProtocolResponse::mcp_rejection(
+                    core,
+                    challenge.as_ref(),
+                    &call.id,
+                    &message,
+                ))
+            } else {
+                Ok(AxumProtocolResponse::challenge(core, challenge.as_ref()))
+            }
+        }
+        Err(PayeeProtectionError::Sdk(error)) => Ok(sdk_error_response(error)),
     }
 }
 
+struct AuthorizedRelease<'a> {
+    parts: Parts,
+    body: &'a [u8],
+    mcp_call: Option<&'a McpCall>,
+    challenge: &'a crate::PaymentChallenge,
+    settlement: crate::SettledIncomingPayment,
+    max_body_bytes: usize,
+    run_id: &'a str,
+}
+
+async fn release_authorized<S, T>(
+    inner: &mut S,
+    core: &PayeeMiddleware<T>,
+    release: AuthorizedRelease<'_>,
+) -> Result<Response<Body>, Infallible>
+where
+    S: Service<Request<Body>, Response = Response<Body>, Error = Infallible>,
+{
+    let AuthorizedRelease {
+        parts,
+        body,
+        mcp_call,
+        challenge,
+        settlement,
+        max_body_bytes,
+        run_id,
+    } = release;
+    let intent_id = settlement.intent.id.clone();
+    let replay_body = mcp_call.map_or_else(|| body.to_vec(), |call| call.canonical_body.clone());
+    let mut request = Request::from_parts(parts, Body::from(replay_body));
+    request.extensions_mut().insert(settlement.clone());
+    let mut response = inner.call(request).await?;
+    if core
+        .merchant_evidence_header_names()
+        .iter()
+        .any(|name| response.headers().contains_key(*name))
+    {
+        return Ok(error_response(
+            StatusCode::BAD_GATEWAY,
+            "SETTLEMENT_EVIDENCE_INVALID",
+            "paid handler attempted to supply settlement evidence",
+        ));
+    }
+    if let Some(call) = mcp_call {
+        response =
+            AxumProtocolResponse::mcp_receipt(core, challenge, &settlement, &call.id, response, max_body_bytes).await;
+    } else {
+        let receipt = match core.receipt_response(&settlement) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "SETTLEMENT_EVIDENCE_INVALID",
+                    &error.to_string(),
+                ))
+            }
+        };
+        if let Err(error) = AxumProtocolResponse::apply_headers(response.headers_mut(), &receipt.headers) {
+            return Ok(error_response(
+                StatusCode::BAD_GATEWAY,
+                "SETTLEMENT_EVIDENCE_INVALID",
+                &error,
+            ));
+        }
+    }
+    if response.status().is_success() {
+        tracing::info!(
+            event.name = "agentvault.sdk.payee.resource_released",
+            run.id = %run_id,
+            payment.intent_id = %intent_id
+        );
+    }
+    Ok(response)
+}
+
+#[derive(Debug)]
 struct OperationError {
     status: StatusCode,
     code: &'static str,
     message: String,
 }
 
-fn payment_operation(
+struct McpCall {
+    id: Value,
+    meta: Value,
+    canonical_body: Vec<u8>,
+}
+
+impl McpCall {
+    fn parse(
+        body: &[u8],
+        expected_tool: &str,
+        payment_metadata_keys: &[&str],
+        root_payment_metadata_keys: &[&str],
+    ) -> std::result::Result<Option<Self>, OperationError> {
+        let Ok(mut message) = serde_json::from_slice::<Value>(body) else {
+            return Ok(None);
+        };
+        if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || message.get("method").and_then(Value::as_str) != Some("tools/call")
+            || message.pointer("/params/name").and_then(Value::as_str) != Some(expected_tool)
+        {
+            return Ok(None);
+        }
+        let id = message
+            .get("id")
+            .cloned()
+            .filter(|value| value.is_string() || value.is_number())
+            .ok_or_else(|| OperationError {
+                status: StatusCode::BAD_REQUEST,
+                code: "MCP_REQUEST_INVALID",
+                message: "paid MCP tools/call requires a string or numeric JSON-RPC id".to_owned(),
+            })?;
+        let params = message
+            .get("params")
+            .and_then(Value::as_object)
+            .ok_or_else(|| OperationError {
+                status: StatusCode::BAD_REQUEST,
+                code: "MCP_REQUEST_INVALID",
+                message: "MCP tools/call params must be an object".to_owned(),
+            })?;
+        let nested_meta = params.get("_meta").cloned().unwrap_or_else(|| json!({}));
+        let mut meta = nested_meta.as_object().cloned().ok_or_else(|| OperationError {
+            status: StatusCode::BAD_REQUEST,
+            code: "PAYMENT_INVALID",
+            message: "MCP params._meta must be an object".to_owned(),
+        })?;
+        let root_meta = message.get("_meta").cloned().unwrap_or_else(|| json!({}));
+        let root_meta = root_meta.as_object().ok_or_else(|| OperationError {
+            status: StatusCode::BAD_REQUEST,
+            code: "PAYMENT_INVALID",
+            message: "JSON-RPC root _meta must be an object".to_owned(),
+        })?;
+        for key in root_payment_metadata_keys {
+            if let Some(value) = root_meta.get(*key) {
+                if meta.contains_key(*key) {
+                    return Err(OperationError {
+                        status: StatusCode::BAD_REQUEST,
+                        code: "PAYMENT_INVALID",
+                        message: "duplicate MCP payment credential metadata".to_owned(),
+                    });
+                }
+                meta.insert((*key).to_owned(), value.clone());
+            }
+        }
+        let params = message
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .expect("MCP params were validated as an object");
+        if let Some(canonical_meta) = params.get_mut("_meta").and_then(Value::as_object_mut) {
+            for key in payment_metadata_keys {
+                canonical_meta.remove(*key);
+            }
+            if canonical_meta.is_empty() {
+                params.remove("_meta");
+            }
+        }
+        let remove_root_meta = if let Some(canonical_meta) = message.get_mut("_meta").and_then(Value::as_object_mut) {
+            for key in root_payment_metadata_keys {
+                canonical_meta.remove(*key);
+            }
+            canonical_meta.is_empty()
+        } else {
+            false
+        };
+        if remove_root_meta {
+            message
+                .as_object_mut()
+                .expect("MCP message is an object")
+                .remove("_meta");
+        }
+        Self::sort_object_keys(&mut message);
+        let canonical_body = serde_json::to_vec(&message).map_err(|error| OperationError {
+            status: StatusCode::BAD_REQUEST,
+            code: "MCP_REQUEST_INVALID",
+            message: format!("MCP request cannot be canonicalized: {error}"),
+        })?;
+        Ok(Some(Self {
+            id,
+            meta: Value::Object(meta),
+            canonical_body,
+        }))
+    }
+
+    fn sort_object_keys(value: &mut Value) {
+        match value {
+            Value::Array(values) => values.iter_mut().for_each(Self::sort_object_keys),
+            Value::Object(object) => {
+                let mut fields = std::mem::take(object).into_iter().collect::<Vec<_>>();
+                fields.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+                for (name, mut field) in fields {
+                    Self::sort_object_keys(&mut field);
+                    object.insert(name, field);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn payment_operation<T>(
+    core: &PayeeMiddleware<T>,
     route: &AxumPayeeRoute,
     parts: &Parts,
     body: &[u8],
-    max_body_bytes: usize,
+    mcp_call: Option<&McpCall>,
 ) -> std::result::Result<PayeeOperation, OperationError> {
     let run_id = text_header(&parts.headers, RUN_ID_HEADER).ok_or_else(|| OperationError {
         status: StatusCode::BAD_REQUEST,
         code: "PAYMENT_CONTEXT_REQUIRED",
         message: "x-run-id is required".to_owned(),
     })?;
-    let credential_payload = text_header(&parts.headers, PAYMENT_SIGNATURE_HEADER)
-        .map(|value| {
-            decode_x402_payload(value, max_body_bytes).map_err(|message| OperationError {
+    let headers = payment_headers(&parts.headers, &core.credential_header_names())?;
+    let credential_payload = if let Some(call) = mcp_call {
+        match core.presented_credential(&route.protocol, &headers) {
+            Ok(Some(_)) => {
+                return Err(OperationError {
+                    status: StatusCode::BAD_REQUEST,
+                    code: "PAYMENT_INVALID",
+                    message: "MCP payment credentials must use protocol metadata, not HTTP headers".to_owned(),
+                })
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(OperationError {
+                    status: StatusCode::BAD_REQUEST,
+                    code: "PAYMENT_INVALID",
+                    message: error.to_string(),
+                })
+            }
+        }
+        core.presented_mcp_credential(&route.protocol, &call.meta)
+            .map_err(|error| OperationError {
                 status: StatusCode::BAD_REQUEST,
                 code: "PAYMENT_INVALID",
-                message,
-            })
-        })
-        .transpose()?;
+                message: error.to_string(),
+            })?
+    } else {
+        core.presented_credential(&route.protocol, &headers)
+            .map_err(|error| OperationError {
+                status: StatusCode::BAD_REQUEST,
+                code: "PAYMENT_INVALID",
+                message: error.to_string(),
+            })?
+    };
+    let hash_body = mcp_call.map_or(body, |call| call.canonical_body.as_slice());
     Ok(PayeeOperation {
         scenario_id: route.scenario_id.clone(),
         run_id: run_id.to_owned(),
@@ -254,21 +499,41 @@ fn payment_operation(
         resource: route.resource.clone(),
         origin: route.origin.clone(),
         protocol: route.protocol.clone(),
-        request_hash: request_hash(&parts.method, parts.uri.path(), body),
+        request_hash: request_hash(&parts.method, parts.uri.path(), hash_body),
         credential_payload,
     })
 }
 
+fn payment_headers(
+    source: &axum::http::HeaderMap,
+    names: &[&str],
+) -> std::result::Result<std::collections::BTreeMap<String, String>, OperationError> {
+    let mut headers = std::collections::BTreeMap::new();
+    for name in names {
+        let mut values = source.get_all(*name).iter();
+        let Some(value) = values.next() else {
+            continue;
+        };
+        if values.next().is_some() {
+            return Err(OperationError {
+                status: StatusCode::BAD_REQUEST,
+                code: "PAYMENT_INVALID",
+                message: format!("duplicate payment request header is not allowed: {name}"),
+            });
+        }
+        let value = value.to_str().map_err(|_| OperationError {
+            status: StatusCode::BAD_REQUEST,
+            code: "PAYMENT_INVALID",
+            message: "payment headers must contain text values".to_owned(),
+        })?;
+        headers.insert((*name).to_owned(), value.to_owned());
+    }
+    Ok(headers)
+}
+
+#[cfg(test)]
 fn is_mcp_tool_call(body: &[u8], expected: &str) -> bool {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            (value.get("method")?.as_str()? == "tools/call")
-                .then(|| value.get("params")?.get("name")?.as_str())
-                .flatten()
-                .map(str::to_owned)
-        })
-        .is_some_and(|tool| tool == expected)
+    McpCall::parse(body, expected, &[], &[]).is_ok_and(|call| call.is_some())
 }
 
 fn text_header<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'a str> {
@@ -277,24 +542,6 @@ fn text_header<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'a
         .to_str()
         .ok()
         .filter(|value| !value.trim().is_empty())
-}
-
-fn decode_x402_payload(value: &str, limit: usize) -> Result<Value, String> {
-    if value.len() > limit.saturating_mul(4).div_ceil(3).saturating_add(4) {
-        return Err("PAYMENT-SIGNATURE exceeds configured limit".to_owned());
-    }
-    let decoded = STANDARD
-        .decode(value)
-        .map_err(|_| "PAYMENT-SIGNATURE is not canonical base64".to_owned())?;
-    if decoded.len() > limit || STANDARD.encode(&decoded) != value {
-        return Err("PAYMENT-SIGNATURE is non-canonical or oversized".to_owned());
-    }
-    let payload: Value =
-        serde_json::from_slice(&decoded).map_err(|_| "PAYMENT-SIGNATURE is not valid x402 JSON".to_owned())?;
-    if !payload.is_object() {
-        return Err("PAYMENT-SIGNATURE must be an x402 JSON object".to_owned());
-    }
-    Ok(payload)
 }
 
 fn request_hash(method: &Method, path: &str, body: &[u8]) -> String {
@@ -316,64 +563,226 @@ fn request_hash(method: &Method, path: &str, body: &[u8]) -> String {
     encoded
 }
 
-fn challenge_response(challenge: &crate::PaymentChallenge) -> Response<Body> {
-    let Some(required) = challenge.payload.get("payment_required") else {
-        return error_response(
-            StatusCode::BAD_GATEWAY,
-            "CHALLENGE_INVALID",
-            "AgentVault returned no protocol wire challenge",
-        );
-    };
-    let Ok(body) = serde_json::to_vec(required) else {
-        return error_response(
-            StatusCode::BAD_GATEWAY,
-            "CHALLENGE_INVALID",
-            "AgentVault challenge cannot be encoded",
-        );
-    };
-    let mut response = Response::new(Body::from(body.clone()));
-    *response.status_mut() = StatusCode::PAYMENT_REQUIRED;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    if let Ok(protocol) = HeaderValue::from_str(&challenge.protocol) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("payment-protocol"), protocol);
-    }
-    if let Ok(expires_at) = HeaderValue::from_str(&challenge.expires_at.to_string()) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("payment-expires-at"), expires_at);
-    }
-    if let Ok(required) = HeaderValue::from_str(&STANDARD.encode(&body)) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("payment-required"), required);
-    }
-    response
-}
+struct AxumProtocolResponse;
 
-fn encode_payment_response(payment: &SettledIncomingPayment) -> Result<String, String> {
-    let transaction = payment
-        .receipt
-        .tx_hash
-        .as_deref()
-        .ok_or_else(|| "confirmed x402 receipt has no transaction".to_owned())?;
-    let payer = payment
-        .receipt
-        .payer
-        .as_deref()
-        .ok_or_else(|| "confirmed x402 receipt has no trusted payer".to_owned())?;
-    let wire = json!({
-        "success": true,
-        "payer": payer,
-        "transaction": transaction,
-        "network": payment.receipt.asset.network,
-    });
-    serde_json::to_vec(&wire)
-        .map(|body| STANDARD.encode(body))
-        .map_err(|error| error.to_string())
+impl AxumProtocolResponse {
+    fn challenge<T>(core: &PayeeMiddleware<T>, challenge: &crate::PaymentChallenge) -> Response<Body> {
+        let wire = match core.challenge_response(challenge) {
+            Ok(wire) => wire,
+            Err(error) => return error_response(StatusCode::BAD_GATEWAY, "CHALLENGE_INVALID", &error.to_string()),
+        };
+        let mut response = Response::new(Body::from(wire.body));
+        *response.status_mut() = StatusCode::PAYMENT_REQUIRED;
+        if let Err(error) = Self::apply_headers(response.headers_mut(), &wire.headers) {
+            return error_response(StatusCode::BAD_GATEWAY, "CHALLENGE_INVALID", &error);
+        }
+        if let Some(content_type) = wire.content_type {
+            let Ok(content_type) = HeaderValue::from_str(&content_type) else {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "CHALLENGE_INVALID",
+                    "protocol challenge content type is invalid",
+                );
+            };
+            response.headers_mut().insert(header::CONTENT_TYPE, content_type);
+        }
+        if Self::apply_challenge_metadata(response.headers_mut(), challenge).is_err() {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "CHALLENGE_INVALID",
+                "protocol challenge metadata is invalid",
+            );
+        }
+        response
+    }
+
+    fn mcp_challenge<T>(core: &PayeeMiddleware<T>, challenge: &crate::PaymentChallenge, id: &Value) -> Response<Body> {
+        let wire = match core.mcp_challenge_response(challenge) {
+            Ok(wire) => wire,
+            Err(error) => return error_response(StatusCode::BAD_GATEWAY, "CHALLENGE_INVALID", &error.to_string()),
+        };
+        Self::mcp_payment_response(wire, id, challenge)
+    }
+
+    fn mcp_rejection<T>(
+        core: &PayeeMiddleware<T>,
+        challenge: &crate::PaymentChallenge,
+        id: &Value,
+        message: &str,
+    ) -> Response<Body> {
+        let wire = match core.mcp_rejection_response(challenge, message) {
+            Ok(wire) => wire,
+            Err(error) => return error_response(StatusCode::BAD_GATEWAY, "CHALLENGE_INVALID", &error.to_string()),
+        };
+        Self::mcp_payment_response(wire, id, challenge)
+    }
+
+    fn mcp_payment_response(
+        wire: crate::ProtocolMcpPaymentRequired,
+        id: &Value,
+        challenge: &crate::PaymentChallenge,
+    ) -> Response<Body> {
+        let wire = match wire {
+            crate::ProtocolMcpPaymentRequired::Result(result) => {
+                json!({"jsonrpc": "2.0", "id": id, "result": result})
+            }
+            crate::ProtocolMcpPaymentRequired::Error(error) => {
+                json!({"jsonrpc": "2.0", "id": id, "error": error})
+            }
+        };
+        let Ok(body) = serde_json::to_vec(&wire) else {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "CHALLENGE_INVALID",
+                "MCP challenge cannot be encoded",
+            );
+        };
+        let mut response = Response::new(Body::from(body));
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        if Self::apply_challenge_metadata(response.headers_mut(), challenge).is_err() {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "CHALLENGE_INVALID",
+                "protocol challenge metadata is invalid",
+            );
+        }
+        response
+    }
+
+    fn apply_challenge_metadata(
+        headers: &mut axum::http::HeaderMap,
+        challenge: &crate::PaymentChallenge,
+    ) -> std::result::Result<(), ()> {
+        for (name, value) in [
+            ("payment-protocol", challenge.protocol.clone()),
+            ("payment-expires-at", challenge.expires_at.to_string()),
+        ] {
+            let value = HeaderValue::from_str(&value).map_err(|_| ())?;
+            headers.insert(HeaderName::from_static(name), value);
+        }
+        Ok(())
+    }
+
+    async fn mcp_receipt<T>(
+        core: &PayeeMiddleware<T>,
+        challenge: &crate::PaymentChallenge,
+        payment: &crate::SettledIncomingPayment,
+        id: &Value,
+        response: Response<Body>,
+        limit: usize,
+    ) -> Response<Body> {
+        if !response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("application/json"))
+        {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "MCP_RESPONSE_INVALID",
+                "paid MCP handlers must return a bounded application/json result",
+            );
+        }
+        let (mut parts, body) = response.into_parts();
+        let Ok(body) = to_bytes(body, limit).await else {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "MCP_RESPONSE_INVALID",
+                "paid MCP response exceeds configured limit",
+            );
+        };
+        let message = match Self::decode_mcp_handler_response(core, id, &body) {
+            Ok(value) => value,
+            Err(message) => return error_response(StatusCode::BAD_GATEWAY, "MCP_RESPONSE_INVALID", message),
+        };
+        if !parts.status.is_success() {
+            return Response::from_parts(parts, Body::from(body));
+        }
+        let metadata = match core.mcp_receipt(challenge, payment) {
+            Ok(value) => value,
+            Err(error) => {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "SETTLEMENT_EVIDENCE_INVALID",
+                    &error.to_string(),
+                )
+            }
+        };
+        let body = match Self::encode_mcp_receipt(message, metadata, limit) {
+            Ok(value) => value,
+            Err(message) => return error_response(StatusCode::BAD_GATEWAY, "MCP_RESPONSE_INVALID", message),
+        };
+        parts.headers.remove(header::CONTENT_LENGTH);
+        parts
+            .headers
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        Response::from_parts(parts, Body::from(body))
+    }
+
+    fn decode_mcp_handler_response<T>(
+        core: &PayeeMiddleware<T>,
+        id: &Value,
+        body: &[u8],
+    ) -> std::result::Result<Value, &'static str> {
+        let message = serde_json::from_slice::<Value>(body).map_err(|_| "paid MCP handler returned invalid JSON")?;
+        if message.get("id") != Some(id) {
+            return Err("paid MCP response id does not match its request");
+        }
+        let supplied_evidence = message
+            .get("result")
+            .and_then(|result| result.get("_meta"))
+            .and_then(Value::as_object)
+            .is_some_and(|meta| {
+                core.mcp_receipt_metadata_keys()
+                    .iter()
+                    .any(|key| meta.contains_key(*key))
+            });
+        if supplied_evidence {
+            return Err("paid MCP handler attempted to supply settlement metadata");
+        }
+        Ok(message)
+    }
+
+    fn encode_mcp_receipt(
+        mut message: Value,
+        metadata: crate::ProtocolMcpMetadata,
+        limit: usize,
+    ) -> std::result::Result<Vec<u8>, &'static str> {
+        let result = message
+            .get_mut("result")
+            .and_then(Value::as_object_mut)
+            .ok_or("paid MCP handler must return a JSON-RPC result")?;
+        let meta = result
+            .entry("_meta")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or("paid MCP result._meta must be an object")?;
+        if meta.contains_key(metadata.key) {
+            return Err("paid MCP handler attempted to supply settlement metadata");
+        }
+        meta.insert(metadata.key.to_owned(), metadata.value);
+        let body = serde_json::to_vec(&message).map_err(|_| "paid MCP response cannot be encoded")?;
+        if body.len() > limit {
+            return Err("paid MCP response exceeds configured limit");
+        }
+        Ok(body)
+    }
+
+    fn apply_headers(
+        target: &mut axum::http::HeaderMap,
+        headers: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        for (name, value) in headers {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| "protocol response header name is invalid".to_owned())?;
+            let value =
+                HeaderValue::from_str(value).map_err(|_| "protocol response header value is invalid".to_owned())?;
+            target.insert(name, value);
+        }
+        Ok(())
+    }
 }
 
 fn sdk_error_response(error: Error) -> Response<Body> {

@@ -1,49 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     model::{PaymentChallenge, PaymentOffer},
-    protocol::PaymentProtocol,
+    protocol::ProtocolRegistry,
     storage::{OfferStorage, PolicyStorage, WalletStorage},
     Error, Result,
 };
 
 use super::ScenarioHandler;
-
-/// Immutable protocol registry shared by payer and payee handlers.
-pub struct ProtocolRegistry {
-    adapters: HashMap<&'static str, Arc<dyn PaymentProtocol>>,
-}
-
-impl ProtocolRegistry {
-    /// Creates a registry and rejects duplicate adapter names.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the adapter set contains duplicate protocol
-    /// names. An empty registry represents a disabled payment direction.
-    pub fn new(adapters: impl IntoIterator<Item = Arc<dyn PaymentProtocol>>) -> Result<Self> {
-        let mut registered = HashMap::new();
-        for adapter in adapters {
-            let name = adapter.name();
-            if registered.insert(name, adapter).is_some() {
-                return Err(Error::Config(format!("duplicate payment protocol adapter: {name}")));
-            }
-        }
-        Ok(Self { adapters: registered })
-    }
-
-    /// Resolves a protocol adapter by its stable wire name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the requested protocol is not registered.
-    pub fn get(&self, protocol: &str) -> Result<Arc<dyn PaymentProtocol>> {
-        self.adapters
-            .get(protocol)
-            .cloned()
-            .ok_or_else(|| Error::PaymentProtocol(format!("unsupported payment protocol: {protocol}")))
-    }
-}
 
 /// Payee offer resolution. Pricing and recipient address always come from
 /// server-managed records, never request overrides.

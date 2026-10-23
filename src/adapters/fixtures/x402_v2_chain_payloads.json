@@ -1,0 +1,87 @@
+{
+  "schema": "agentvault.sdk.x402-v2-chain-payloads.v1",
+  "cases": {
+    "evm_eip3009": {
+      "payment_required": {
+        "x402Version": 2,
+        "resource": {
+          "url": "https://merchant.example/marketpulse",
+          "mimeType": "application/json"
+        },
+        "accepts": [{
+          "scheme": "exact",
+          "network": "eip155:31337",
+          "amount": "1000",
+          "asset": "0x2222222222222222222222222222222222222222",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "maxTimeoutSeconds": 60,
+          "extra": {"name": "USDC", "version": "2"}
+        }]
+      },
+      "payment_payload": {
+        "x402Version": 2,
+        "resource": {
+          "url": "https://merchant.example/marketpulse",
+          "mimeType": "application/json"
+        },
+        "accepted": {
+          "scheme": "exact",
+          "network": "eip155:31337",
+          "amount": "1000",
+          "asset": "0x2222222222222222222222222222222222222222",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "maxTimeoutSeconds": 60,
+          "extra": {"name": "USDC", "version": "2"}
+        },
+        "payload": {
+          "signature": "0xababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+          "authorization": {
+            "from": "0x3333333333333333333333333333333333333333",
+            "to": "0x1111111111111111111111111111111111111111",
+            "value": "1000",
+            "validAfter": "0",
+            "validBefore": "2000000000",
+            "nonce": "0x4242424242424242424242424242424242424242424242424242424242424242"
+          }
+        }
+      }
+    },
+    "solana_spl_exact": {
+      "payment_required": {
+        "x402Version": 2,
+        "resource": {
+          "url": "mcp://tool/marketpulse.realtime",
+          "mimeType": "application/json"
+        },
+        "accepts": [{
+          "scheme": "exact",
+          "network": "solana:8G27sdoatougTUhvxHqh3Bpm3RMjxeCo",
+          "amount": "1000000",
+          "asset": "Fc2ZWLQ7Qp6ngjtvA6DK7dmMw7EqySGrpSfWVWzk7ka4",
+          "payTo": "99yBdYtNbLYkcsfgJ38r4NVKjyqUSnxsHX6QFbSdZqHt",
+          "maxTimeoutSeconds": 60,
+          "extra": {"feePayer": "BPax2dgxEvQpzh46SxCibHkypyp3XdaG4YqJXaeaAFwo"}
+        }]
+      },
+      "payment_payload": {
+        "x402Version": 2,
+        "resource": {
+          "url": "mcp://tool/marketpulse.realtime",
+          "mimeType": "application/json"
+        },
+        "accepted": {
+          "scheme": "exact",
+          "network": "solana:8G27sdoatougTUhvxHqh3Bpm3RMjxeCo",
+          "amount": "1000000",
+          "asset": "Fc2ZWLQ7Qp6ngjtvA6DK7dmMw7EqySGrpSfWVWzk7ka4",
+          "payTo": "99yBdYtNbLYkcsfgJ38r4NVKjyqUSnxsHX6QFbSdZqHt",
+          "maxTimeoutSeconds": 60,
+          "extra": {"feePayer": "BPax2dgxEvQpzh46SxCibHkypyp3XdaG4YqJXaeaAFwo"}
+        },
+        "payload": {
+          "transaction": "Ak5T3VmcdmKY8oYpl2iulz55rmK+2I9/UYRyERDBrtOXZZZxQkaf9nsmijFTJ6vWyWfSNlGPfIfVX7nbddKkwAe/Bz3BQMydJdta+lKvftstRMnE/AVN4QyFQHRo5hJOM6wBppZHwQ2bLUuzIQZy4u+owR5HIXpO0xcyiwUbOqUHgAIBBAiaXgh1865Gt9sKBbkU7uFeLGRKOeCRKYhAjAwS8hj9Ol3ONfRRimk3DxDAI7VNEAH4/RLHbpgOsIdMwyTuESmud+aEPYKklpfBEunDw52tbD5WJ9rvRF0A9bDvHoDrzEmUFPketymuXHXflpUcaRw1J++2InwzwT2sX4n7CIasMAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAABUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B+oQEEFRI0G3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8Aqdj8ta4Dqtifi1tkp9W5JktyTzjdvvZ26VFetKkNb3wJfW5a8t12luPc+Fj2pBOr1AcGOl1oGp29hzoTjgrF+rkEBAAFAo9AAAAEAAkDAQAAAAAAAAAGBAIHAwEKDEBCDwAAAAAABgUAGHd2Zkt4RHhNaHVHVHB4dVR6TlZRZHc9PQA="
+        }
+      }
+    }
+  }
+}

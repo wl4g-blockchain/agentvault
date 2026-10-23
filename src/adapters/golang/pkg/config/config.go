@@ -55,6 +55,50 @@ type MqttConfig struct {
 	MaxResponseBytes int
 }
 
+type TransportProvider string
+
+const (
+	TransportProviderGrpc TransportProvider = "grpc"
+	TransportProviderMqtt TransportProvider = "mqtt"
+)
+
+// VaultTransportConfig is the single typed transport selection entry. Exactly
+// one provider-specific block must match Provider.
+type VaultTransportConfig struct {
+	Provider TransportProvider `json:"provider" yaml:"provider"`
+	Grpc     *GrpcConfig       `json:"grpc,omitempty" yaml:"grpc,omitempty"`
+	Mqtt     *MqttConfig       `json:"mqtt,omitempty" yaml:"mqtt,omitempty"`
+}
+
+func (config *VaultTransportConfig) ApplyDefaults() {
+	if config == nil {
+		return
+	}
+	if config.Grpc != nil {
+		config.Grpc.ApplyDefaults()
+	}
+	if config.Mqtt != nil {
+		config.Mqtt.ApplyDefaults()
+	}
+}
+
+func (config VaultTransportConfig) Validate() error {
+	switch config.Provider {
+	case TransportProviderGrpc:
+		if config.Grpc == nil || config.Mqtt != nil {
+			return errors.New("grpc transport requires only the grpc configuration block")
+		}
+		return config.Grpc.Validate()
+	case TransportProviderMqtt:
+		if config.Mqtt == nil || config.Grpc != nil {
+			return errors.New("mqtt transport requires only the mqtt configuration block")
+		}
+		return config.Mqtt.Validate()
+	default:
+		return errors.New("transport provider must be grpc or mqtt")
+	}
+}
+
 func (config *MqttConfig) ApplyDefaults() {
 	if config.RequestTimeout == 0 {
 		config.RequestTimeout = 30 * time.Second
@@ -109,6 +153,7 @@ const defaultMaxChallengeBytes int64 = 256 * 1024
 // only its stable run context for each logical request.
 type PayerConfig struct {
 	ScenarioID           string
+	Protocols            []string
 	ApprovalTimeout      time.Duration
 	ApprovalPollInterval time.Duration
 	DeliveryRetries      int
@@ -116,6 +161,9 @@ type PayerConfig struct {
 }
 
 func (config *PayerConfig) ApplyDefaults() {
+	if config.Protocols == nil {
+		config.Protocols = []string{"x402", "mpp"}
+	}
 	if config.ApprovalTimeout == 0 {
 		config.ApprovalTimeout = 2 * time.Minute
 	}
@@ -136,14 +184,21 @@ func (config PayerConfig) Validate() error {
 		config.DeliveryRetries > 3 || config.MaxChallengeBytes <= 0 {
 		return errors.New("payer middleware retry, timeout, or challenge limits are invalid")
 	}
+	if err := protocolNames(config.Protocols).validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
 type PayeeConfig struct {
 	MaxBodyBytes int64
+	Protocols    []string
 }
 
 func (config *PayeeConfig) ApplyDefaults() {
+	if config.Protocols == nil {
+		config.Protocols = []string{"x402", "mpp"}
+	}
 	if config.MaxBodyBytes == 0 {
 		config.MaxBodyBytes = 1024 * 1024
 	}
@@ -152,6 +207,30 @@ func (config *PayeeConfig) ApplyDefaults() {
 func (config PayeeConfig) Validate() error {
 	if config.MaxBodyBytes <= 0 {
 		return errors.New("payee middleware body limit must be positive")
+	}
+	return protocolNames(config.Protocols).validate()
+}
+
+type protocolNames []string
+
+func (protocols protocolNames) validate() error {
+	if len(protocols) == 0 {
+		return errors.New("at least one payment protocol must be enabled")
+	}
+	seen := make(map[string]struct{}, len(protocols))
+	for _, name := range protocols {
+		if len(name) == 0 || len(name) > 32 {
+			return fmt.Errorf("invalid payment protocol name: %s", name)
+		}
+		for _, character := range name {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+				return fmt.Errorf("invalid payment protocol name: %s", name)
+			}
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("duplicate payment protocol: %s", name)
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }

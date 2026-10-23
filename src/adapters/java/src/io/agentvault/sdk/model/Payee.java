@@ -128,5 +128,7 @@ public final class Payee {
 
     public sealed interface ProtectionOutcome permits PaymentRequired, Authorized {}
     public record PaymentRequired(PaymentChallenge challenge) implements ProtectionOutcome {}
-    public record Authorized(SettledIncomingPayment payment) implements ProtectionOutcome {}
+    public record Authorized(
+            PaymentChallenge challenge,
+            SettledIncomingPayment payment) implements ProtectionOutcome {}
 }

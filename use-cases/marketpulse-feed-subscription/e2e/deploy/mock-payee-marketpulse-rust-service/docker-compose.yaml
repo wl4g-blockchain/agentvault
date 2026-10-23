@@ -10,6 +10,7 @@ services:
         HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}
         NO_PROXY: ${E2E_MARKETPULSE_BUILD_NO_PROXY:-127.0.0.1,localhost}
         E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_MARKETPULSE_RUST_RUNTIME_IMAGE: ${E2E_MARKETPULSE_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     environment:
       MARKETPULSE_BIND: ${E2E_MARKETPULSE_BIND:-0.0.0.0:8081}
       AGENTVAULT_TRANSPORT: ${E2E_AGENTVAULT_TRANSPORT:-mqtt}
@@ -32,7 +33,7 @@ services:
     ports: ["127.0.0.1:${E2E_MARKETPULSE_RUST_PORT:-38081}:8081"]
     volumes: ["marketpulse-rust-data:/var/lib/marketpulse"]
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
+      test: ["CMD", "/usr/local/bin/mock-payee-marketpulse-rust-service", "--healthcheck"]
       interval: 3s
       timeout: 3s
       retries: 30

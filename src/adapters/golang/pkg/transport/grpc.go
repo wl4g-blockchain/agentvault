@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"google.golang.org/grpc"
@@ -24,6 +25,8 @@ const grpcExecuteMethod = "/agentvault.transport.v1.PaymentTransport/Execute"
 type GrpcVaultTransport struct {
 	connection *grpc.ClientConn
 	config     config.GrpcConfig
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func NewGrpcVaultTransport(settings config.GrpcConfig) (*GrpcVaultTransport, error) {
@@ -123,5 +126,6 @@ func (transport *GrpcVaultTransport) Close() error {
 	if transport == nil || transport.connection == nil {
 		return nil
 	}
-	return transport.connection.Close()
+	transport.closeOnce.Do(func() { transport.closeErr = transport.connection.Close() })
+	return transport.closeErr
 }

@@ -8,6 +8,9 @@ use std::{collections::BTreeMap, net::IpAddr, path::Path, time::Duration};
 
 use ::config::{Config as ConfigLoader, Environment, File};
 use serde::{Deserialize, Serialize};
+use solana_pubkey::Pubkey;
+use x402_chain_solana::chain::SolanaChainReference;
+use x402_types::chain::ChainId;
 
 use crate::{
     model::{wallet::WalletSelectionStrategy, Amount},
@@ -21,11 +24,11 @@ pub(crate) const MAX_CACHE_ENTRIES: usize = 1_000_000;
 pub(crate) const MAX_CACHE_VALUE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CACHE_REDIS_ENDPOINTS: usize = 32;
 pub(crate) const MAX_CACHE_RETRIES: u32 = 32;
-pub(crate) const MAX_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+pub(crate) const MAX_CACHE_TTL: Duration = Duration::from_hours(24);
 const MAX_STORAGE_CONNECTIONS: u32 = 256;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECONCILIATION_BATCH_SIZE: usize = 10_000;
-const MAX_CHALLENGE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_CHALLENGE_TTL: Duration = Duration::from_hours(24);
 const MAX_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROTOCOL_ASSETS: usize = 64;
 const MAX_RPC_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -356,6 +359,7 @@ pub struct X402AssetConfig {
     pub contract: String,
     pub symbol: String,
     pub decimals: u8,
+    pub fee_payer: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -729,7 +733,7 @@ impl Default for MemoryCacheConfig {
         Self {
             max_entries: 10_000,
             max_value_bytes: 1024 * 1024,
-            default_ttl: Duration::from_secs(5 * 60),
+            default_ttl: Duration::from_mins(5),
         }
     }
 }
@@ -743,7 +747,7 @@ impl Default for RedisCacheConfig {
             max_value_bytes: 1024 * 1024,
             connect_timeout: Duration::from_secs(3),
             operation_timeout: Duration::from_secs(2),
-            default_ttl: Duration::from_secs(5 * 60),
+            default_ttl: Duration::from_mins(5),
             retry_attempts: 5,
             min_retry_wait: Duration::from_millis(100),
             max_retry_wait: Duration::from_secs(2),
@@ -755,7 +759,7 @@ impl Default for PayerX402Config {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_challenge_ttl: Duration::from_secs(5 * 60),
+            max_challenge_ttl: Duration::from_mins(5),
             assets: Vec::new(),
         }
     }
@@ -765,7 +769,7 @@ impl Default for PayeeX402Config {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_challenge_ttl: Duration::from_secs(5 * 60),
+            max_challenge_ttl: Duration::from_mins(5),
             assets: Vec::new(),
             facilitator: ExternalProviderConfig::default(),
         }
@@ -779,6 +783,7 @@ impl Default for X402AssetConfig {
             contract: String::new(),
             symbol: "USDC".to_owned(),
             decimals: 6,
+            fee_payer: None,
         }
     }
 }
@@ -787,7 +792,7 @@ impl Default for PayerMppConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_challenge_ttl: Duration::from_secs(5 * 60),
+            max_challenge_ttl: Duration::from_mins(5),
             assets: Vec::new(),
         }
     }
@@ -797,7 +802,7 @@ impl Default for PayeeMppConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_challenge_ttl: Duration::from_secs(5 * 60),
+            max_challenge_ttl: Duration::from_mins(5),
             realm: String::new(),
             challenge_secret: SecretRefConfig::default(),
             assets: Vec::new(),
@@ -847,8 +852,8 @@ impl Default for ExternalProviderConfig {
 impl Default for ApprovalRuntimeConfig {
     fn default() -> Self {
         Self {
-            request_ttl: Duration::from_secs(15 * 60),
-            grant_ttl: Duration::from_secs(5 * 60),
+            request_ttl: Duration::from_mins(15),
+            grant_ttl: Duration::from_mins(5),
             expiry_interval: Duration::from_secs(15),
             expiry_batch_size: 100,
             jwt: ApprovalJwtConfig::default(),
@@ -881,7 +886,7 @@ impl Default for ReconciliationConfig {
             lease_ttl: Duration::from_secs(45),
             batch_size: 100,
             initial_backoff: Duration::from_secs(5),
-            max_backoff: Duration::from_secs(5 * 60),
+            max_backoff: Duration::from_mins(5),
         }
     }
 }
@@ -890,7 +895,7 @@ impl Default for WalletBalanceSyncConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            interval: Duration::from_secs(3 * 60),
+            interval: Duration::from_mins(3),
             batch_size: 1_000,
         }
     }
@@ -1157,9 +1162,8 @@ impl AppConfig {
         }
         validate_challenge_ttl("agentvault.payer.mpp", payer.mpp.max_challenge_ttl)?;
         if payer.mpp.enabled {
-            return Err(Error::Config(
-                "agentvault.payer.mpp is unavailable until the Tempo payer signing plan is implemented".to_owned(),
-            ));
+            enabled_adapters = enabled_adapters.saturating_add(1);
+            validate_mpp_assets("agentvault.payer.mpp.assets", &payer.mpp.assets)?;
         }
         validate_direction_enabled("payer", payer.enabled, enabled_adapters)
     }
@@ -1190,6 +1194,37 @@ impl AppConfig {
     }
 
     fn validate_chains(&self) -> Result<()> {
+        for asset in enabled_x402_assets(&self.agentvault) {
+            let chain = self.agentvault.chains.get(&asset.network).ok_or_else(|| {
+                Error::Config(format!(
+                    "agentvault.chains has no fixed endpoint for enabled network {}",
+                    asset.network
+                ))
+            })?;
+            let expected = if is_evm_network(&asset.network) {
+                ChainFamily::Evm
+            } else {
+                ChainFamily::Solana
+            };
+            if chain.family != expected {
+                return Err(Error::Config(format!(
+                    "x402 network {} does not match its configured chain family",
+                    asset.network
+                )));
+            }
+        }
+        for network in enabled_mpp_networks(&self.agentvault) {
+            let chain = self.agentvault.chains.get(network).ok_or_else(|| {
+                Error::Config(format!(
+                    "agentvault.chains has no fixed endpoint for enabled network {network}"
+                ))
+            })?;
+            if chain.family != ChainFamily::Evm {
+                return Err(Error::Config(format!(
+                    "enabled MPP Tempo network {network} must use an EVM chain"
+                )));
+            }
+        }
         for (network, chain) in &self.agentvault.chains {
             validate_chain_id(network, chain.family)?;
             validate_operator_endpoint(
@@ -1208,18 +1243,6 @@ impl AppConfig {
                 )));
             }
             validate_secret_headers(&format!("agentvault.chains.{network}.rpc"), &chain.rpc.secret_headers)?;
-        }
-        for network in enabled_asset_networks(&self.agentvault) {
-            let chain = self.agentvault.chains.get(network).ok_or_else(|| {
-                Error::Config(format!(
-                    "agentvault.chains has no fixed endpoint for enabled network {network}"
-                ))
-            })?;
-            if chain.family != ChainFamily::Evm {
-                return Err(Error::Config(format!(
-                    "enabled x402/MPP Tempo network {network} must use an EVM chain"
-                )));
-            }
         }
         Ok(())
     }
@@ -1418,8 +1441,18 @@ fn validate_x402_assets(field: &str, assets: &[X402AssetConfig]) -> Result<()> {
         )));
     }
     for (index, asset) in assets.iter().enumerate() {
-        validate_evm_network(&format!("{field}.network"), &asset.network)?;
-        if !valid_canonical_evm_address(&asset.contract)
+        let valid_chain_fields = if is_evm_network(&asset.network) {
+            valid_canonical_evm_address(&asset.contract) && asset.fee_payer.is_none()
+        } else if is_solana_network(&asset.network) {
+            asset.contract.parse::<Pubkey>().is_ok()
+                && asset
+                    .fee_payer
+                    .as_deref()
+                    .is_some_and(|fee_payer| fee_payer.parse::<Pubkey>().is_ok())
+        } else {
+            false
+        };
+        if !valid_chain_fields
             || asset.symbol != "USDC"
             || asset.decimals != 6
             || assets[..index]
@@ -1427,7 +1460,7 @@ fn validate_x402_assets(field: &str, assets: &[X402AssetConfig]) -> Result<()> {
                 .any(|prior| prior.network == asset.network && prior.contract == asset.contract)
         {
             return Err(Error::Config(format!(
-                "{field} contains an invalid or duplicate EVM USDC asset"
+                "{field} contains an invalid or duplicate x402 USDC asset"
             )));
         }
     }
@@ -1442,12 +1475,12 @@ fn validate_mpp_assets(field: &str, assets: &[MppAssetConfig]) -> Result<()> {
     }
     for (index, asset) in assets.iter().enumerate() {
         validate_evm_network(&format!("{field}.network"), &asset.network)?;
-        if asset.currency.trim().is_empty()
+        if !valid_canonical_evm_address(&asset.currency)
             || asset.symbol.trim().is_empty()
             || asset
                 .token_contract
                 .as_deref()
-                .is_some_and(|value| !valid_canonical_evm_address(value))
+                .is_some_and(|value| value != asset.currency)
             || assets[..index]
                 .iter()
                 .any(|prior| prior.network == asset.network && prior.currency == asset.currency)
@@ -1460,16 +1493,21 @@ fn validate_mpp_assets(field: &str, assets: &[MppAssetConfig]) -> Result<()> {
     Ok(())
 }
 
-fn enabled_asset_networks(config: &AgentVaultConfig) -> Vec<&str> {
-    let mut networks = Vec::new();
+fn enabled_x402_assets(config: &AgentVaultConfig) -> Vec<&X402AssetConfig> {
+    let mut assets = Vec::new();
     if config.payer.enabled && config.payer.x402.enabled {
-        networks.extend(config.payer.x402.assets.iter().map(|asset| asset.network.as_str()));
-    }
-    if config.payer.enabled && config.payer.mpp.enabled {
-        networks.extend(config.payer.mpp.assets.iter().map(|asset| asset.network.as_str()));
+        assets.extend(&config.payer.x402.assets);
     }
     if config.payee.enabled && config.payee.x402.enabled {
-        networks.extend(config.payee.x402.assets.iter().map(|asset| asset.network.as_str()));
+        assets.extend(&config.payee.x402.assets);
+    }
+    assets
+}
+
+fn enabled_mpp_networks(config: &AgentVaultConfig) -> Vec<&str> {
+    let mut networks = Vec::new();
+    if config.payer.enabled && config.payer.mpp.enabled {
+        networks.extend(config.payer.mpp.assets.iter().map(|asset| asset.network.as_str()));
     }
     if config.payee.enabled && config.payee.mpp.enabled {
         networks.extend(config.payee.mpp.assets.iter().map(|asset| asset.network.as_str()));
@@ -1481,11 +1519,7 @@ fn validate_chain_id(network: &str, family: ChainFamily) -> Result<()> {
     match family {
         ChainFamily::Evm => validate_evm_network("agentvault.chains network", network),
         ChainFamily::Solana => {
-            let valid = network.strip_prefix("solana:").is_some_and(|reference| {
-                !reference.is_empty()
-                    && reference.len() <= 128
-                    && reference.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            });
+            let valid = is_solana_network(network);
             if valid {
                 Ok(())
             } else {
@@ -1497,11 +1531,22 @@ fn validate_chain_id(network: &str, family: ChainFamily) -> Result<()> {
     }
 }
 
-fn validate_evm_network(field: &str, network: &str) -> Result<()> {
-    if !network
+fn is_evm_network(network: &str) -> bool {
+    network
         .strip_prefix("eip155:")
         .is_some_and(|chain| !chain.is_empty() && chain.bytes().all(|byte| byte.is_ascii_digit()))
-    {
+}
+
+fn is_solana_network(network: &str) -> bool {
+    network
+        .parse::<ChainId>()
+        .ok()
+        .and_then(|chain| SolanaChainReference::try_from(chain).ok())
+        .is_some()
+}
+
+fn validate_evm_network(field: &str, network: &str) -> Result<()> {
+    if !is_evm_network(network) {
         return Err(Error::Config(format!("{field} must be a canonical EIP-155 network")));
     }
     Ok(())

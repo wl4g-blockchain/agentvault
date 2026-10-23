@@ -15,18 +15,34 @@ import {
   type VerifyPaymentRequest,
 } from '../model/payee.js';
 import type { VaultTransport } from '../transport/transport.js';
+import {
+  PaymentProtocolFactory,
+  type McpMetadata,
+  type McpPaymentRequired,
+  type PaymentProtocol,
+  type ProtocolRegistry,
+} from '../protocol/adapter.js';
 import { ExpressPayeeMiddleware, type ExpressPayeeRoute } from './express.js';
 import { StandardPayeeMiddleware } from './standard.js';
 
-export class InvalidPaymentError extends Error {}
+export class InvalidPaymentError extends Error {
+  constructor(public readonly challenge: PaymentChallenge) {
+    super('AgentVault rejected the presented payment');
+  }
+}
 
 export class PayeeMiddleware {
   readonly config: Required<PayeeConfig>;
+  private readonly protocols: ProtocolRegistry;
 
   constructor(private readonly transport: VaultTransport, config: PayeeConfig = {}) {
     if (!transport) throw new Error('AgentVault transport is not configured');
-    this.config = { maxBodyBytes: config.maxBodyBytes ?? 1024 * 1024 };
+    this.config = {
+      maxBodyBytes: config.maxBodyBytes ?? 1024 * 1024,
+      protocols: config.protocols ?? ['x402', 'mpp'],
+    };
     if (this.config.maxBodyBytes <= 0) throw new Error('payee middleware body limit must be positive');
+    this.protocols = new PaymentProtocolFactory().create(this.config.protocols);
   }
 
   express(routes: readonly ExpressPayeeRoute[]): ExpressPayeeMiddleware {
@@ -35,6 +51,82 @@ export class PayeeMiddleware {
 
   standard(): StandardPayeeMiddleware {
     return new StandardPayeeMiddleware(this);
+  }
+
+  protocol(name: string): PaymentProtocol {
+    return this.protocols.get(name);
+  }
+
+  credentialHeaderNames(): readonly string[] {
+    return this.protocols.credentialHeaderNames();
+  }
+
+  merchantEvidenceHeaderNames(): readonly string[] {
+    return this.protocols.merchantEvidenceHeaderNames();
+  }
+
+  presentedCredential(protocol: string, headers: Headers): unknown | undefined {
+    this.protocols.get(protocol);
+    const [selected, payload] = this.protocols.presentedCredential(
+      headers,
+      this.config.maxBodyBytes,
+    );
+    if (selected !== undefined && selected !== protocol) {
+      throw new Error('payment credential protocol does not match the protected route');
+    }
+    return payload;
+  }
+
+  presentedMcpCredential(protocol: string, meta: unknown): unknown | undefined {
+    const [selected, payload] = this.protocols.presentedMcpCredential(
+      meta,
+      this.config.maxBodyBytes,
+    );
+    if (selected !== undefined && selected !== protocol) {
+      throw new Error('MCP payment credential protocol does not match the protected route');
+    }
+    return payload;
+  }
+
+  mcpRequestMetadataKeys(): readonly string[] {
+    return this.protocols.mcpRequestMetadataKeys();
+  }
+
+  mcpRootRequestMetadataKeys(): readonly string[] {
+    return this.protocols.mcpRootRequestMetadataKeys();
+  }
+
+  mcpReceiptMetadataKeys(): readonly string[] {
+    return this.protocols.mcpReceiptMetadataKeys();
+  }
+
+  merchantEvidence(
+    headers: Headers,
+  ): readonly [string | undefined, import('../protocol/adapter.js').MerchantEvidence | undefined] {
+    return this.protocols.merchantEvidence(headers);
+  }
+
+  mcpPaymentRequired(
+    challenge: PaymentChallenge,
+    rejected = false,
+  ): McpPaymentRequired {
+    const adapter = this.protocols.mcp(challenge.protocol);
+    return rejected
+      ? adapter.mcpPaymentRejected(challenge, 'AgentVault rejected the presented payment')
+      : adapter.mcpPaymentRequired(challenge);
+  }
+
+  mcpReceipt(
+    challenge: PaymentChallenge,
+    payment: SettledIncomingPayment,
+  ): McpMetadata {
+    return this.protocols.mcp(payment.receipt.protocol).mcpReceipt(challenge, payment);
+  }
+
+  mcpMerchantEvidence(
+    meta: unknown,
+  ): readonly [string | undefined, import('../protocol/adapter.js').MerchantEvidence | undefined] {
+    return this.protocols.mcpMerchantEvidence(meta, this.config.maxBodyBytes);
   }
 
   async challenge(operation: PayeeOperation): Promise<PaymentChallenge> {
@@ -87,7 +179,7 @@ export class PayeeMiddleware {
       verifyRequest,
     );
     if (!verification.valid) {
-      throw new InvalidPaymentError('AgentVault rejected the presented payment');
+      throw new InvalidPaymentError(challenge);
     }
     if (!verification.verification_ref) {
       throw new Error('valid AgentVault verification omitted verification_ref');
@@ -111,7 +203,7 @@ export class PayeeMiddleware {
     sdkEvent('agentvault.sdk.payee.settled', {
       runId: operation.runId, intentId: payment.intent.id,
     });
-    return { outcome: 'authorized', payment };
+    return { outcome: 'authorized', challenge, payment };
   }
 
   resolveOffer(request: ResolveOfferRequest): Promise<PaymentOffer> {

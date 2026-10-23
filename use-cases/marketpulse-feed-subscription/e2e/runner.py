@@ -3,17 +3,108 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import logging
 import re
+import sys
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from common.context import VerificationContext
 from common.deploy import create_deployer
+from common.deploy.kubernetes import KubernetesE2ECleaner
 from common.project import DEPLOY_ROOT, REPORT_ROOT
 from common.report import ReportBook
 from common.sdk_matrix import SDK_SCOPES
+
+
+LOGGER = logging.getLogger("agentvault.e2e.runner")
+
+
+class ProgressLogger:
+    def __init__(self, heartbeat_seconds: float = 30.0) -> None:
+        if heartbeat_seconds <= 0:
+            raise ValueError("heartbeat_seconds must be positive")
+        self._heartbeat_seconds = heartbeat_seconds
+
+    @classmethod
+    def configured(cls) -> ProgressLogger:
+        if not LOGGER.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s %(levelname)s %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S%z",
+                )
+            )
+            LOGGER.addHandler(handler)
+        LOGGER.setLevel(logging.INFO)
+        LOGGER.propagate = False
+        return cls()
+
+    @contextmanager
+    def step(self, name: str, *, heartbeat: bool = True, **fields: object) -> Iterator[None]:
+        details = self._details(fields)
+        started_at = time.monotonic()
+        completed = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
+        LOGGER.info("START step=%s%s", name, details)
+
+        if heartbeat:
+            heartbeat_thread = threading.Thread(
+                target=self._heartbeat,
+                args=(completed, name, details, started_at),
+                name=f"e2e-progress-{name}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+
+        try:
+            yield
+        except BaseException:
+            LOGGER.error(
+                "FAIL step=%s%s elapsed_seconds=%.1f",
+                name,
+                details,
+                time.monotonic() - started_at,
+            )
+            raise
+        else:
+            LOGGER.info(
+                "PASS step=%s%s elapsed_seconds=%.1f",
+                name,
+                details,
+                time.monotonic() - started_at,
+            )
+        finally:
+            completed.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join()
+
+    def _heartbeat(
+        self,
+        completed: threading.Event,
+        name: str,
+        details: str,
+        started_at: float,
+    ) -> None:
+        while not completed.wait(self._heartbeat_seconds):
+            LOGGER.info(
+                "RUNNING step=%s%s elapsed_seconds=%.1f",
+                name,
+                details,
+                time.monotonic() - started_at,
+            )
+
+    @staticmethod
+    def _details(fields: dict[str, object]) -> str:
+        if not fields:
+            return ""
+        return " " + " ".join(f"{key}={value}" for key, value in fields.items())
 
 
 @dataclass(frozen=True)
@@ -31,6 +122,8 @@ SCENARIOS = (
     Scenario("payer", "verifier.payer.s10_dependencies", "payer", "s10_dependencies.md", "start and verify payer dependencies"),
     Scenario("payee", "verifier.payee.s10_dependencies", "payee", "s10_dependencies.md", "start and verify payee dependencies"),
     Scenario("full", "verifier.payment.s20_full", "payment", "s20_full.md", "run one language through the complete payment flow"),
+    Scenario("mpp-tempo", "verifier.payment.s25_mpp_tempo", "payment", "s25_mpp_tempo.md", "run MPP Tempo charge, recovery, and gas accounting"),
+    Scenario("x402-solana", "verifier.payment.s26_x402_solana", "payment", "s26_x402_solana.md", "run x402 v2 exact on a real local Solana validator"),
     Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the selected SDK matrix scope"),
     Scenario("web", "verifier.web.s40_dashboard", "web", "s40_dashboard.md", "render Matrix evidence through real Chromium Dashboard journeys"),
 )
@@ -77,8 +170,11 @@ def cleanup(
     deployer: str,
     matrix_workers: int = 2,
     e2e_sdk_scope: str = "simple",
+    progress: ProgressLogger | None = None,
+    comprehensive: bool = True,
 ) -> None:
-    for worker_slot in (None, *range(matrix_workers)):
+    progress = progress or ProgressLogger()
+    if deployer == "kubernetes":
         context = VerificationContext(
             run_id="cleanup",
             report_root=REPORT_ROOT,
@@ -93,10 +189,50 @@ def cleanup(
             skip_build=True,
             reuse_build=True,
             e2e_sdk_scope=e2e_sdk_scope,
-            matrix_workers=matrix_workers,
+            matrix_workers=1,
+        )
+        owned_deployer = create_deployer(context)
+        with progress.step("cleanup_kubernetes", scope="e2e-agentvault"):
+            owned_deployer.cleanup()
+        if comprehensive:
+            with progress.step("cleanup_images", deployer=deployer):
+                owned_deployer.cleanup_images()
+        return
+    cleanup_workers = 2 if comprehensive else matrix_workers
+    image_deployer = None
+    for worker_slot in (None, *range(cleanup_workers)):
+        context = VerificationContext(
+            run_id="cleanup",
+            report_root=REPORT_ROOT,
+            deploy_root=DEPLOY_ROOT,
+            scenario="cleanup",
+            round_number=0,
+            payer_language="rust",
+            payee_language="rust",
+            transport="mqtt",
+            deployer=deployer,
+            timeout_seconds=timeout_seconds,
+            skip_build=True,
+            reuse_build=True,
+            e2e_sdk_scope=e2e_sdk_scope,
+            matrix_workers=cleanup_workers,
             worker_slot=worker_slot,
         )
-        create_deployer(context).cleanup()
+        owned_deployer = create_deployer(context)
+        if image_deployer is None:
+            image_deployer = owned_deployer
+        with progress.step(
+            "cleanup_worker",
+            deployer=deployer,
+            worker_slot="shared" if worker_slot is None else worker_slot,
+        ):
+            owned_deployer.cleanup()
+    if comprehensive and image_deployer is not None:
+        with progress.step("cleanup_images", deployer=deployer):
+            image_deployer.cleanup_images()
+    if comprehensive:
+        with progress.step("cleanup_kubernetes", scope="e2e-agentvault"):
+            KubernetesE2ECleaner(timeout_seconds).cleanup()
 
 
 def parser() -> argparse.ArgumentParser:
@@ -106,9 +242,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-r", "--rounds", type=int, default=1)
     result.add_argument(
         "--deployer",
-        choices=("docker",),
+        choices=("docker", "kubernetes"),
         default="docker",
-        help="isolated deployment backend; only implemented backends are advertised",
+        help="isolated deployment backend; Docker remains the CI default",
     )
     result.add_argument("--timeout", type=parse_duration, default=parse_duration("45m"))
     languages = ("rust", "go", "python", "typescript", "java")
@@ -122,7 +258,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--skip-build", action="store_true")
     result.add_argument("--reuse-build", action="store_true")
-    result.add_argument("--cleanup", action="store_true", help="alias for the cleanup command")
+    result.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="remove owned E2E containers, volumes, images, and Kubernetes releases",
+    )
     result.add_argument("--cleanup-after-run", action="store_true")
     result.add_argument("--matrix-workers", type=int, default=2, help="isolated matrix workers; maximum 2")
     result.add_argument(
@@ -146,14 +286,23 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    progress = ProgressLogger.configured()
     args = parser().parse_args()
     if args.list:
         for scenario in SCENARIOS:
             print(f"{scenario.name:14} {scenario.description}")
         return
     if args.command == "cleanup" or args.cleanup:
-        cleanup(args.timeout, args.deployer, args.matrix_workers, args.e2e_sdk_scope)
-        print("E2E deployment removed")
+        if args.cleanup_after_run:
+            raise SystemExit("--cleanup and --cleanup-after-run cannot be combined")
+        cleanup(
+            args.timeout,
+            args.deployer,
+            args.matrix_workers,
+            args.e2e_sdk_scope,
+            progress,
+        )
+        print("E2E containers, volumes, local images, and Kubernetes releases removed")
         return
     if args.rounds < 1:
         raise SystemExit("--rounds must be positive")
@@ -176,49 +325,91 @@ def main() -> None:
     else:
         run_id, report_root = create_run_root()
     reports = ReportBook("MarketPulse Feed Subscription E2E", report_root, run_id)
-    try:
-        for round_number in range(1, args.rounds + 1):
-            for scenario in scenarios:
-                context = VerificationContext(
-                    run_id=run_id,
-                    report_root=report_root,
-                    deploy_root=DEPLOY_ROOT,
-                    scenario=scenario.name,
-                    round_number=round_number,
-                    payer_language=args.payer_language,
-                    payee_language=args.payee_language,
-                    transport=args.transport,
-                    deployer=args.deployer,
-                    timeout_seconds=args.timeout,
-                    skip_build=args.skip_build,
-                    reuse_build=args.reuse_build,
-                    e2e_sdk_scope=args.e2e_sdk_scope,
-                    matrix_workers=args.matrix_workers,
-                    evidence_run_id=args.matrix_evidence_run,
-                )
-                output = verifier(scenario)(context)
-                if isinstance(output, dict):
-                    for filename, evidence in output.items():
-                        reports.record(
-                            scenario.report_module,
-                            filename,
-                            scenario.name,
-                            round_number,
-                            evidence,
+    with progress.step(
+        "run",
+        heartbeat=False,
+        run_id=run_id,
+        scenarios=",".join(scenario.name for scenario in scenarios),
+        rounds=args.rounds,
+        payer_language=args.payer_language,
+        payee_language=args.payee_language,
+        transport=args.transport,
+    ):
+        try:
+            for round_number in range(1, args.rounds + 1):
+                with progress.step("round", heartbeat=False, run_id=run_id, round=round_number):
+                    for scenario in scenarios:
+                        context = VerificationContext(
+                            run_id=run_id,
+                            report_root=report_root,
+                            deploy_root=DEPLOY_ROOT,
+                            scenario=scenario.name,
+                            round_number=round_number,
+                            payer_language=args.payer_language,
+                            payee_language=args.payee_language,
+                            transport=args.transport,
+                            deployer=args.deployer,
+                            timeout_seconds=args.timeout,
+                            skip_build=args.skip_build,
+                            reuse_build=args.reuse_build,
+                            e2e_sdk_scope=args.e2e_sdk_scope,
+                            matrix_workers=args.matrix_workers,
+                            evidence_run_id=args.matrix_evidence_run,
                         )
-                else:
-                    reports.record(
-                        scenario.report_module,
-                        scenario.report_name,
-                        scenario.name,
-                        round_number,
-                        output,
-                    )
-        summary = reports.write_summary()
-        print(f"E2E scenarios passed; report={summary}")
-    finally:
-        if args.cleanup_after_run:
-            cleanup(args.timeout, args.deployer, args.matrix_workers, args.e2e_sdk_scope)
+                        with progress.step(
+                            "scenario",
+                            run_id=run_id,
+                            round=round_number,
+                            scenario=scenario.name,
+                            payer_language=args.payer_language,
+                            payee_language=args.payee_language,
+                            transport=args.transport,
+                        ):
+                            output = verifier(scenario)(context)
+                        if isinstance(output, dict):
+                            for filename, evidence in output.items():
+                                with progress.step(
+                                    "report",
+                                    heartbeat=False,
+                                    run_id=run_id,
+                                    scenario=scenario.name,
+                                    filename=filename,
+                                ):
+                                    reports.record(
+                                        scenario.report_module,
+                                        filename,
+                                        scenario.name,
+                                        round_number,
+                                        evidence,
+                                    )
+                        else:
+                            with progress.step(
+                                "report",
+                                heartbeat=False,
+                                run_id=run_id,
+                                scenario=scenario.name,
+                                filename=scenario.report_name,
+                            ):
+                                reports.record(
+                                    scenario.report_module,
+                                    scenario.report_name,
+                                    scenario.name,
+                                    round_number,
+                                    output,
+                                )
+            with progress.step("summary", heartbeat=False, run_id=run_id):
+                summary = reports.write_summary()
+            print(f"E2E scenarios passed; report={summary}")
+        finally:
+            if args.cleanup_after_run:
+                cleanup(
+                    args.timeout,
+                    args.deployer,
+                    args.matrix_workers,
+                    args.e2e_sdk_scope,
+                    progress,
+                    comprehensive=False,
+                )
 
 
 if __name__ == "__main__":

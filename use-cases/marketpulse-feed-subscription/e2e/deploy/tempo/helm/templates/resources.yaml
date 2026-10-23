@@ -1,0 +1,128 @@
+{{- $namespace := required "Chart annotation agentvault.io/e2e-namespace is required" (index .Chart.Annotations "agentvault.io/e2e-namespace") -}}
+{{- if not (hasPrefix "e2e-agentvault-" $namespace) -}}
+{{- fail (printf "invalid E2E namespace %q: expected e2e-agentvault-*" $namespace) -}}
+{{- end -}}
+{{- if ne .Release.Namespace $namespace -}}
+{{- fail (printf "release namespace must be %q, got %q" $namespace .Release.Namespace) -}}
+{{- end -}}
+{{- $name := .Chart.Name -}}
+{{- if eq .Values.workload.kind "Job" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  backoffLimit: {{ .Values.workload.backoffLimit }}
+  template:
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.workload.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+{{- end }}
+    metadata:
+      labels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+    spec:
+      restartPolicy: {{ .Values.workload.restartPolicy }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+{{- with .Values.command }}
+          command: {{ toJson . }}
+{{- end }}
+{{- with .Values.args }}
+          args: {{ toJson . }}
+{{- end }}
+{{- if or .Values.env .Values.secret.env }}
+          env:
+{{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+{{- end }}
+{{- range $key, $secretKey := .Values.secret.env }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.secret.name | quote }}, key: {{ $secretKey | quote }} }
+{{- end }}
+{{- end }}
+{{- with .Values.ports }}
+          ports:
+{{- range . }}
+            - { name: {{ .name }}, containerPort: {{ .containerPort }}, protocol: TCP }
+{{- end }}
+{{- end }}
+{{- if .Values.probe.enabled }}
+          readinessProbe:
+{{- if eq .Values.probe.type "http" }}
+            httpGet: { path: {{ .Values.probe.path | quote }}, port: {{ .Values.probe.port }} }
+{{- else }}
+            tcpSocket: { port: {{ .Values.probe.port }} }
+{{- end }}
+            initialDelaySeconds: {{ .Values.probe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probe.periodSeconds }}
+          livenessProbe:
+{{- if eq .Values.probe.type "http" }}
+            httpGet: { path: {{ .Values.probe.path | quote }}, port: {{ .Values.probe.port }} }
+{{- else }}
+            tcpSocket: { port: {{ .Values.probe.port }} }
+{{- end }}
+            initialDelaySeconds: {{ .Values.probe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probe.periodSeconds }}
+{{- end }}
+{{- if or .Values.config.enabled .Values.persistence.enabled }}
+          volumeMounts:
+{{- if .Values.config.enabled }}
+            - { name: config, mountPath: {{ .Values.config.mountPath | quote }}, subPath: {{ .Values.config.key | quote }}, readOnly: true }
+{{- end }}
+{{- if .Values.persistence.enabled }}
+            - { name: data, mountPath: {{ .Values.persistence.mountPath | quote }} }
+{{- end }}
+{{- end }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- if or .Values.config.enabled .Values.persistence.enabled }}
+      volumes:
+{{- if .Values.config.enabled }}
+        - name: config
+          configMap: { name: {{ $name }}-config }
+{{- end }}
+{{- if .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+{{- end }}
+{{- end }}
+{{- if .Values.config.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  namespace: {{ $namespace }}
+data:
+  {{ .Values.config.key }}: |
+{{ .Values.config.content | indent 4 }}
+{{- end }}
+{{- if .Values.service.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ $namespace }}
+spec:
+  selector: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+{{- range .Values.ports }}
+    - { name: {{ .name }}, port: {{ .servicePort }}, targetPort: {{ .name }} }
+{{- end }}
+{{- end }}

@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -37,6 +38,7 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
     private final GrpcConfig config;
     private final ManagedChannel managedChannel;
     private final Channel channel;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public GrpcVaultTransport(GrpcConfig config) {
         this.config = java.util.Objects.requireNonNull(config, "config");
@@ -135,6 +137,7 @@ public final class GrpcVaultTransport implements VaultTransport, AutoCloseable {
     }
 
     @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
         managedChannel.shutdown();
         try {
             if (!managedChannel.awaitTermination(5, TimeUnit.SECONDS)) managedChannel.shutdownNow();

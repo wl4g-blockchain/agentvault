@@ -5,9 +5,7 @@ import io.agentvault.sdk.AgentVault;
 import io.agentvault.sdk.config.Config.MqttConfig;
 import io.agentvault.sdk.config.Config.GrpcConfig;
 import io.agentvault.sdk.config.Config.PayerConfig;
-import io.agentvault.sdk.transport.MqttVaultTransport;
-import io.agentvault.sdk.transport.GrpcVaultTransport;
-import io.agentvault.sdk.transport.VaultTransport;
+import io.agentvault.sdk.config.Config.VaultTransportConfig;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -45,14 +43,14 @@ public final class MCPHelper implements AutoCloseable {
 
     private final ThreadLocal<Operation> operation = new ThreadLocal<>();
     private final Map<String, Operation> activeOperations = new ConcurrentHashMap<>();
-    private final AutoCloseable vaultTransport;
+    private final AgentVault vault;
     private final McpSyncClient mcp;
     private final Map<String, Boolean> tools;
 
     public MCPHelper() {
         long timeoutSeconds = positive("AGENTVAULT_MQTT_TIMEOUT_SECONDS");
         String transportName = System.getenv().getOrDefault("AGENTVAULT_TRANSPORT", "mqtt").trim().toLowerCase();
-        BaseTransport selected = createTransport(transportName, timeoutSeconds);
+        AgentVault selected = createVault(transportName, timeoutSeconds);
         McpSyncClient mcpClient = null;
         try {
             PayerConfig payerConfig = new PayerConfig(
@@ -61,7 +59,7 @@ public final class MCPHelper implements AutoCloseable {
                     Duration.ofSeconds(1),
                     1,
                     256 * 1024);
-            var payer = new AgentVault(selected.transport()).payer(payerConfig).spring();
+            var payer = selected.payer(payerConfig).spring();
             System.getLogger("io.agentvault.e2e").log(System.Logger.Level.INFO,
                     "agentvault.sdk.payer.transport_selected transport={0}", transportName);
             URI endpoint = URI.create(required("MARKETPULSE_URL"));
@@ -87,7 +85,7 @@ public final class MCPHelper implements AutoCloseable {
             if (!discovered.containsAll(expected.keySet())) {
                 throw new IllegalStateException("MarketPulse did not publish both required MCP tools");
             }
-            vaultTransport = selected.closeable();
+            vault = selected;
             mcp = mcpClient;
             tools = expected;
         } catch (RuntimeException | Error error) {
@@ -170,35 +168,24 @@ public final class MCPHelper implements AutoCloseable {
     public void close() {
         if (mcp != null) mcp.close();
         try {
-            vaultTransport.close();
+            vault.close();
         } catch (Exception error) {
             throw new IllegalStateException("close AgentVault transport", error);
         }
     }
 
-    private record BaseTransport(VaultTransport transport,
-                                 AutoCloseable closeable) implements AutoCloseable {
-        @Override public void close() {
-            try { closeable.close(); } catch (Exception error) {
-                throw new IllegalStateException("close AgentVault transport", error);
-            }
-        }
-    }
-
-    private static BaseTransport createTransport(String name, long timeoutSeconds) {
+    private static AgentVault createVault(String name, long timeoutSeconds) {
         if ("mqtt".equals(name)) {
-            var transport = new MqttVaultTransport(new MqttConfig(
+            return AgentVault.fromConfig(VaultTransportConfig.mqtt(new MqttConfig(
                     required("AGENTVAULT_MQTT_HOST"), Math.toIntExact(positive("AGENTVAULT_MQTT_PORT")),
                     bool("AGENTVAULT_MQTT_TLS"), required("AGENTVAULT_MQTT_USERNAME"),
                     required("AGENTVAULT_MQTT_PASSWORD"), "quantstream-java",
-                    required("QUANTSTREAM_CLIENT_ID"), Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024));
-            return new BaseTransport(transport, transport);
+                    required("QUANTSTREAM_CLIENT_ID"), Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024)));
         }
         if ("grpc".equals(name)) {
-            var transport = new GrpcVaultTransport(new GrpcConfig(
+            return AgentVault.fromConfig(VaultTransportConfig.grpc(new GrpcConfig(
                     required("AGENTVAULT_GRPC_ENDPOINT"), bool("AGENTVAULT_GRPC_TLS"), null,
-                    Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024));
-            return new BaseTransport(transport, transport);
+                    Duration.ofSeconds(timeoutSeconds), 2 * 1024 * 1024)));
         }
         throw new IllegalStateException("AGENTVAULT_TRANSPORT must be mqtt or grpc");
     }

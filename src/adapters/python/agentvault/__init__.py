@@ -1,5 +1,5 @@
 from .agentvault import AgentVault
-from .config import GrpcConfig, MqttConfig, PayeeConfig, PayerConfig
+from .config import GrpcConfig, MqttConfig, PayeeConfig, PayerConfig, VaultTransportConfig
 from .model import (
     ApprovalDecisionKind,
     ApprovalPage,
@@ -30,6 +30,7 @@ from .model import (
     PaymentOffer,
     PaymentReceipt,
     PaymentRequired,
+    ProtocolEvidence,
     PaymentStatus,
     PaymentVerification,
     ProtectionOutcome,
@@ -44,6 +45,7 @@ from .model import (
 )
 from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware, settled_payment
 from .payer import HttpxPayerMiddleware, PayerMiddleware
-from .transport import APIError, GrpcVaultTransport, MqttVaultTransport, VaultTransport
+from .protocol import MppAdapter, PaymentProtocol, PaymentProtocolFactory, ProtocolRegistry, X402Adapter
+from .transport import APIError, GrpcVaultTransport, MqttVaultTransport, VaultTransport, VaultTransportFactory
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
 from .base import E2EDeployer, FullFlowEvidence
 
 
+LOGGER = logging.getLogger("agentvault.e2e.runner.deployer")
 MATRIX_REPORTS = frozenset({
     "s20_full.md", "s21_payer_signing.md", "s22_payee_settlement.md",
     "s23_balance_sync.md", "s24_gateway_balance.md",
@@ -31,8 +33,27 @@ RUNTIME_ROOT = E2E_ROOT / "reports" / ".runtime"
 AGENTVAULT_CHART = REPOSITORY_ROOT / "deploy" / "helm" / "agentvault"
 AGENTVAULT_VALUES = E2E_ROOT / "common" / "agentvault-values.yaml"
 AGENTVAULT_CONFIG_TEMPLATE = "templates/platform/runtime-config-map.yaml"
+AGENTVAULT_NAMESPACE = "e2e-agentvault-system"
 TOKEN_CONTRACT = "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 PAYEE_ADDRESS = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
+FACILITATOR_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+SOLANA_CLI_ROOT = "/opt/solana/solana-release/bin"
+E2E_LOCAL_IMAGE_REFERENCES = frozenset({
+    "agentvault-e2e:local",
+    "marketpulse-e2e:local",
+    "marketpulse-go-e2e:local",
+    "marketpulse-golang-e2e:local",
+    "marketpulse-java-e2e:local",
+    "marketpulse-python-e2e:local",
+    "marketpulse-rust-e2e:local",
+    "marketpulse-typescript-e2e:local",
+    "quantstream-admin-ui-e2e:local",
+    "quantstream-ingestor-go-e2e:local",
+    "quantstream-ingestor-java-e2e:local",
+    "quantstream-ingestor-python-e2e:local",
+    "quantstream-ingestor-rust-e2e:local",
+    "quantstream-ingestor-typescript-e2e:local",
+})
 
 PAYER_PRIVATE_KEY_DEFAULTS = {
     "rust": (
@@ -53,6 +74,7 @@ DEFAULTS = {
     "E2E_JAEGER_OTLP_GRPC_PORT": "24317",
     "E2E_JAEGER_OTLP_HTTP_PORT": "24318",
     "E2E_ANVIL_PORT": "28545",
+    "E2E_TEMPO_RPC_PORT": "28546",
     "E2E_SOLANA_RPC_PORT": "28899",
     "E2E_SOLANA_FAUCET_PORT": "28900",
     "E2E_FACILITATOR_PORT": "38085",
@@ -78,7 +100,7 @@ DEFAULTS = {
 HOST_PORT_NAMES = (
     "E2E_POSTGRES_PORT", "E2E_EMQX_MQTT_PORT", "E2E_EMQX_DASHBOARD_PORT",
     "E2E_JAEGER_UI_PORT", "E2E_JAEGER_OTLP_GRPC_PORT", "E2E_JAEGER_OTLP_HTTP_PORT",
-    "E2E_ANVIL_PORT", "E2E_SOLANA_RPC_PORT", "E2E_SOLANA_FAUCET_PORT",
+    "E2E_ANVIL_PORT", "E2E_TEMPO_RPC_PORT", "E2E_SOLANA_RPC_PORT", "E2E_SOLANA_FAUCET_PORT",
     "E2E_FACILITATOR_PORT", "E2E_AGENTVAULT_PORT", "E2E_AGENTVAULT_MGMT_PORT",
     "E2E_MARKETPULSE_PORT", "E2E_QUANTSTREAM_UI_PORT",
 )
@@ -224,7 +246,92 @@ class DockerE2EDeployer(E2EDeployer):
         self.compose = [*self.docker, "compose", "-p", self.project, "-f", str(COMPOSE_FILE)]
 
     def _run(self, command: Iterable[str], timeout: float | None = None, cwd: Path = E2E_ROOT) -> str:
-        return run(list(command), cwd, self.environment, timeout or self.context.timeout_seconds)
+        arguments = list(command)
+        operation = self._command_operation(arguments)
+        started_at = time.monotonic()
+        LOGGER.info("START command=%s", operation)
+        try:
+            output = run(arguments, cwd, self.environment, timeout or self.context.timeout_seconds)
+        except BaseException:
+            LOGGER.error("FAIL command=%s elapsed_seconds=%.1f", operation, time.monotonic() - started_at)
+            raise
+        LOGGER.info("PASS command=%s elapsed_seconds=%.1f", operation, time.monotonic() - started_at)
+        return output
+
+    @staticmethod
+    def _command_operation(command: list[str]) -> str:
+        """Return a useful operation name without logging command arguments or secrets."""
+        if not command:
+            return "unknown"
+        index = 0
+        if Path(command[0]).name == "sudo":
+            index = 1
+            while index < len(command) and command[index].startswith("-"):
+                index += 1
+        if index >= len(command):
+            return "unknown"
+        executable = Path(command[index]).name
+        arguments = command[index + 1:]
+        if executable == "env":
+            while arguments and "=" in arguments[0] and not arguments[0].startswith("="):
+                arguments = arguments[1:]
+            if not arguments:
+                return "env"
+            executable = Path(arguments[0]).name
+            arguments = arguments[1:]
+        if executable in {"docker", "podman"}:
+            if "compose" in arguments:
+                compose_index = arguments.index("compose")
+                compose_arguments = arguments[compose_index + 1:]
+                actions = {"build", "config", "down", "exec", "logs", "ps", "pull", "run", "up"}
+                action = next((item for item in compose_arguments if item in actions), "command")
+                details: list[str] = []
+                profiles = [
+                    compose_arguments[position + 1]
+                    for position, item in enumerate(compose_arguments[:-1])
+                    if item == "--profile"
+                ]
+                if profiles:
+                    details.append(f"profiles={','.join(profiles)}")
+                target = DockerE2EDeployer._compose_target(compose_arguments, action)
+                if target:
+                    details.append(f"target={target}")
+                suffix = " " + " ".join(details) if details else ""
+                return f"{executable} compose {action}{suffix}"
+            first = next((item for item in arguments if not item.startswith("-")), "command")
+            if first in {"image", "volume"}:
+                tail = arguments[arguments.index(first) + 1:]
+                second = next((item for item in tail if not item.startswith("-")), "command")
+                return f"{executable} {first} {second}"
+            return f"{executable} {first}"
+        if executable in {"cargo", "helm"}:
+            action = next((item for item in arguments if not item.startswith("-")), "command")
+            if executable == "helm":
+                chart = next((Path(item) for item in arguments if (Path(item) / "Chart.yaml").is_file()), None)
+                if chart is not None:
+                    component = chart.parent.name if chart.name == "helm" else chart.name
+                    return f"{executable} {action} target={component}"
+            return f"{executable} {action}"
+        return executable
+
+    @staticmethod
+    def _compose_target(arguments: list[str], action: str) -> str | None:
+        if action not in {"build", "exec", "logs", "pull", "up"}:
+            return None
+        action_index = arguments.index(action)
+        skip_value = False
+        options_with_values = {"-e", "--env", "--entrypoint", "--name", "-u", "--user", "-w", "--workdir"}
+        for item in arguments[action_index + 1:]:
+            if skip_value:
+                skip_value = False
+                continue
+            if item in options_with_values:
+                skip_value = True
+                continue
+            if item.startswith("-"):
+                continue
+            return item
+        return None
 
     def _try(self, command: Iterable[str], timeout: float = 30, cwd: Path = E2E_ROOT) -> tuple[int, str]:
         completed = execute(list(command), cwd, self.environment, timeout)
@@ -247,28 +354,58 @@ class DockerE2EDeployer(E2EDeployer):
         lines = [self._render_agentvault_config()]
         self._compose(("infra", "payer"), "config", "--quiet")
         self._compose(("infra", "payee"), "config", "--quiet")
+        self._compose(("tempo",), "config", "--quiet")
         for payer in LANGUAGES:
             for payee in LANGUAGES:
                 self._full(payer, payee, "config", "--quiet")
         compose_files = sorted(self.context.deploy_root.glob("*/docker-compose.yaml"))
         charts = sorted(self.context.deploy_root.glob("*/helm"))
-        if len(compose_files) != 18 or len(charts) != len(compose_files):
+        if len(compose_files) != 19 or len(charts) != len(compose_files):
             raise RuntimeError(
-                f"expected 18 paired component manifests, found {len(compose_files)} Compose and {len(charts)} Helm"
+                "expected 19 paired component manifests, found "
+                f"{len(compose_files)} Compose and {len(charts)} Helm"
             )
         for compose in compose_files:
             self._run([*self.docker, "compose", "-f", str(compose), "config", "--quiet"])
-        for index, chart in enumerate(charts, 1):
-            self._run(["helm", "lint", str(chart)])
-            self._run(["helm", "template", f"agentvault-e2e-{index}", str(chart)])
+        for chart in charts:
+            namespace = self._chart_namespace(chart)
+            release_name = self._chart_name(chart)
+            self._run(["helm", "lint", "--namespace", namespace, str(chart)])
+            self._run([
+                "helm", "template", release_name, str(chart),
+                "--namespace", namespace,
+            ])
         lines.append(f"validated {len(compose_files)} component Compose manifests and Helm charts")
         return "\n".join(lines)
 
+    @staticmethod
+    def _chart_namespace(chart: Path) -> str:
+        metadata = (chart / "Chart.yaml").read_text(encoding="utf-8")
+        match = re.search(r"(?m)^  agentvault\.io/e2e-namespace: (e2e-agentvault-[a-z0-9-]+)$", metadata)
+        if match is None:
+            raise RuntimeError(f"component Chart does not declare its E2E namespace: {chart}")
+        return match.group(1)
+
+    @staticmethod
+    def _chart_name(chart: Path) -> str:
+        metadata = (chart / "Chart.yaml").read_text(encoding="utf-8")
+        match = re.search(r"(?m)^name: ([a-z0-9-]+)$", metadata)
+        if match is None:
+            raise RuntimeError(f"component Chart does not declare a valid name: {chart}")
+        name = match.group(1)
+        if name.startswith("e2e-"):
+            raise RuntimeError(f"component Chart name must rely on namespace isolation, got: {name}")
+        return name
+
     def _render_agentvault_config(self) -> str:
-        self._run(["helm", "lint", str(AGENTVAULT_CHART), "-f", str(AGENTVAULT_VALUES)])
+        self._run([
+            "helm", "lint", "--namespace", AGENTVAULT_NAMESPACE,
+            str(AGENTVAULT_CHART), "-f", str(AGENTVAULT_VALUES),
+        ])
         rendered = self._run(
             [
-                "helm", "template", "agentvault-e2e", str(AGENTVAULT_CHART),
+                "helm", "template", "agentvault", str(AGENTVAULT_CHART),
+                "--namespace", AGENTVAULT_NAMESPACE,
                 "-f", str(AGENTVAULT_VALUES), "--show-only", AGENTVAULT_CONFIG_TEMPLATE,
             ]
         )
@@ -340,6 +477,38 @@ class DockerE2EDeployer(E2EDeployer):
             )
         return output
 
+    def cleanup_images(self) -> str:
+        images = self._owned_images()
+        if not images:
+            return ""
+        if images == ["<image inventory unavailable>"]:
+            raise RuntimeError("E2E cleanup could not inventory its owned images")
+        status, output = self._try([*self.docker, "image", "rm", *images], 180)
+        remaining = self._owned_images()
+        if remaining:
+            raise RuntimeError(
+                f"E2E cleanup could not remove owned images {remaining}; exit={status}:\n{output[-4096:]}"
+            )
+        return output
+
+    def _owned_images(self) -> list[str]:
+        status, output = self._try([
+            *self.docker,
+            "image",
+            "ls",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ])
+        if status != 0:
+            return ["<image inventory unavailable>"]
+        images: list[str] = []
+        for line in output.splitlines():
+            reference = line.strip()
+            canonical = reference.removeprefix("localhost/")
+            if canonical in E2E_LOCAL_IMAGE_REFERENCES:
+                images.append(reference)
+        return sorted(set(images))
+
     def _owned_container_inventory(self) -> list[tuple[str, str, str]]:
         status, output = self._try([
             *self.docker,
@@ -409,21 +578,26 @@ class DockerE2EDeployer(E2EDeployer):
             self._diagnostics("rust", "rust")
             raise
 
-    def _dependency_up(self, role: str) -> None:
+    def _dependency_up(self, role: str, *, include_solana: bool = True) -> None:
         profiles = ("infra", role)
-        self._compose(profiles, "up", "-d", "anvil", "solana", "postgres", "emqx", "jaeger")
+        services = ["anvil", "postgres", "emqx", "jaeger"]
+        if include_solana:
+            services.insert(1, "solana")
+        self._compose(profiles, "up", "-d", *services)
         self._wait_rpc(self._url("E2E_ANVIL_PORT"), "eth_chainId", "0x7a69", 60)
-        self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 90)
+        if include_solana:
+            self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 90)
         self._compose(profiles, "up", "--no-deps", "evm-fixture")
         self._bootstrap_emqx()
         if role == "payee":
             self._compose(profiles, "up", "-d", "--no-deps", "facilitator")
             self._wait_http(self._url("E2E_FACILITATOR_PORT", "/health"), 60)
 
-    def _dependency_health(self, role: str) -> str:
+    def _dependency_health(self, role: str, *, include_solana: bool = True) -> str:
         profiles = ("infra", role)
         self._wait_rpc(self._url("E2E_ANVIL_PORT"), "eth_chainId", "0x7a69", 5)
-        self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 5)
+        if include_solana:
+            self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 5)
         self._compose(profiles, "exec", "-T", "postgres", "pg_isready", "-U", "agentvault", "-d", "agentvault")
         self._compose(profiles, "exec", "-T", "emqx", "/opt/emqx/bin/emqx", "ctl", "status")
         self._wait_http(self._url("E2E_JAEGER_UI_PORT"), 5)
@@ -433,7 +607,8 @@ class DockerE2EDeployer(E2EDeployer):
             output = self._compose(profiles, "ps", "facilitator")
             if "Up" in output:
                 raise RuntimeError("payer profile unexpectedly started the facilitator")
-        return f"dependency {role} smoke passed; real Anvil, Solana, PostgreSQL, EMQX and Jaeger are healthy"
+        chains = "Anvil and Solana" if include_solana else "Anvil"
+        return f"dependency {role} smoke passed; real {chains}, PostgreSQL, EMQX and Jaeger are healthy"
 
     def _facilitator_capabilities(self) -> str:
         status, _, raw = self._http(self._url("E2E_FACILITATOR_PORT", "/supported"))
@@ -485,6 +660,109 @@ class DockerE2EDeployer(E2EDeployer):
                 pass
             time.sleep(1)
         raise RuntimeError(f"timed out waiting for {method} at {url}")
+
+    def _wait_tempo_faucet_window(self, url: str, attempts: int = 240) -> None:
+        diagnostic = "Tempo has not produced a current block"
+        for _ in range(attempts):
+            try:
+                latest = self._json_rpc_result(url, "Tempo", "eth_getBlockByNumber", ["latest", False])
+                if not isinstance(latest, dict):
+                    raise RuntimeError("Tempo latest block is not an object")
+                block_number = int(str(latest.get("number", "")), 16)
+                block_timestamp = int(str(latest.get("timestamp", "")), 16)
+                clock_delta = abs(int(time.time()) - block_timestamp)
+                if block_number > 0 and clock_delta <= 300:
+                    return
+                diagnostic = (
+                    f"Tempo latest block={block_number} timestamp={block_timestamp} "
+                    f"clock_delta={clock_delta}s"
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                diagnostic = str(error)
+            time.sleep(0.5)
+        raise RuntimeError(f"timed out waiting for Tempo faucet nonce window: {diagnostic[-2048:]}")
+
+    def _json_rpc_result(self, url: str, service: str, method: str, params: list[object]) -> object:
+        body = json.dumps({"jsonrpc": "2.0", "id": "e2e-accounting", "method": method, "params": params}).encode()
+        status, _, raw = self._http(
+            url, "POST", body, {"content-type": "application/json"}, 10,
+        )
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"{service} returned non-JSON for {method}: {raw[:2048]}") from error
+        if status != 200 or not isinstance(response, dict) or response.get("error") is not None or "result" not in response:
+            raise RuntimeError(f"{service} RPC {method} failed: HTTP {status}: {raw[:2048]}")
+        return response["result"]
+
+    def _rpc_result(self, method: str, params: list[object]) -> object:
+        return self._json_rpc_result(self._url("E2E_ANVIL_PORT"), "Anvil", method, params)
+
+    def _solana_rpc_result(self, method: str, params: list[object]) -> object:
+        return self._json_rpc_result(self._url("E2E_SOLANA_RPC_PORT"), "Solana", method, params)
+
+    def _solana_command(self, executable: str, *arguments: str, timeout: float = 60) -> str:
+        if executable not in {"solana", "solana-keygen", "spl-token"}:
+            raise RuntimeError(f"unsupported Solana fixture command: {executable}")
+        output = self._compose(
+            ("payer",), "exec", "-T", "solana",
+            f"{SOLANA_CLI_ROOT}/{executable}", *arguments,
+            timeout=timeout,
+        )
+        return _clean_compose_stdout(output)
+
+    def _solana_pubkey(self, keypair_path: str) -> str:
+        address = self._solana_command("solana-keygen", "pubkey", keypair_path).strip()
+        if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", address):
+            raise RuntimeError(f"Solana keypair emitted an invalid public key: {address!r}")
+        return address
+
+    def _solana_json(self, executable: str, *arguments: str, timeout: float = 60) -> dict[str, Any]:
+        output = self._solana_command(executable, *arguments, timeout=timeout)
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"Solana fixture command returned invalid JSON: {output[-2048:]}") from error
+        if not isinstance(payload, dict):
+            raise RuntimeError("Solana fixture command did not return a JSON object")
+        return payload
+
+    def _solana_keypair_json(self, keypair_path: str) -> str:
+        output = _clean_compose_stdout(self._compose(
+            ("payer",), "exec", "-T", "solana", "/bin/cat", keypair_path,
+        ))
+        try:
+            keypair = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Solana fixture keypair is not valid JSON") from error
+        if (
+            not isinstance(keypair, list)
+            or len(keypair) != 64
+            or any(not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 255 for value in keypair)
+        ):
+            raise RuntimeError("Solana fixture keypair has an invalid byte representation")
+        return json.dumps(keypair, separators=(",", ":"))
+
+    def _wait_solana_token_balance(self, account: str, expected: int, attempts: int = 180) -> None:
+        for _ in range(attempts):
+            try:
+                result = self._solana_rpc_result(
+                    "getTokenAccountBalance", [account, {"commitment": "finalized"}],
+                )
+                value = result.get("value") if isinstance(result, dict) else None
+                amount = value.get("amount") if isinstance(value, dict) else None
+                if isinstance(amount, str) and amount.isdigit() and int(amount) == expected:
+                    return
+            except RuntimeError:
+                pass
+            time.sleep(0.5)
+        raise RuntimeError(f"timed out waiting for finalized Solana token balance on {account}")
+
+    def _native_balance(self, address: str) -> int:
+        value = self._rpc_result("eth_getBalance", [address, "latest"])
+        if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]+", value):
+            raise RuntimeError(f"Anvil returned an invalid native balance for {address}: {value!r}")
+        return int(value, 16)
 
     def _emqx_api(self, token: str, method: str, path: str, body: dict[str, object] | None = None) -> tuple[int, str]:
         payload = None if body is None else json.dumps(body, separators=(",", ":")).encode()
@@ -600,12 +878,37 @@ class DockerE2EDeployer(E2EDeployer):
         paid = {"jsonrpc": "2.0", "id": "paid", "method": "tools/call", "params": {"name": "marketpulse.realtime_news", "arguments": {}}}
         headers["x-run-id"] = "preflight-paid"
         status, response_headers, raw = self._http(endpoint, "POST", json.dumps(paid).encode(), headers)
-        challenge = json.loads(raw)
-        if status != 402 or challenge.get("x402Version") != 2 or not challenge.get("accepts"):
+        message = json.loads(raw)
+        result = message.get("result", {}) if isinstance(message, dict) else {}
+        challenge = result.get("structuredContent", {}) if isinstance(result, dict) else {}
+        content = result.get("content", []) if isinstance(result, dict) else []
+        text_challenge: object = None
+        if isinstance(content, list) and content and isinstance(content[0], dict):
+            text = content[0].get("text")
+            if isinstance(text, str):
+                try:
+                    text_challenge = json.loads(text)
+                except json.JSONDecodeError:
+                    pass
+        if (
+            status != 200
+            or message.get("jsonrpc") != "2.0"
+            or message.get("id") != "paid"
+            or result.get("isError") is not True
+            or challenge.get("x402Version") != 2
+            or not challenge.get("accepts")
+            or text_challenge != challenge
+        ):
             raise RuntimeError(f"paid MCP preflight is not an x402 v2 challenge: HTTP {status}: {raw[:2048]}")
-        if not any(name.lower() == "payment-required" for name in response_headers):
-            raise RuntimeError("paid MCP 402 omitted PAYMENT-REQUIRED")
-        return "free tool delivered without payment; paid tool returned a valid x402 v2 challenge"
+        if any(name.lower() == "payment-required" for name in response_headers):
+            raise RuntimeError("paid MCP challenge incorrectly mixed the HTTP PAYMENT-REQUIRED transport")
+        expires_at = next((
+            value for name, value in response_headers.items()
+            if name.lower() == "payment-expires-at"
+        ), "")
+        if not expires_at.isdigit() or int(expires_at) <= 0:
+            raise RuntimeError("paid MCP challenge omitted its stable payment-expires-at profile metadata")
+        return "free tool delivered without payment; paid tool returned a canonical x402 v2 MCP challenge"
 
     def _sql(self, payer: str, payee: str, query: str) -> str:
         return _clean_compose_stdout(self._full(
@@ -766,6 +1069,114 @@ class DockerE2EDeployer(E2EDeployer):
             time.sleep(1)
         raise RuntimeError(f"financial evidence did not converge: {result}")
 
+    def _settlement_accounting(
+        self,
+        payer: str,
+        payee: str,
+        intents: list[str],
+        initial_facilitator_native: int,
+    ) -> dict[str, Any]:
+        if len(intents) != 4 or len(set(intents)) != 4 or any(not _safe_id(value) for value in intents):
+            raise RuntimeError("four distinct safe settled intent IDs are required for chain accounting")
+        quoted = ",".join(f"'{value}'" for value in intents)
+        raw = self._sql(
+            payer,
+            payee,
+            "SELECT p.run_id,l.intent_id,l.direction,l.network,l.asset,"
+            "coalesce(lower(l.token_contract),''),l.asset_decimals,l.amount,lower(l.tx_hash),"
+            "coalesce(l.effect_ref,'') FROM pay_ledger l JOIN pay_intent p ON p.id=l.intent_id "
+            "WHERE l.intent_id IN (" + quoted + ") AND l.entry_type='payment' "
+            "ORDER BY p.run_id,l.direction,l.intent_id;",
+        )
+        columns = (
+            "run_id", "intent_id", "direction", "network", "asset", "token_contract",
+            "asset_decimals", "amount", "tx_hash", "effect_ref",
+        )
+        rows: list[dict[str, str]] = []
+        for line in raw.splitlines():
+            values = line.split("|")
+            if len(values) != len(columns):
+                raise RuntimeError(f"invalid payment-ledger accounting row: {line!r}")
+            rows.append(dict(zip(columns, values, strict=True)))
+        if len(rows) != 4 or {row["intent_id"] for row in rows} != set(intents):
+            raise RuntimeError(f"payment-ledger accounting is incomplete or duplicated: {rows}")
+
+        by_run: dict[str, list[dict[str, str]]] = {}
+        for row in rows:
+            if (
+                row["network"] != "eip155:31337" or row["asset"] != "USDC"
+                or row["token_contract"] != TOKEN_CONTRACT or row["asset_decimals"] != "6"
+                or row["amount"] != "1000000" or not re.fullmatch(r"0x[0-9a-f]{64}", row["tx_hash"])
+                or not row["effect_ref"]
+            ):
+                raise RuntimeError(f"payment-ledger row is not exact on-chain USDC evidence: {row}")
+            by_run.setdefault(row["run_id"], []).append(row)
+        if len(by_run) != 2:
+            raise RuntimeError(f"expected two stable workflow run IDs in the payment ledger: {sorted(by_run)}")
+        for run_id, run_rows in by_run.items():
+            if (
+                len(run_rows) != 2 or {row["direction"] for row in run_rows} != {"outbound", "inbound"}
+                or len({row["intent_id"] for row in run_rows}) != 2
+                or len({row["tx_hash"] for row in run_rows}) != 1
+            ):
+                raise RuntimeError(f"run {run_id} is not one bidirectional ledger pair for one chain effect: {run_rows}")
+
+        transaction_hashes = sorted({row["tx_hash"] for row in rows})
+        if len(transaction_hashes) != 2:
+            raise RuntimeError(f"expected exactly two idempotent settlement transactions: {transaction_hashes}")
+        receipts: list[dict[str, object]] = []
+        total_gas_fee = 0
+        for transaction_hash in transaction_hashes:
+            receipt = self._rpc_result("eth_getTransactionReceipt", [transaction_hash])
+            if not isinstance(receipt, dict):
+                raise RuntimeError(f"settlement receipt is missing for {transaction_hash}")
+            receipt_hash = str(receipt.get("transactionHash", "")).lower()
+            sender = str(receipt.get("from", "")).lower()
+            target = str(receipt.get("to", "")).lower()
+            status = receipt.get("status")
+            gas_used = receipt.get("gasUsed")
+            gas_price = receipt.get("effectiveGasPrice")
+            if (
+                receipt_hash != transaction_hash or sender != FACILITATOR_ADDRESS
+                or target != TOKEN_CONTRACT or status != "0x1"
+                or not isinstance(gas_used, str) or not re.fullmatch(r"0x[0-9a-fA-F]+", gas_used)
+                or not isinstance(gas_price, str) or not re.fullmatch(r"0x[0-9a-fA-F]+", gas_price)
+            ):
+                raise RuntimeError(f"settlement receipt is not a successful facilitator token call: {receipt}")
+            gas_used_value = int(gas_used, 16)
+            gas_price_value = int(gas_price, 16)
+            gas_fee = gas_used_value * gas_price_value
+            if gas_used_value <= 0 or gas_price_value <= 0 or gas_fee <= 0:
+                raise RuntimeError(f"settlement receipt has no accountable gas fee: {receipt}")
+            total_gas_fee += gas_fee
+            receipts.append({
+                "transaction_hash": transaction_hash,
+                "from": sender,
+                "to": target,
+                "gas_used": gas_used_value,
+                "effective_gas_price": gas_price_value,
+                "gas_fee_wei": gas_fee,
+            })
+
+        final_facilitator_native = self._native_balance(FACILITATOR_ADDRESS)
+        native_spent = initial_facilitator_native - final_facilitator_native
+        if native_spent != total_gas_fee:
+            raise RuntimeError(
+                "facilitator native balance delta does not equal the two settlement receipt fees: "
+                f"initial={initial_facilitator_native} final={final_facilitator_native} "
+                f"delta={native_spent} receipts={total_gas_fee}"
+            )
+        return {
+            "network": "eip155:31337",
+            "facilitator": FACILITATOR_ADDRESS,
+            "initial_facilitator_native": initial_facilitator_native,
+            "final_facilitator_native": final_facilitator_native,
+            "facilitator_native_spent": native_spent,
+            "receipt_gas_fees": total_gas_fee,
+            "ledger_rows": rows,
+            "receipts": receipts,
+        }
+
     def _receipt(self, scenario: str, intent: str, direction: str) -> None:
         status, _, raw = self._http(
             self._url("E2E_AGENTVAULT_PORT", f"/api/v1/payments/{intent}/receipt?scenario_id={scenario}")
@@ -876,8 +1287,8 @@ class DockerE2EDeployer(E2EDeployer):
             self.cleanup()
         try:
             self._build_images(payer_language, payee_language)
-            self._dependency_up("payee")
-            self._dependency_health("payee")
+            self._dependency_up("payee", include_solana=False)
+            self._dependency_health("payee", include_solana=False)
             self._full(payer_language, payee_language, "up", "--no-deps", "agentvault-provision")
             self._full(payer_language, payee_language, "up", "-d", "--no-deps", "agentvault")
             self._wait_http(self._url("E2E_AGENTVAULT_MGMT_PORT", "/readyz"), 90)
@@ -889,6 +1300,7 @@ class DockerE2EDeployer(E2EDeployer):
             self._wait_http(self._url("E2E_QUANTSTREAM_UI_PORT", "/healthz"), 60)
             preflight = self._preflight_mcp()
             initial_balances = self._token_balances(payer_language, payee_language)
+            initial_facilitator_native = self._native_balance(FACILITATOR_ADDRESS)
             automatic_logs = self._full(
                 payer_language, payee_language, "run", "--rm", "--no-deps",
                 "-e", "QUANTSTREAM_E2E_FAIL_AFTER_SETTLEMENT=once", f"quantstream-{payer_language}",
@@ -912,6 +1324,12 @@ class DockerE2EDeployer(E2EDeployer):
                 self._receipt("scenario-marketpulse-feed", intent, "inbound")
             durable = self._assert_durable_invariants(payer_language, payee_language)
             final_balances = self._token_balances(payer_language, payee_language)
+            chain_accounting = self._settlement_accounting(
+                payer_language,
+                payee_language,
+                [*outbound, *inbound],
+                initial_facilitator_native,
+            )
             balance_sync = self._wait_balance_snapshots(payer_language, payee_language, final_balances)
             evidence = FullFlowEvidence(
                 payer_language=payer_language,
@@ -920,6 +1338,7 @@ class DockerE2EDeployer(E2EDeployer):
                 audit=audit,
                 initial_balances=initial_balances,
                 final_balances=final_balances,
+                chain_accounting=chain_accounting,
                 logs=self._service_logs(
                     payer_language,
                     payee_language,
@@ -942,6 +1361,125 @@ class DockerE2EDeployer(E2EDeployer):
         except BaseException:
             self._diagnostics(payer_language, payee_language)
             raise
+
+    def mpp_tempo(self) -> str:
+        self.cleanup()
+        self._compose(("tempo",), "up", "-d", "tempo")
+        rpc_url = self._url("E2E_TEMPO_RPC_PORT")
+        self._wait_rpc(rpc_url, "eth_chainId", "0x539", 90)
+        # The faucet's expiring nonce is checked against chain time. Requiring
+        # a current non-genesis block closes the localnet startup race without
+        # weakening protocol or settlement verification.
+        self._wait_tempo_faucet_window(rpc_url)
+        self.environment["TEMPO_RPC_URL"] = rpc_url
+
+        self.environment.setdefault("CARGO_INCREMENTAL", "0")
+        self.environment.setdefault("CARGO_PROFILE_TEST_DEBUG", "0")
+        self._target_budget()
+
+        return self._run(
+            [
+                "cargo", "test", "--locked",
+                "protocol::mpp::tests::live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers",
+                "--", "--ignored", "--exact", "--nocapture",
+            ],
+            self.context.timeout_seconds,
+            REPOSITORY_ROOT,
+        )
+
+    def x402_solana(self) -> str:
+        self.cleanup()
+        self._compose(("payer",), "up", "-d", "solana")
+        rpc_url = self._url("E2E_SOLANA_RPC_PORT")
+        self._wait_rpc(rpc_url, "getHealth", "ok", 120)
+
+        keypairs = {
+            role: f"/tmp/agentvault-x402-{role}.json"
+            for role in ("payer", "recipient", "facilitator", "mint")
+        }
+        for path in keypairs.values():
+            self._solana_command(
+                "solana-keygen", "new", "--silent", "--no-bip39-passphrase",
+                "--force", "--outfile", path,
+            )
+
+        payer = self._solana_pubkey(keypairs["payer"])
+        recipient = self._solana_pubkey(keypairs["recipient"])
+        facilitator = self._solana_pubkey(keypairs["facilitator"])
+        mint = self._solana_pubkey(keypairs["mint"])
+        container_rpc = "http://127.0.0.1:8899"
+        self._solana_command(
+            "solana", "airdrop", "10", facilitator, "--url", container_rpc,
+            timeout=120,
+        )
+        created = self._solana_json(
+            "spl-token", "create-token", "--url", container_rpc,
+            "--fee-payer", keypairs["facilitator"], "--mint-authority", payer,
+            "--decimals", "6", "--output", "json-compact", keypairs["mint"],
+            timeout=120,
+        )
+        command_output = created.get("commandOutput")
+        if not isinstance(command_output, dict) or command_output.get("address") != mint:
+            raise RuntimeError("SPL token fixture created an unexpected mint")
+
+        for owner in (payer, recipient):
+            self._solana_json(
+                "spl-token", "create-account", "--url", container_rpc,
+                "--fee-payer", keypairs["facilitator"], "--owner", owner,
+                "--output", "json-compact", mint,
+                timeout=120,
+            )
+        payer_account_wire = self._solana_json(
+            "spl-token", "address", "--url", container_rpc, "--verbose",
+            "--output", "json-compact", "--token", mint, "--owner", payer,
+        )
+        recipient_account_wire = self._solana_json(
+            "spl-token", "address", "--url", container_rpc, "--verbose",
+            "--output", "json-compact", "--token", mint, "--owner", recipient,
+        )
+        payer_account = payer_account_wire.get("associatedTokenAddress")
+        recipient_account = recipient_account_wire.get("associatedTokenAddress")
+        if not all(
+            isinstance(value, str) and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", value)
+            for value in (payer_account, recipient_account)
+        ):
+            raise RuntimeError("SPL token fixture emitted an invalid associated token account")
+
+        self._solana_json(
+            "spl-token", "mint", "--url", container_rpc,
+            "--fee-payer", keypairs["facilitator"],
+            "--mint-authority", keypairs["payer"], "--output", "json-compact",
+            mint, "1000", payer_account,
+            timeout=120,
+        )
+        self._wait_solana_token_balance(payer_account, 1_000_000_000)
+        self._wait_solana_token_balance(recipient_account, 0)
+
+        genesis = self._solana_rpc_result("getGenesisHash", [])
+        if not isinstance(genesis, str) or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,88}", genesis):
+            raise RuntimeError("Solana validator emitted an invalid genesis hash")
+        self.environment.update({
+            "SOLANA_RPC_URL": rpc_url,
+            "SOLANA_CHAIN_REFERENCE": genesis[:32],
+            "SOLANA_PAYER_KEYPAIR_JSON": self._solana_keypair_json(keypairs["payer"]),
+            "SOLANA_FACILITATOR_KEYPAIR_JSON": self._solana_keypair_json(keypairs["facilitator"]),
+            "SOLANA_PAYER_TOKEN_ACCOUNT": payer_account,
+            "SOLANA_RECIPIENT_TOKEN_ACCOUNT": recipient_account,
+            "SOLANA_RECIPIENT_ADDRESS": recipient,
+            "SOLANA_TOKEN_MINT": mint,
+        })
+        self.environment.setdefault("CARGO_INCREMENTAL", "0")
+        self.environment.setdefault("CARGO_PROFILE_TEST_DEBUG", "0")
+        self._target_budget()
+        return self._run(
+            [
+                "cargo", "test", "--locked",
+                "protocol::x402::tests::live_solana_x402_vault_handlers_reconcile_both_ledgers",
+                "--", "--ignored", "--exact", "--nocapture",
+            ],
+            self.context.timeout_seconds,
+            REPOSITORY_ROOT,
+        )
 
     def matrix(self) -> dict[str, str]:
         RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)

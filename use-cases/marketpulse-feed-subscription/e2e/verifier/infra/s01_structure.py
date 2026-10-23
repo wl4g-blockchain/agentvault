@@ -10,14 +10,19 @@ from common.project import E2E_ROOT, REPOSITORY_ROOT
 
 REQUIRED = (
     "runner.py",
+    "deploy/namespaces.yaml",
     "common/deploy/base.py",
     "common/deploy/docker.py",
+    "common/deploy/kubernetes.py",
+    "common/deploy/kubernetes_deployer.py",
     "common/payer_identity.py",
     "verifier/payment/s20_full.py",
     "verifier/payment/s21_payer_signing.py",
     "verifier/payment/s22_payee_settlement.py",
     "verifier/payment/s23_balance_sync.py",
     "verifier/payment/s24_gateway_balance.py",
+    "verifier/payment/s25_mpp_tempo.py",
+    "verifier/payment/s26_x402_solana.py",
     "verifier/payment/s30_matrix.py",
     "verifier/web/s40_dashboard.py",
     "deploy/anvil/docker-compose.yaml",
@@ -98,7 +103,34 @@ DEPLOY_COMPONENTS = (
     "mock-payer-quantstream-ingest-ui",
     "postgres",
     "solana",
+    "tempo",
 )
+
+E2E_NAMESPACE_GROUPS = {
+    "e2e-agentvault-infra-system": ("postgres", "emqx", "jaeger"),
+    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana", "tempo"),
+    "e2e-agentvault-mock-payee": (
+        "mock-payee-marketpulse-golang-service",
+        "mock-payee-marketpulse-java-service",
+        "mock-payee-marketpulse-python-service",
+        "mock-payee-marketpulse-rust-service",
+        "mock-payee-marketpulse-typescript-service",
+    ),
+    "e2e-agentvault-mock-payer": (
+        "mock-payer-quantstream-ingest-service-golang",
+        "mock-payer-quantstream-ingest-service-java",
+        "mock-payer-quantstream-ingest-service-python",
+        "mock-payer-quantstream-ingest-service-rust",
+        "mock-payer-quantstream-ingest-service-typescript",
+        "mock-payer-quantstream-ingest-ui",
+    ),
+}
+
+REQUIRED_E2E_NAMESPACES = frozenset({
+    "e2e-agentvault-system",
+    "e2e-agentvault-authguard-system",
+    *E2E_NAMESPACE_GROUPS,
+})
 
 COMPONENT_MANIFESTS = (
     "docker-compose.yaml",
@@ -113,12 +145,14 @@ SDK_SOURCE_ALLOWLISTS = {
         "model/approval.go", "model/base.go", "model/payee.go", "model/payer.go",
         "payer/payer.go", "payer/standard.go", "payee/payee.go", "payee/standard.go",
         "payee/gin.go", "transport/transport.go", "transport/grpc.go", "transport/mqtt.go",
+        "transport/factory.go", "protocol/adapter.go", "protocol/x402.go", "protocol/mpp.go",
     },
     "rust/src": {
         "lib.rs", "agentvault.rs", "config/config.rs",
         "model/approval.rs", "model/base.rs", "model/payee.rs", "model/payer.rs",
         "payer/payer.rs", "payer/standard.rs", "payee/payee.rs", "payee/standard.rs",
         "payee/axum.rs", "transport/transport.rs", "transport/grpc.rs", "transport/mqtt.rs",
+        "transport/factory.rs", "protocol/adapter.rs", "protocol/x402.rs", "protocol/mpp.rs",
     },
     "python/agentvault": {
         "__init__.py", "agentvault.py", "config/__init__.py", "config/config.py",
@@ -126,19 +160,26 @@ SDK_SOURCE_ALLOWLISTS = {
         "payer/__init__.py", "payer/payer.py", "payer/standard.py", "payee/__init__.py",
         "payee/payee.py", "payee/standard.py", "payee/fast.py", "transport/__init__.py",
         "transport/transport.py", "transport/grpc.py", "transport/mqtt.py",
+        "transport/factory.py", "protocol/__init__.py", "protocol/adapter.py",
+        "protocol/x402.py", "protocol/mpp.py",
     },
     "typescript/src/agentvault": {
         "agentvault.ts", "config/config.ts", "model/approval.ts", "model/base.ts",
         "model/payee.ts", "model/payer.ts", "payer/payer.ts", "payer/standard.ts",
         "payee/payee.ts", "payee/standard.ts", "payee/express.ts", "transport/transport.ts",
         "transport/grpc.ts", "transport/mqtt.ts",
+        "transport/factory.ts", "protocol/adapter.ts", "protocol/x402.ts", "protocol/mpp.ts",
     },
     "java/src/io/agentvault/sdk": {
         "AgentVault.java", "config/Config.java", "model/Approval.java",
         "model/Base.java", "model/Payee.java", "model/Payer.java", "payer/PayerMiddleware.java",
-        "payer/SpringInterceptorPayerMiddleware.java", "payee/PayeeMiddleware.java",
+        "payer/SpringInterceptorPayerMiddleware.java", "payer/JdkHttpPayerMiddleware.java",
+        "payee/PayeeMiddleware.java",
         "payee/StandardPayeeMiddleware.java", "payee/SpringInterceptorPayeeMiddleware.java",
         "transport/VaultTransport.java", "transport/GrpcVaultTransport.java", "transport/MqttVaultTransport.java",
+        "transport/VaultTransportFactory.java", "protocol/PaymentProtocol.java",
+        "protocol/PaymentProtocolFactory.java", "protocol/ProtocolRegistry.java",
+        "protocol/X402Adapter.java", "protocol/X402ExactPayload.java", "protocol/MppAdapter.java",
     },
 }
 
@@ -298,7 +339,7 @@ SDK_MODEL_CONTRACTS = {
                               "interface SubmitApprovalDecisionRequest"),
         "model/payer.ts": ("type AuthorizationOutcome", "interface PaymentRequired",
                            "interface AuthorizePaymentRequest", "interface AuthorizePaymentResponse",
-                           "interface ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
+                           "type ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
                            "interface BalanceQuery", "interface PaymentBalance", "class PayerRequestContext",
                            "interface PayerHttpRequest", "interface PayerHttpResponse",
                            "interface AuthorizedPayment"),
@@ -338,15 +379,15 @@ SDK_LOGICAL_CONTRACTS = {
         "payer/payer.go": ("type PayerMiddleware", "Authorize(", "Report(", "CredentialHeader(", "GetPayment(", "GetReceipt(", "GetBalance(",
                             "protocolHint != \"\" && intent.Protocol != protocolHint", "intent.ScenarioID != m.config.ScenarioID",
                             "intent.WalletID == nil", "intent.PolicyID == \"\"",
-                            "intent.RunID != operation.RunID"),
-        "payer/standard.go": ("type StandardPayerMiddleware", "*PayerMiddleware", "RoundTrip(", "DeliveryRetries", "StatusPaymentRequired", "StatusServiceUnavailable", "CheckRedirect"),
+                            "intent.RunID != operation.RunID", "DeliveryRetries", "StatusServiceUnavailable"),
+        "payer/standard.go": ("type StandardPayerMiddleware", "*PayerMiddleware", "RoundTrip(", "StatusPaymentRequired", "CheckRedirect", "m.Deliver("),
         "payer/payer_test.go": ("ForwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
         "payee/payee.go": ("type PayeeMiddleware", "ErrInvalidPayment", "Challenge(", "Protect(", "ResolveOffer(", "GetReceipt(",
                             "OperationContext: settlementContext",
                             "intent.Asset != challenge.Asset", "payment.Intent.Status != model.PaymentStatusSettled",
                             "payment.Receipt.Status != model.PaymentStatusSettled"),
-        "payee/gin.go": ("type GinPayeeMiddleware", "Handler() gin.HandlerFunc", "NewMCPToolRoute", "isMCPToolCall", "errors.Is(err, ErrInvalidPayment)"),
-        "payee/standard.go": ("type StandardPayeeMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "isMCPToolCall", "errors.Is(err, ErrInvalidPayment)"),
+        "payee/gin.go": ("type GinPayeeMiddleware", "Handler() gin.HandlerFunc", "NewMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
+        "payee/standard.go": ("type StandardPayeeMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
         "payee/payee_test.go": ("RejectsInvalidPaymentBeforeSettlement", "/api/v1/payee/verify", "ErrInvalidPayment"),
         "transport/transport.go": ("type Transport interface",),
         "transport/grpc.go": ("type GrpcVaultTransport",),
@@ -359,8 +400,8 @@ SDK_LOGICAL_CONTRACTS = {
         "payer/payer.rs": ("pub struct PayerMiddleware", "pub async fn authorize", "pub async fn report", "pub fn credential_header", "pub async fn get_payment", "pub async fn get_receipt", "pub async fn get_balance",
                             "protocol_hint.is_some_and", "intent.scenario_id != config.scenario_id",
                             "intent.wallet_id.as_deref().is_none_or", "intent.policy_id.as_deref().is_none_or",
-                            "intent.run_id != context.run_id"),
-        "payer/standard.rs": ("pub struct ReqwestPayerMiddleware", "impl<T> Middleware", "delivery_retries", "Policy::none", "status != 503"),
+                            "intent.run_id != context.run_id", "delivery_retries", "view.status != 503"),
+        "payer/standard.rs": ("pub struct ReqwestPayerMiddleware", "impl<T> Middleware", "Policy::none", ".deliver(&context"),
         "payer/payer_test.rs": ("payer_forwards_captured_protocol_hint_without_local_projection", "payment-protocol", "mpp"),
         "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_offer", "pub async fn get_receipt",
                             "OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())",
@@ -379,14 +420,15 @@ SDK_LOGICAL_CONTRACTS = {
         "payer/payer.py": ("class PayerMiddleware", "def authorize", "def report", "def credential_header", "def get_payment", "def get_receipt", "def get_balance",
                             "required.protocol_hint is not None and intent.protocol != required.protocol_hint",
                             "intent.scenario_id != self.config.scenario_id", "not intent.wallet_id",
-                            "not intent.policy_id", "intent.run_id != operation.run_id"),
-        "payer/standard.py": ("class HttpxPayerMiddleware", "async def request", "delivery_retries", "follow_redirects=False", "stream=True", "_read_bounded", "response.status_code != 503"),
+                            "not intent.policy_id", "intent.run_id != operation.run_id",
+                            "self.config.delivery_retries", "response_view.status != 503"),
+        "payer/standard.py": ("class HttpxPayerMiddleware", "async def request", "follow_redirects=False", "stream=True", "_read_bounded", "self.core.deliver("),
         "payer/payer_test.py": ("test_captured_protocol_hint_is_checked_against_vault_result", "payment-protocol", "mpp"),
         "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_offer", "def get_receipt",
                             "operation.settlement_context(), verification.intent.id",
                             "intent.asset != challenge.asset", "intent.status.value != \"settled\"",
                             "receipt.status.value != \"settled\""),
-        "payee/fast.py": ("class FastPayeeMiddleware", "async def __call__", "def mcp_tool", "_is_mcp_tool_call"),
+        "payee/fast.py": ("class FastPayeeMiddleware", "async def __call__", "def mcp_tool", "def _mcp_call"),
         "payee/payee_test.py": ("test_rejects_invalid_payment_before_settlement", "/api/v1/payee/verify", "PermissionError"),
         "transport/transport.py": ("class VaultTransport",),
         "transport/grpc.py": ("class GrpcVaultTransport",),
@@ -399,14 +441,15 @@ SDK_LOGICAL_CONTRACTS = {
         "payer/payer.ts": ("class PayerMiddleware", "async authorize", "async report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
                             "protocolHint !== null && intent.protocol !== protocolHint",
                             "intent.scenario_id !== this.config.scenarioId", "!intent.wallet_id",
-                            "!intent.policy_id", "intent.run_id !== operation.runId"),
-        "payer/standard.ts": ("class FetchPayerMiddleware", "async request", "deliveryRetries", "redirect: 'manual'", "response.status !== 503"),
+                            "!intent.policy_id", "intent.run_id !== operation.runId",
+                            "this.config.deliveryRetries", "responseView.status !== 503"),
+        "payer/standard.ts": ("class FetchPayerMiddleware", "async request", "redirect: 'manual'", "this.core.deliver("),
         "payer/payer_test.ts": ("forwards captured protocol hints without local projections", "payment-protocol", "mpp"),
         "payee/payee.ts": ("class PayeeMiddleware", "class InvalidPaymentError", "async challenge", "async protect", "resolveOffer", "getReceipt",
                             "const settlement = operationContext(operation)",
                             "!sameAsset(intent.asset, challenge.asset)", "intent.status !== 'settled'",
                             "receipt.status !== 'settled'"),
-        "payee/express.ts": ("class ExpressPayeeMiddleware", "handler()", "mcpToolRoute", "isMcpToolCall", "error instanceof InvalidPaymentError"),
+        "payee/express.ts": ("class ExpressPayeeMiddleware", "handler()", "mcpToolRoute", "mcpCall", "error instanceof InvalidPaymentError"),
         "payee/payee_test.ts": ("rejects invalid payment before settlement", "/api/v1/payee/verify", "InvalidPaymentError"),
         "transport/transport.ts": ("interface VaultTransport",),
         "transport/grpc.ts": ("class GrpcVaultTransport",),
@@ -420,14 +463,14 @@ SDK_LOGICAL_CONTRACTS = {
                             "challenge.protocolHint() != null", "!config.scenarioId().equals(intent.scenarioId())",
                             "intent.walletId() == null || intent.walletId().isBlank()",
                             "intent.policyId() == null || intent.policyId().isBlank()",
-                            "!context.runId().equals(intent.runId())"),
-        "payer/SpringInterceptorPayerMiddleware.java": ("class SpringInterceptorPayerMiddleware", "intercept(", "deliveryRetries", "HttpClient.Redirect.NEVER", "value() != 402", "value() != 503"),
+                            "!context.runId().equals(intent.runId())", "config.deliveryRetries()", "view.status() != 503"),
+        "payer/SpringInterceptorPayerMiddleware.java": ("class SpringInterceptorPayerMiddleware", "intercept(", "HttpClient.Redirect.NEVER", "value() != 402", "core.deliver("),
         "payer/PayerMiddlewareTest.java": ("forwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
         "payee/PayeeMiddleware.java": ("class PayeeMiddleware", "challenge(", "protect(", "resolveOffer", "getReceipt",
                             "new SettlePaymentRequest(settlement, verification.intent().id()",
                             "!challenge.asset().equals(intent.asset())", "payment.intent().status() != Base.PaymentStatus.SETTLED",
                             "payment.receipt().status() != Base.PaymentStatus.SETTLED"),
-        "payee/SpringInterceptorPayeeMiddleware.java": ("class SpringInterceptorPayeeMiddleware", "doFilterInternal", "mcpTool", "isMcpToolCall"),
+        "payee/SpringInterceptorPayeeMiddleware.java": ("class SpringInterceptorPayeeMiddleware", "doFilterInternal", "mcpTool", "mcpCall"),
         "payee/PayeeMiddlewareTest.java": ("rejectsInvalidPaymentBeforeSettlement", "/api/v1/payee/verify", "SecurityException"),
         "transport/VaultTransport.java": ("interface VaultTransport",),
         "transport/GrpcVaultTransport.java": ("class GrpcVaultTransport",),
@@ -476,16 +519,24 @@ MCP_CONTRACTS = {
 }
 
 MCP_TRANSPORT_CONTRACTS = {
-    "golang": ("AGENTVAULT_TRANSPORT", "NewMqttVaultTransport", "NewGrpcVaultTransport",
+    "golang": ("AGENTVAULT_TRANSPORT", "VaultTransportConfig", "NewFromConfig",
                 "agentvault.sdk.payer.transport_selected"),
-    "rust": ("AGENTVAULT_TRANSPORT", "MqttVaultTransport", "GrpcVaultTransport",
+    "rust": ("AGENTVAULT_TRANSPORT", "VaultTransportConfig", "AgentVault::from_config",
              "agentvault.sdk.payer.transport_selected"),
-    "python": ("AGENTVAULT_TRANSPORT", "MqttVaultTransport", "GrpcVaultTransport",
+    "python": ("AGENTVAULT_TRANSPORT", "VaultTransportConfig", "AgentVault.from_config",
                "agentvault.sdk.payer.transport_selected"),
-    "java": ("AGENTVAULT_TRANSPORT", "MqttVaultTransport", "GrpcVaultTransport",
+    "java": ("AGENTVAULT_TRANSPORT", "VaultTransportConfig", "AgentVault.fromConfig",
              "agentvault.sdk.payer.transport_selected"),
-    "typescript": ("AGENTVAULT_TRANSPORT", "MqttVaultTransport", "GrpcVaultTransport",
+    "typescript": ("AGENTVAULT_TRANSPORT", "VaultTransportConfig", "AgentVault.fromConfig",
                    "agentvault.sdk.payer.transport_selected"),
+}
+
+DIRECT_TRANSPORT_CONSTRUCTORS = {
+    "golang": re.compile(r"\bNew(?:Mqtt|Grpc)VaultTransport\s*\("),
+    "rust": re.compile(r"\b(?:Mqtt|Grpc)VaultTransport::new\s*\("),
+    "python": re.compile(r"\b(?:Mqtt|Grpc)VaultTransport\s*\("),
+    "java": re.compile(r"\bnew\s+(?:Mqtt|Grpc)VaultTransport\s*\("),
+    "typescript": re.compile(r"\bnew\s+(?:Mqtt|Grpc)VaultTransport\s*\("),
 }
 
 PAYER_FORBIDDEN_CHAIN_PATTERNS = (
@@ -501,20 +552,33 @@ PAYER_FORBIDDEN_CHAIN_PATTERNS = (
 
 PAYEE_FRAMEWORK_CONTRACTS = {
     "deploy/mock-payee-marketpulse-golang-service/pkg/server.go": (
-        "GinPayeeMiddleware", "NewFeedSQLiteStorage", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
+        "GinPayeeMiddleware", "VaultTransportConfig", "NewFromConfig",
+        "NewFeedSQLiteStorage", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-rust-service/src/server.rs": (
-        "AxumPayeeMiddleware", "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "AxumPayeeMiddleware", "VaultTransportConfig", "AgentVault::from_config",
+        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-python-service/app/server.py": (
-        "FastAPI", "FastPayeeMiddleware", "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "FastAPI", "FastPayeeMiddleware", "VaultTransportConfig", "AgentVault.from_config",
+        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java": (
-        "MarketPulseServer", "SpringInterceptorPayeeMiddleware", "FeedSQLiteStorage", "McpEndpoint", '"/mcp"',
+        "MarketPulseServer", "SpringInterceptorPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
+        "FeedSQLiteStorage", "McpEndpoint", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-typescript-service/src/server.ts": (
-        "ExpressPayeeMiddleware", "FeedSQLiteStorage", "FeedHandler", "FeedRouter", "'/mcp'",
+        "ExpressPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
+        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", "'/mcp'",
     ),
+}
+
+PAYEE_FRAMEWORK_LANGUAGES = {
+    "deploy/mock-payee-marketpulse-golang-service/pkg/server.go": "golang",
+    "deploy/mock-payee-marketpulse-rust-service/src/server.rs": "rust",
+    "deploy/mock-payee-marketpulse-python-service/app/server.py": "python",
+    "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java": "java",
+    "deploy/mock-payee-marketpulse-typescript-service/src/server.ts": "typescript",
 }
 
 PAYEE_ROUTE_FILES = (
@@ -531,6 +595,15 @@ PAYER_ROUTE_FILES = (
     "deploy/mock-payer-quantstream-ingest-service-python/app/route/ingestion.py",
     "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/route/IngestionController.java",
     "deploy/mock-payer-quantstream-ingest-service-typescript/src/route/ingestion.ts",
+)
+
+LANGUAGE_IMAGE_COMPONENTS = (
+    *(f"mock-payee-marketpulse-{language}-service" for language in (
+        "rust", "golang", "java", "python", "typescript",
+    )),
+    *(f"mock-payer-quantstream-ingest-service-{language}" for language in (
+        "rust", "golang", "java", "python", "typescript",
+    )),
 )
 
 PAYER_FORBIDDEN_SELECTION_TOKENS = (
@@ -599,12 +672,68 @@ def verify(_context: VerificationContext) -> str:
     _verify_payer_chain_boundary()
     _verify_wallet_pool_contract()
     _verify_run_identity_contract()
+    _verify_kubernetes_namespace_boundaries()
+    _verify_runtime_image_boundaries()
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
-        "18 component deployment pairs, the production AgentVault chart, "
+        "19 component deployment pairs, the production AgentVault chart, "
         "five strict SDK matrices, and five aligned payer/payee implementations"
     )
+
+
+def _verify_runtime_image_boundaries() -> None:
+    errors: list[str] = []
+    for component in LANGUAGE_IMAGE_COMPONENTS:
+        dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
+        stages = [
+            line.strip()
+            for line in dockerfile.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("FROM ")
+        ]
+        if len(stages) != 2 or " AS builder" not in stages[0]:
+            errors.append(f"{component} must have exactly one builder and one runtime stage")
+        elif "_RUNTIME_IMAGE}" not in stages[1] or "_BUILD_IMAGE}" in stages[1]:
+            errors.append(f"{component} runtime stage must not reuse its build image")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
+def _verify_kubernetes_namespace_boundaries() -> None:
+    namespace_manifest = (E2E_ROOT / "deploy" / "namespaces.yaml").read_text(encoding="utf-8")
+    declared = frozenset(re.findall(r"(?m)^  name: (e2e-agentvault-[a-z0-9-]+)$", namespace_manifest))
+    if declared != REQUIRED_E2E_NAMESPACES:
+        missing = sorted(REQUIRED_E2E_NAMESPACES - declared)
+        extra = sorted(declared - REQUIRED_E2E_NAMESPACES)
+        raise RuntimeError(f"invalid E2E namespaces: missing={missing}, extra={extra}")
+
+    errors: list[str] = []
+    agentvault_values = (E2E_ROOT / "common" / "agentvault-values.yaml").read_text(encoding="utf-8")
+    if not re.search(r"(?m)^fullnameOverride: agentvault$", agentvault_values):
+        errors.append("AgentVault E2E resources must use the production-style agentvault name")
+    for namespace, components in E2E_NAMESPACE_GROUPS.items():
+        for component in components:
+            chart_root = E2E_ROOT / "deploy" / component / "helm"
+            chart = (chart_root / "Chart.yaml").read_text(encoding="utf-8")
+            annotation = f"agentvault.io/e2e-namespace: {namespace}"
+            if annotation not in chart:
+                errors.append(f"{component} must target {namespace}")
+            name_match = re.search(r"(?m)^name: ([a-z0-9-]+)$", chart)
+            if name_match is None or name_match.group(1).startswith("e2e-"):
+                errors.append(f"{component} must use a production-style Chart name")
+            template = (chart_root / "templates" / "resources.yaml").read_text(encoding="utf-8")
+            if 'index .Chart.Annotations "agentvault.io/e2e-namespace"' not in template:
+                errors.append(f"{component} does not source its namespace from the Chart contract")
+            if template.count("namespace: {{ $namespace }}") != 4:
+                errors.append(f"{component} must namespace its workload, ConfigMap, and Service")
+            if 'hasPrefix "e2e-agentvault-" $namespace' not in template:
+                errors.append(f"{component} does not reject a non-E2E namespace")
+            if "ne .Release.Namespace $namespace" not in template:
+                errors.append(f"{component} does not bind Helm release state to its resource namespace")
+            if "{{- $name := .Chart.Name -}}" not in template:
+                errors.append(f"{component} must not prefix resource names with its E2E release")
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def _verify_sdk_sources() -> None:
@@ -702,6 +831,8 @@ def _verify_ingestion_contracts() -> None:
         missing = [token for token in MCP_TRANSPORT_CONTRACTS[language] if token not in service]
         if missing:
             raise RuntimeError(f"{language} MCP helper misses dual transport evidence: {', '.join(missing)}")
+        if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(service):
+            raise RuntimeError(f"{language} MCP helper must create transports through the AgentVault facade")
         for tool in ("marketpulse.yesterday_news", "marketpulse.realtime_news"):
             if tool not in service:
                 raise RuntimeError(f"{language} MCP service does not register {tool}")
@@ -710,6 +841,9 @@ def _verify_ingestion_contracts() -> None:
         missing = [token for token in required_tokens if token not in content]
         if missing:
             raise RuntimeError(f"{relative_file} misses Payee composition: {', '.join(missing)}")
+        language = PAYEE_FRAMEWORK_LANGUAGES[relative_file]
+        if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(content):
+            raise RuntimeError(f"{relative_file} must create transports through the AgentVault facade")
     for relative_file in PAYEE_ROUTE_FILES + PAYER_ROUTE_FILES:
         content = (E2E_ROOT / relative_file).read_text(encoding="utf-8")
         missing = [path for path in ("/healthz", "/metrics") if path not in content]

@@ -228,6 +228,57 @@ services:
       start_period: 20s
     restart: "no"
 
+  # Official Tempo node/faucet from the pinned localnet image. The image's
+  # all-in-one bootstrapper can submit its first faucet transaction before the
+  # first dev block establishes wall-clock time. The runner therefore starts
+  # the same node and faucet directly, then gates funding on a current block.
+  tempo:
+    profiles: ["tempo"]
+    image: ${E2E_TEMPO_IMAGE:-ghcr.io/tempoxyz/tempo-localnet@sha256:86f199f161be85d3610d990e5bc2653ece29de3ee9c91e8c8e768cf2b8c05c3b}
+    entrypoint: ["/usr/local/bin/tempo"]
+    command:
+      - node
+      - --dev
+      - --dev.block-time
+      - 1ms
+      - --datadir
+      - /data
+      - --tempo.bootnodes-endpoint
+      - none
+      - --disable-discovery
+      - --no-persist-peers
+      - --http
+      - --http.addr
+      - 0.0.0.0
+      - --http.port
+      - "8545"
+      - --http.api
+      - all
+      - --http.corsdomain
+      - "*"
+      - --builder.gaslimit
+      - "3000000000"
+      - --faucet.enabled
+      - --faucet.private-key
+      - ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - --faucet.amount
+      - "1000000000000000"
+      - --faucet.node-address
+      - http://127.0.0.1:8545
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000000"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000001"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000002"
+      - --faucet.address
+      - "0x20c0000000000000000000000000000000000003"
+    ports:
+      - "127.0.0.1:${E2E_TEMPO_RPC_PORT:-28546}:8545"
+    cpus: "0.75"
+    stop_grace_period: 1s
+    restart: "no"
+
   facilitator:
     profiles: ["payee"]
     image: ${E2E_FACILITATOR_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/x402_facilitator:1.4.9}
@@ -310,6 +361,7 @@ services:
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_MARKETPULSE_RUST_RUNTIME_IMAGE: ${E2E_MARKETPULSE_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -318,7 +370,7 @@ services:
       agentvault:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
+      test: ["CMD", "/usr/local/bin/mock-payee-marketpulse-rust-service", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 30
@@ -358,7 +410,8 @@ services:
       network: host
       args:
         <<: *marketpulse-build-proxy-args
-        E2E_MARKETPULSE_PYTHON_BUILD_IMAGE: ${E2E_MARKETPULSE_PYTHON_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+        E2E_MARKETPULSE_PYTHON_BUILD_IMAGE: ${E2E_MARKETPULSE_PYTHON_BUILD_IMAGE:-docker.io/library/python:3.11-slim}
+        E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE: ${E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE:-gcr.io/distroless/python3-debian12:nonroot}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -383,6 +436,7 @@ services:
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+        E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE:-gcr.io/distroless/nodejs22-debian12:nonroot}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -407,7 +461,7 @@ services:
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_JAVA_BUILD_IMAGE: ${E2E_MARKETPULSE_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -416,7 +470,7 @@ services:
       agentvault:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/healthz"]
+      test: ["CMD", "/opt/java/bin/java", "-jar", "/app/marketpulse.jar", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 30
@@ -451,7 +505,7 @@ services:
     healthcheck:
       test:
         - CMD
-        - node
+        - /nodejs/bin/node
         - -e
         - fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 10s
@@ -469,6 +523,7 @@ services:
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -513,7 +568,8 @@ services:
       network: host
       args:
         <<: *quantstream-build-proxy-args
-        E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE: ${E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim}
+        E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE: ${E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE:-docker.io/library/python:3.11-slim}
+        E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE:-gcr.io/distroless/python3-debian12:nonroot}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -536,6 +592,7 @@ services:
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+        E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE:-gcr.io/distroless/nodejs22-debian12:nonroot}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -558,7 +615,7 @@ services:
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/eclipse-temurin:17-jre}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment

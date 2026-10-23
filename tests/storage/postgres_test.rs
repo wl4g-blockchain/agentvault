@@ -863,16 +863,18 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         .unwrap();
     let claimed_expired = claimed
         .iter()
-        .find(|intent| intent.id == expired_candidate.id)
+        .find(|claim| claim.intent.id == expired_candidate.id)
         .cloned()
         .expect("due created challenge must be claimed");
     let claimed_raced = claimed
         .iter()
-        .find(|intent| intent.id == raced_candidate.id)
+        .find(|claim| claim.intent.id == raced_candidate.id)
         .cloned()
         .expect("second due created challenge must be claimed");
 
-    let mut expired = claimed_expired.clone();
+    assert_eq!(claimed_expired.attempt_no, 1);
+    assert_eq!(claimed_raced.attempt_no, 1);
+    let mut expired = claimed_expired.intent.clone();
     expired.status = PaymentStatus::Expired;
     expired.reservation_status = ReservationStatus::Released;
     expired.next_reconcile_at = None;
@@ -881,7 +883,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     let expired = storage
         .commit_progress(PaymentProgressWrite {
             intent: &expired,
-            expected_updated_at: claimed_expired.updated_at,
+            expected_updated_at: claimed_expired.intent.updated_at,
             events: std::slice::from_ref(&expired_event),
             outbox: &[],
         })
@@ -896,13 +898,13 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     assert_eq!(after_expiry.scenario_spent_and_reserved, offer.amount);
     assert_eq!(after_expiry.wallet_spent_and_reserved, offer.amount);
 
-    let mut raced_expiry = claimed_raced.clone();
+    let mut raced_expiry = claimed_raced.intent.clone();
     raced_expiry.status = PaymentStatus::Expired;
     raced_expiry.reservation_status = ReservationStatus::Released;
     raced_expiry.next_reconcile_at = None;
     raced_expiry.updated_at += 1;
     let raced_expiry_event = failed_event(&raced_expiry, "challenge_expired_race");
-    let mut submitted = claimed_raced.clone();
+    let mut submitted = claimed_raced.intent.clone();
     submitted.status = PaymentStatus::Submitted;
     submitted.next_reconcile_at = Some(2_011);
     submitted.updated_at += 1;
@@ -925,7 +927,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     let transition_barrier = Arc::new(Barrier::new(3));
     let expiry_storage = storage.clone();
     let expiry_barrier = Arc::clone(&transition_barrier);
-    let expected_updated_at = claimed_raced.updated_at;
+    let expected_updated_at = claimed_raced.intent.updated_at;
     let expiry_task = tokio::spawn(async move {
         expiry_barrier.wait().await;
         expiry_storage
@@ -966,7 +968,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         1,
         "the losing expiry/credential transition must be a conflict: {transition_results:?}"
     );
-    let raced = crate::storage::PaymentStorage::get(&storage, &claimed_raced.id)
+    let raced = crate::storage::PaymentStorage::get(&storage, &claimed_raced.intent.id)
         .await
         .unwrap()
         .unwrap();

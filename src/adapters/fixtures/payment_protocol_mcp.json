@@ -1,0 +1,116 @@
+{
+  "schema": "agentvault.sdk.protocol-mcp.v1",
+  "protocols": {
+    "x402": {
+      "challenge_response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "content": [{"type": "text", "text": "{\"x402Version\":2,\"resource\":{\"url\":\"mcp://tool/marketpulse.realtime\",\"mimeType\":\"application/json\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:42431\",\"amount\":\"1000\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":60,\"asset\":\"0x2222222222222222222222222222222222222222\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"}}]}"}],
+          "structuredContent": {
+            "x402Version": 2,
+            "resource": {"url": "mcp://tool/marketpulse.realtime", "mimeType": "application/json"},
+            "accepts": [{
+              "scheme": "exact",
+              "network": "eip155:42431",
+              "amount": "1000",
+              "payTo": "0x1111111111111111111111111111111111111111",
+              "maxTimeoutSeconds": 60,
+              "asset": "0x2222222222222222222222222222222222222222",
+              "extra": {"name": "USDC", "version": "2"}
+            }]
+          },
+          "isError": true
+        }
+      },
+      "credential_meta": {
+        "x402/payment": {
+          "x402Version": 2,
+          "resource": {"url": "mcp://tool/marketpulse.realtime", "mimeType": "application/json"},
+          "accepted": {
+            "scheme": "exact",
+            "network": "eip155:42431",
+            "amount": "1000",
+            "payTo": "0x1111111111111111111111111111111111111111",
+            "maxTimeoutSeconds": 60,
+            "asset": "0x2222222222222222222222222222222222222222",
+            "extra": {"name": "USDC", "version": "2"}
+          },
+          "payload": {
+            "signature": "0xababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+            "authorization": {
+              "from": "0x3333333333333333333333333333333333333333",
+              "to": "0x1111111111111111111111111111111111111111",
+              "value": "1000",
+              "validAfter": "0",
+              "validBefore": "2000000000",
+              "nonce": "0x4242424242424242424242424242424242424242424242424242424242424242"
+            }
+          }
+        }
+      },
+      "receipt_meta": {
+        "x402/payment-response": {
+          "success": true,
+          "payer": "0x3333333333333333333333333333333333333333",
+          "transaction": "0x1111",
+          "network": "eip155:42431"
+        }
+      }
+    },
+    "mpp": {
+      "challenge_response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32042,
+          "message": "Payment Required",
+          "data": {
+            "httpStatus": 402,
+            "challenges": [{
+              "id": "challenge-0123456789abcdef",
+              "realm": "marketpulse.example",
+              "method": "tempo",
+              "intent": "charge",
+              "request": {"amount": "1000", "currency": "USDC"},
+              "header": "Payment-Authorization"
+            }]
+          }
+        }
+      },
+      "credential_meta": {
+        "org.paymentauth/credential": {
+          "challenge": {
+            "id": "challenge-0123456789abcdef",
+            "realm": "marketpulse.example",
+            "method": "tempo",
+            "intent": "charge",
+            "request": {"amount": "1000", "currency": "USDC"},
+            "header": "Payment-Authorization"
+          },
+          "payload": {"type": "hash", "hash": "0x1111"}
+        }
+      },
+      "receipt_meta": {
+        "org.paymentauth/receipt": {
+          "status": "success",
+          "method": "tempo",
+          "timestamp": "2033-05-18T03:33:20Z",
+          "reference": "0x1111",
+          "externalId": "intent-1",
+          "challengeId": "challenge-0123456789abcdef"
+        }
+      }
+    }
+  },
+  "matrix": [
+    {"transport": "grpc", "protocol": "x402", "role": "payer"},
+    {"transport": "grpc", "protocol": "x402", "role": "payee"},
+    {"transport": "grpc", "protocol": "mpp", "role": "payer"},
+    {"transport": "grpc", "protocol": "mpp", "role": "payee"},
+    {"transport": "mqtt", "protocol": "x402", "role": "payer"},
+    {"transport": "mqtt", "protocol": "x402", "role": "payee"},
+    {"transport": "mqtt", "protocol": "mpp", "role": "payer"},
+    {"transport": "mqtt", "protocol": "mpp", "role": "payee"}
+  ]
+}

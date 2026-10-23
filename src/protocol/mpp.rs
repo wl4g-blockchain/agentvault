@@ -1,14 +1,29 @@
 //! MPP/Tempo `charge` adapter built on the official `mpp` Rust crate.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroU64};
 
+use alloy::eips::Encodable2718;
+use alloy_primitives::{Address, Bytes, Signature, TxKind, B256, U256};
+use alloy_sol_types::SolCall;
 use async_trait::async_trait;
 use mpp::{
-    format_authorization, format_www_authenticate, parse_authorization, parse_www_authenticate, Base64UrlJson,
-    ChargeRequest,
+    client::tempo::{
+        charge::{
+            tx_builder::{build_charge_credential, build_tempo_tx, TempoTxOptions},
+            TempoCharge,
+        },
+        MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS,
+    },
+    format_authorization, format_www_authenticate, parse_authorization, parse_receipt, parse_www_authenticate_all,
+    Base64UrlJson, ChargeRequest, PayloadType,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use tempo_alloy::{
+    contracts::precompiles::ITIP20,
+    primitives::transaction::{Call, TempoTransaction},
+};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -21,10 +36,15 @@ use crate::{
     Error, Result,
 };
 
-use super::{PaymentProtocol, ProtocolSettlement, ProtocolValidation};
+use super::{
+    PaymentProtocol, ProtocolHttpCredential, ProtocolMerchantEvidence, ProtocolSettlement, ProtocolValidation,
+};
 
 const MPP_PROTOCOL: &str = "mpp";
 const TEMPO_METHOD: &str = "tempo";
+const TEMPO_SIGNING_PAYLOAD_KIND: &str = "tempo_charge_v1";
+const TEMPO_CHARGE_GAS_LIMIT: u64 = 1_000_000;
+const TEMPO_CHARGE_VALIDITY_SECONDS: i64 = 25;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MppAsset {
@@ -88,17 +108,31 @@ impl MppAdapter {
     }
 
     fn new_for_direction(assets: Vec<MppAsset>, payee: Option<MppPayeeSettings>, timeout_seconds: u64) -> Result<Self> {
-        if assets.is_empty()
-            || timeout_seconds == 0
-            || timeout_seconds > 3_600
-            || assets.iter().any(|asset| {
-                !valid_evm_network(&asset.network) || asset.currency.trim().is_empty() || asset.symbol.trim().is_empty()
-            })
-        {
+        if assets.is_empty() || timeout_seconds == 0 || timeout_seconds > 3_600 {
             return Err(Error::Config("MPP Tempo adapter configuration is invalid".to_owned()));
         }
+        let mut normalized_assets = Vec::with_capacity(assets.len());
+        for mut asset in assets {
+            if !valid_evm_network(&asset.network) || asset.symbol.trim().is_empty() {
+                return Err(Error::Config("MPP Tempo adapter configuration is invalid".to_owned()));
+            }
+            let currency = canonicalize_wallet_address(EVM_EOA_ALGORITHM, &asset.currency)
+                .map_err(|_| Error::Config("MPP Tempo currency must be an EVM token address".to_owned()))?;
+            if let Some(contract) = asset.token_contract.as_deref() {
+                let contract = canonicalize_wallet_address(EVM_EOA_ALGORITHM, contract)
+                    .map_err(|_| Error::Config("MPP Tempo token_contract must be an EVM address".to_owned()))?;
+                if contract != currency {
+                    return Err(Error::Config(
+                        "MPP Tempo currency and token_contract must identify the same token".to_owned(),
+                    ));
+                }
+            }
+            asset.currency.clone_from(&currency);
+            asset.token_contract = Some(currency);
+            normalized_assets.push(asset);
+        }
         Ok(Self {
-            assets,
+            assets: normalized_assets,
             payee,
             timeout_seconds,
         })
@@ -120,10 +154,17 @@ impl MppAdapter {
 
     fn decode_challenge_header(&self, expected_resource: &str, header: &str) -> Result<MppChallengeIntegrity> {
         validate_resource(expected_resource)?;
-        let official = parse_www_authenticate(header).map_err(mpp_error)?;
-        if !official.method.eq_ignore_ascii_case(TEMPO_METHOD) || !official.intent.is_charge() {
-            return Err(Error::PaymentProtocol("MPP challenge is not a Tempo charge".to_owned()));
+        let mut selected = None;
+        for parsed in parse_www_authenticate_all([header]) {
+            let challenge = parsed.map_err(mpp_error)?;
+            if selected.is_none() && challenge.method.eq_ignore_ascii_case(TEMPO_METHOD) && challenge.intent.is_charge()
+            {
+                selected = Some(challenge);
+            }
         }
+        let official = selected
+            .ok_or_else(|| Error::PaymentProtocol("no allowed MPP Tempo charge challenge was advertised".to_owned()))?;
+        let selected_header = format_www_authenticate(&official).map_err(mpp_error)?;
         let request: ChargeRequest = official.request.decode().map_err(mpp_error)?;
         let scoped_resource = request
             .mppx_scope
@@ -165,7 +206,7 @@ impl MppAdapter {
         Ok(MppChallengeIntegrity {
             official,
             request,
-            header: header.to_owned(),
+            header: selected_header,
             asset,
             amount,
             recipient,
@@ -183,6 +224,13 @@ impl MppAdapter {
             .and_then(Value::as_str)
             .ok_or_else(|| Error::PaymentProtocol("stored MPP challenge is missing".to_owned()))?;
         let integrity = self.decode_challenge_header(&challenge.resource, header)?;
+        if let Some(projected) = challenge.payload.get("mcp_challenge") {
+            if Self::mcp_challenge_value(&integrity.official)? != *projected {
+                return Err(Error::PaymentProtocol(
+                    "stored MPP MCP challenge projection is inconsistent".to_owned(),
+                ));
+            }
+        }
         let expected_hash = mpp_challenge_hash(&challenge.resource, header);
         let outer_recipient = canonicalize_wallet_address(EVM_EOA_ALGORITHM, &challenge.recipient)
             .map_err(|_| Error::PaymentProtocol("MPP outer recipient is not a valid EVM address".to_owned()))?;
@@ -228,6 +276,46 @@ impl MppAdapter {
         }
         Ok(integrity)
     }
+
+    fn wrap_official_credential(
+        challenge: &PaymentChallenge,
+        credential: &mpp::PaymentCredential,
+    ) -> Result<PaymentCredential> {
+        let authorization = format_authorization(credential).map_err(mpp_error)?;
+        Ok(PaymentCredential {
+            protocol: MPP_PROTOCOL.to_owned(),
+            challenge_hash: challenge.challenge_hash.clone(),
+            credential_hash: hash_values(&[
+                b"agentvault.mpp.credential.v1",
+                challenge.challenge_hash.as_bytes(),
+                authorization.as_bytes(),
+            ]),
+            payload: json!({"authorization": authorization}),
+        })
+    }
+
+    /// MCP expands `request` as native JSON while HTTP carries the same value
+    /// as base64url. Keep that transport projection beside the canonical HTTP
+    /// value so SDK providers do not reimplement protocol semantics.
+    fn mcp_challenge_value(challenge: &mpp::PaymentChallenge) -> Result<Value> {
+        let error = serde_json::to_value(mpp::mcp::payment_required_error(challenge))?;
+        error
+            .pointer("/data/challenges/0")
+            .cloned()
+            .ok_or_else(|| Error::PaymentProtocol("MPP MCP projection omitted its challenge".to_owned()))
+    }
+
+    fn payer_from_source(network: &str, source: Option<&str>) -> Result<String> {
+        let chain_id = network
+            .strip_prefix("eip155:")
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo payer network is invalid".to_owned()))?;
+        let prefix = format!("did:pkh:eip155:{chain_id}:");
+        let payer = source.and_then(|source| source.strip_prefix(&prefix)).ok_or_else(|| {
+            Error::PaymentProtocol("MPP Tempo credential source DID is missing or mismatched".to_owned())
+        })?;
+        canonicalize_wallet_address(EVM_EOA_ALGORITHM, payer)
+            .map_err(|_| Error::PaymentProtocol("MPP Tempo credential source address is invalid".to_owned()))
+    }
 }
 
 struct MppChallengeIntegrity {
@@ -240,10 +328,240 @@ struct MppChallengeIntegrity {
     expires_at: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TempoSigningPayload {
+    kind: String,
+    payer: String,
+    transaction: TempoTransaction,
+}
+
+impl TempoSigningPayload {
+    fn prepare(integrity: &MppChallengeIntegrity, payer: &str, now: i64) -> Result<Self> {
+        if now < 0 || now >= integrity.expires_at {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo challenge expired before signing".to_owned(),
+            ));
+        }
+        let payer = canonicalize_wallet_address(EVM_EOA_ALGORITHM, payer)
+            .map_err(|_| Error::PaymentProtocol("MPP Tempo payer is not a valid EVM address".to_owned()))?;
+        let valid_before = now
+            .saturating_add(TEMPO_CHARGE_VALIDITY_SECONDS)
+            .min(integrity.expires_at);
+        let valid_before = u64::try_from(valid_before)
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo validity window is invalid".to_owned()))?;
+        let payload = Self {
+            kind: TEMPO_SIGNING_PAYLOAD_KIND.to_owned(),
+            payer,
+            transaction: Self::build_transaction(integrity, valid_before)?,
+        };
+        payload.validate(integrity)?;
+        Ok(payload)
+    }
+
+    fn build_transaction(integrity: &MppChallengeIntegrity, valid_before: NonZeroU64) -> Result<TempoTransaction> {
+        let charge = TempoCharge::from_challenge(&integrity.official).map_err(mpp_error)?;
+        if charge.fee_payer() || charge.splits().is_some() {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo fee sponsorship and split charges are unsupported".to_owned(),
+            ));
+        }
+        let chain_id = integrity
+            .asset
+            .network
+            .strip_prefix("eip155:")
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo chain ID is invalid".to_owned()))?;
+        let token_contract = integrity
+            .asset
+            .token_contract
+            .as_deref()
+            .and_then(|value| value.parse::<Address>().ok())
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo token contract is invalid".to_owned()))?;
+        let recipient = integrity
+            .recipient
+            .parse::<Address>()
+            .map_err(|_| Error::PaymentProtocol("MPP Tempo recipient is invalid".to_owned()))?;
+        if charge.chain_id() != chain_id
+            || charge.currency() != token_contract
+            || charge.recipient() != recipient
+            || charge.amount() != U256::from(integrity.amount.value())
+        {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo charge projection does not match the canonical challenge".to_owned(),
+            ));
+        }
+        let memo = charge
+            .memo()
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo attribution memo is missing".to_owned()))?;
+        let call = Call {
+            to: TxKind::Call(token_contract),
+            value: U256::ZERO,
+            input: Bytes::from(
+                ITIP20::transferWithMemoCall {
+                    to: recipient,
+                    amount: U256::from(integrity.amount.value()),
+                    memo: memo.into(),
+                }
+                .abi_encode(),
+            ),
+        };
+        Ok(build_tempo_tx(TempoTxOptions {
+            calls: vec![call],
+            chain_id,
+            fee_token: token_contract,
+            nonce: 0,
+            nonce_key: U256::MAX,
+            gas_limit: TEMPO_CHARGE_GAS_LIMIT,
+            max_fee_per_gas: MAX_FEE_PER_GAS,
+            max_priority_fee_per_gas: MAX_PRIORITY_FEE_PER_GAS,
+            fee_payer: false,
+            valid_before: Some(valid_before.get()),
+            key_authorization: None,
+        }))
+    }
+
+    fn validate(&self, integrity: &MppChallengeIntegrity) -> Result<B256> {
+        if self.kind != TEMPO_SIGNING_PAYLOAD_KIND {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signing payload kind is unsupported".to_owned(),
+            ));
+        }
+        let canonical_payer = canonicalize_wallet_address(EVM_EOA_ALGORITHM, &self.payer)
+            .map_err(|_| Error::PaymentProtocol("MPP Tempo payer binding is invalid".to_owned()))?;
+        if canonical_payer != self.payer {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo payer binding is not canonical".to_owned(),
+            ));
+        }
+        let valid_before = self
+            .transaction
+            .valid_before
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo transaction validity window is missing".to_owned()))?;
+        if i64::try_from(valid_before.get()).unwrap_or(i64::MAX) > integrity.expires_at {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo transaction outlives its payment challenge".to_owned(),
+            ));
+        }
+        let expected = Self::build_transaction(integrity, valid_before)?;
+        if self.transaction != expected {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signing transaction was modified".to_owned(),
+            ));
+        }
+        Ok(self.transaction.signature_hash())
+    }
+}
+
 #[async_trait]
 impl PaymentProtocol for MppAdapter {
     fn name(&self) -> &'static str {
         MPP_PROTOCOL
+    }
+
+    fn decode_http_challenge(
+        &self,
+        resource: &str,
+        headers: &BTreeMap<String, String>,
+        _body: &str,
+    ) -> Result<Option<Value>> {
+        let Some(header) = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))
+            .map(|(_, value)| value.as_str())
+        else {
+            return Ok(None);
+        };
+        let mut advertised_payment = false;
+        let mut advertised_supported = false;
+        for parsed in parse_www_authenticate_all([header]) {
+            advertised_payment = true;
+            let challenge = parsed.map_err(mpp_error)?;
+            advertised_supported |= challenge.method.eq_ignore_ascii_case(TEMPO_METHOD) && challenge.intent.is_charge();
+        }
+        if !advertised_payment || !advertised_supported {
+            return Ok(None);
+        }
+        let integrity = self.decode_challenge_header(resource, header)?;
+        Ok(Some(json!({"www_authenticate": integrity.header})))
+    }
+
+    fn encode_http_credential(&self, credential: &PaymentCredential) -> Result<ProtocolHttpCredential> {
+        if credential.protocol != MPP_PROTOCOL {
+            return Err(Error::PaymentProtocol("MPP credential protocol mismatch".to_owned()));
+        }
+        let header_value = credential
+            .payload
+            .get("authorization")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::PaymentProtocol("MPP credential has no Authorization value".to_owned()))?;
+        let submitted = parse_authorization(header_value).map_err(mpp_error)?;
+        let header_name = match submitted.challenge.header.as_deref() {
+            Some(header) if header.eq_ignore_ascii_case("payment-authorization") => "payment-authorization",
+            Some(_) => {
+                return Err(Error::PaymentProtocol(
+                    "MPP challenge selected an unsupported credential header".to_owned(),
+                ))
+            }
+            None => "authorization",
+        };
+        Ok(ProtocolHttpCredential {
+            header_name: header_name.to_owned(),
+            header_value: header_value.to_owned(),
+        })
+    }
+
+    fn merchant_evidence_header(&self) -> &'static str {
+        "payment-receipt"
+    }
+
+    fn decode_merchant_evidence(&self, value: &str) -> Result<ProtocolMerchantEvidence> {
+        if value.is_empty() || value.len() > 16 * 1024 || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(Error::InvalidRequest(
+                "MPP Payment-Receipt header is invalid".to_owned(),
+            ));
+        }
+        let receipt = parse_receipt(value).map_err(mpp_error)?;
+        if !receipt.is_success()
+            || !receipt.method.eq_ignore_ascii_case(TEMPO_METHOD)
+            || receipt.subscription_id.is_some()
+            || !valid_transaction_hash(&receipt.reference)
+        {
+            return Err(Error::PaymentProtocol(
+                "MPP receipt is not a successful Tempo charge transaction".to_owned(),
+            ));
+        }
+        Ok(ProtocolMerchantEvidence {
+            accepted: true,
+            transaction: Some(receipt.reference.to_ascii_lowercase()),
+            network: None,
+            payer: None,
+        })
+    }
+
+    fn credential_payer(&self, challenge: &PaymentChallenge, credential: &PaymentCredential) -> Result<String> {
+        let integrity = self.validate_challenge_integrity(challenge)?;
+        if credential.protocol != MPP_PROTOCOL || credential.challenge_hash != challenge.challenge_hash {
+            return Err(Error::PaymentProtocol("MPP credential binding mismatch".to_owned()));
+        }
+        let authorization = credential
+            .payload
+            .get("authorization")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::PaymentProtocol("MPP Authorization value is missing".to_owned()))?;
+        let submitted = parse_authorization(authorization).map_err(mpp_error)?;
+        if serde_json::to_value(&submitted.challenge)? != serde_json::to_value(integrity.official.to_echo())? {
+            return Err(Error::PaymentProtocol("MPP challenge echo mismatch".to_owned()));
+        }
+        let payload = submitted.charge_payload().map_err(mpp_error)?;
+        if payload.payload_type() != PayloadType::Transaction {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo charge requires a signed transaction credential".to_owned(),
+            ));
+        }
+        Self::payer_from_source(&challenge.asset.network, submitted.source.as_deref())
     }
 
     async fn parse_challenge(
@@ -271,7 +589,8 @@ impl PaymentProtocol for MppAdapter {
                 "MPP challenge expiry is outside the allowed window".to_owned(),
             ));
         }
-        let challenge_hash = mpp_challenge_hash(expected_resource, header);
+        let challenge_hash = mpp_challenge_hash(expected_resource, &integrity.header);
+        let mcp_challenge = Self::mcp_challenge_value(&integrity.official)?;
         let challenge = PaymentChallenge {
             scenario_id: scenario_id.to_owned(),
             offer_id: None,
@@ -283,7 +602,7 @@ impl PaymentProtocol for MppAdapter {
             nonce: integrity.official.id,
             challenge_hash,
             expires_at: integrity.expires_at,
-            payload: json!({"www_authenticate": header}),
+            payload: json!({"www_authenticate": integrity.header, "mcp_challenge": mcp_challenge}),
         };
         self.validate_challenge_integrity(&challenge)?;
         Ok(challenge)
@@ -310,17 +629,72 @@ impl PaymentProtocol for MppAdapter {
         let payload: mpp::PaymentPayload = serde_json::from_value(signed_payload)
             .map_err(|error| Error::PaymentProtocol(format!("invalid MPP charge payload: {error}")))?;
         let credential = mpp::PaymentCredential::new(integrity.official.to_echo(), payload);
-        let authorization = format_authorization(&credential).map_err(mpp_error)?;
-        Ok(PaymentCredential {
-            protocol: MPP_PROTOCOL.to_owned(),
-            challenge_hash: challenge.challenge_hash.clone(),
-            credential_hash: hash_values(&[
-                b"agentvault.mpp.credential.v1",
-                challenge.challenge_hash.as_bytes(),
-                authorization.as_bytes(),
-            ]),
-            payload: json!({"authorization": authorization}),
+        let mut credential = Self::wrap_official_credential(challenge, &credential)?;
+        credential.credential_hash = self.credential_fingerprint(challenge, &credential)?;
+        Ok(credential)
+    }
+
+    async fn prepare_signing(
+        &self,
+        challenge: &PaymentChallenge,
+        payer: &str,
+        now: i64,
+    ) -> Result<super::ProtocolSigningRequest> {
+        let integrity = self.validate_challenge_integrity(challenge)?;
+        let payload = TempoSigningPayload::prepare(&integrity, payer, now)?;
+        let digest = payload.validate(&integrity)?.to_vec();
+        Ok(super::ProtocolSigningRequest {
+            digest,
+            payload: serde_json::to_value(payload)?,
         })
+    }
+
+    async fn complete_signing(
+        &self,
+        challenge: &PaymentChallenge,
+        request: super::ProtocolSigningRequest,
+        signature: &[u8],
+    ) -> Result<PaymentCredential> {
+        if request.digest.len() != 32 || signature.len() != 65 {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signer returned invalid secp256k1 material".to_owned(),
+            ));
+        }
+        let integrity = self.validate_challenge_integrity(challenge)?;
+        let payload: TempoSigningPayload = serde_json::from_value(request.payload)
+            .map_err(|error| Error::PaymentProtocol(format!("invalid MPP Tempo signing payload: {error}")))?;
+        let digest = payload.validate(&integrity)?;
+        if request.digest.as_slice() != digest.as_slice() {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signing request digest no longer matches its transaction".to_owned(),
+            ));
+        }
+        let signature = Signature::from_raw(signature)
+            .map_err(|error| Error::PaymentProtocol(format!("invalid MPP Tempo signature: {error}")))?;
+        if signature.normalize_s().is_some() {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signature is not low-S canonical".to_owned(),
+            ));
+        }
+        let recovered = signature
+            .recover_address_from_prehash(&digest)
+            .map_err(|error| Error::PaymentProtocol(format!("recover MPP Tempo signer: {error}")))?;
+        let payer = payload
+            .payer
+            .parse::<Address>()
+            .map_err(|_| Error::PaymentProtocol("MPP Tempo payer binding is invalid".to_owned()))?;
+        if recovered != payer {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo signature was produced by a different wallet".to_owned(),
+            ));
+        }
+        let chain_id = payload.transaction.chain_id;
+        let transaction = payload.transaction.into_signed(signature.into());
+        let transaction_bytes = transaction.encoded_2718();
+        let credential = build_charge_credential(&integrity.official, &transaction_bytes, chain_id, payer);
+        let mut credential = Self::wrap_official_credential(challenge, &credential)?;
+        credential.credential_hash = self.credential_fingerprint(challenge, &credential)?;
+        Ok(credential)
     }
 
     async fn verify_receipt(&self, intent: &PaymentIntent, receipt: &PaymentReceipt) -> Result<()> {
@@ -366,7 +740,8 @@ impl PaymentProtocol for MppAdapter {
             .asset
             .network
             .strip_prefix("eip155:")
-            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo network must use CAIP-2".to_owned()))?;
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo network must use numeric CAIP-2".to_owned()))?;
         let request = ChargeRequest {
             amount: offer.amount.to_string(),
             currency: configured.currency.clone(),
@@ -401,10 +776,11 @@ impl PaymentProtocol for MppAdapter {
             None,
             None,
             Some(opaque),
-            None,
+            Some("Payment-Authorization"),
         );
         let header = format_www_authenticate(&official).map_err(mpp_error)?;
         let challenge_hash = mpp_challenge_hash(&offer.resource, &header);
+        let mcp_challenge = Self::mcp_challenge_value(&official)?;
         let challenge = PaymentChallenge {
             scenario_id: offer.scenario_id.clone(),
             offer_id: Some(offer.id.clone()),
@@ -416,7 +792,7 @@ impl PaymentProtocol for MppAdapter {
             nonce: official.id,
             challenge_hash,
             expires_at,
-            payload: json!({"www_authenticate": header}),
+            payload: json!({"www_authenticate": header, "mcp_challenge": mcp_challenge}),
         };
         self.validate_challenge_integrity(&challenge)?;
         Ok(challenge)
@@ -428,28 +804,12 @@ impl PaymentProtocol for MppAdapter {
         credential: &PaymentCredential,
         now: i64,
     ) -> Result<ProtocolValidation> {
-        let integrity = self.validate_challenge_integrity(challenge)?;
-        if credential.protocol != MPP_PROTOCOL || credential.challenge_hash != challenge.challenge_hash {
-            return Err(Error::PaymentProtocol(
-                "MPP credential is bound to another challenge".to_owned(),
-            ));
-        }
         if now >= challenge.expires_at {
             return Err(Error::PaymentProtocol("MPP challenge expired".to_owned()));
         }
-        let authorization = credential
-            .payload
-            .get("authorization")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::PaymentProtocol("MPP Authorization value is missing".to_owned()))?;
-        let submitted = parse_authorization(authorization).map_err(mpp_error)?;
-        let expected = integrity.official.to_echo();
-        if serde_json::to_value(&submitted.challenge)? != serde_json::to_value(expected)? {
-            return Err(Error::PaymentProtocol("MPP challenge echo mismatch".to_owned()));
-        }
-        let _ = submitted.charge_payload().map_err(mpp_error)?;
+        let payer = self.credential_payer(challenge, credential)?;
         Ok(ProtocolValidation {
-            payer: submitted.source,
+            payer: Some(payer),
             requires_external_settlement: true,
         })
     }
@@ -501,7 +861,7 @@ impl PaymentProtocol for MppAdapter {
         if serde_json::to_value(&submitted.challenge)? != serde_json::to_value(integrity.official.to_echo())? {
             return Err(Error::PaymentProtocol("MPP challenge echo mismatch".to_owned()));
         }
-        let _ = submitted.charge_payload().map_err(mpp_error)?;
+        self.credential_payer(challenge, credential)?;
         Ok(ProtocolSettlement {
             protocol: MPP_PROTOCOL.to_owned(),
             payment_payload: credential.payload.clone(),
@@ -517,7 +877,7 @@ fn official_challenge(challenge: &PaymentChallenge) -> Result<mpp::PaymentChalle
         .get("www_authenticate")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::PaymentProtocol("stored MPP challenge is missing".to_owned()))?;
-    parse_www_authenticate(header).map_err(mpp_error)
+    mpp::parse_www_authenticate(header).map_err(mpp_error)
 }
 
 fn tempo_network(request: &ChargeRequest) -> Result<String> {
@@ -525,13 +885,29 @@ fn tempo_network(request: &ChargeRequest) -> Result<String> {
         .method_details
         .as_ref()
         .and_then(Value::as_object)
-        .filter(|details| details.len() == 1 && details.contains_key("chainId"))
         .ok_or_else(|| {
-            Error::PaymentProtocol(
-                "MPP Tempo methodDetails must contain only chainId; splits and delegated fees are unsupported"
-                    .to_owned(),
-            )
+            Error::PaymentProtocol("MPP Tempo methodDetails must be an object containing chainId".to_owned())
         })?;
+    if details
+        .keys()
+        .any(|key| !matches!(key.as_str(), "chainId" | "supportedModes"))
+    {
+        return Err(Error::PaymentProtocol(
+            "MPP Tempo split, fee-payer, machine-token, and delegated-key options are unsupported".to_owned(),
+        ));
+    }
+    if let Some(modes) = details.get("supportedModes") {
+        let pull_supported = modes.as_array().is_some_and(|modes| {
+            !modes.is_empty()
+                && modes.iter().all(Value::is_string)
+                && modes.iter().any(|mode| mode.as_str() == Some("pull"))
+        });
+        if !pull_supported {
+            return Err(Error::PaymentProtocol(
+                "MPP Tempo charge does not allow pull transaction credentials".to_owned(),
+            ));
+        }
+    }
     let chain_id = details
         .get("chainId")
         .and_then(|value| {
@@ -571,6 +947,10 @@ fn valid_evm_network(network: &str) -> bool {
     network
         .strip_prefix("eip155:")
         .is_some_and(|chain| !chain.is_empty() && chain.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn valid_transaction_hash(value: &str) -> bool {
+    value.len() == 66 && value.starts_with("0x") && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn decode_payment_reference(value: &str) -> Result<Vec<u8>> {

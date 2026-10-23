@@ -165,7 +165,7 @@ jobs:
           file: Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
-            BUILDER_IMAGE=docker.io/library/rust:1.91.1-bookworm
+            BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
             RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}

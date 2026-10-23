@@ -10,6 +10,7 @@ services:
         HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
         NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
         E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
+        E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE:-gcr.io/distroless/nodejs22-debian12:nonroot}
     command: ["--once"]
     environment:
       MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}

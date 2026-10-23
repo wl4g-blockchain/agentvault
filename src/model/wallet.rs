@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use solana_pubkey::Pubkey;
+use std::str::FromStr as _;
 
 /// Deterministic wallet-pool selection used for outbound payments.
 ///
@@ -26,6 +28,8 @@ impl WalletSelectionStrategy {
 
 /// Canonical algorithm emitted by the built-in Ethereum EOA signer.
 pub const EVM_EOA_ALGORITHM: &str = "secp256k1";
+/// Canonical algorithm emitted by the built-in Solana custody signer.
+pub const SOLANA_ED25519_ALGORITHM: &str = "ed25519";
 
 /// Returns whether an algorithm explicitly identifies an EVM-style address.
 ///
@@ -36,6 +40,15 @@ pub fn is_evm_wallet_algorithm(algorithm: &str) -> bool {
     matches!(
         algorithm.to_ascii_lowercase().as_str(),
         EVM_EOA_ALGORITHM | "evm" | "ethereum" | "eip155"
+    )
+}
+
+/// Returns whether an algorithm explicitly identifies a Solana ed25519 key.
+#[must_use]
+pub fn is_solana_wallet_algorithm(algorithm: &str) -> bool {
+    matches!(
+        algorithm.to_ascii_lowercase().as_str(),
+        SOLANA_ED25519_ALGORITHM | "solana"
     )
 }
 
@@ -52,6 +65,18 @@ pub fn is_evm_payment_network(network: &str) -> bool {
     network
         .strip_prefix("eip155:")
         .is_some_and(|chain| !chain.is_empty() && chain.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Returns whether the payment network is a canonical Solana CAIP-2 ID.
+#[must_use]
+pub fn is_solana_payment_network(network: &str) -> bool {
+    network
+        .strip_prefix("solana:")
+        .is_some_and(|reference| !reference.is_empty() && reference.len() <= 128)
+}
+
+fn canonical_solana_address(address: &str) -> Option<String> {
+    Pubkey::from_str(address).ok().map(|address| address.to_string())
 }
 
 /// Validates and canonicalizes an address according to its wallet algorithm
@@ -73,6 +98,9 @@ pub fn canonicalize_wallet_address(algorithm: &str, address: &str) -> Result<Str
     if is_evm_wallet_algorithm(algorithm) {
         return Err("address");
     }
+    if is_solana_wallet_algorithm(algorithm) {
+        return canonical_solana_address(address).ok_or("address");
+    }
     Ok(address.to_owned())
 }
 
@@ -82,12 +110,15 @@ pub fn canonicalize_wallet_address(algorithm: &str, address: &str) -> Result<Str
 ///
 /// Returns `address` when an EIP-155 recipient is not a 20-byte EVM address.
 pub fn canonicalize_payment_recipient(network: &str, address: &str) -> Result<String, &'static str> {
-    if !is_evm_payment_network(network) {
-        return Ok(address.to_owned());
+    if is_evm_payment_network(network) {
+        return evm_address_body(address)
+            .map(|encoded| format!("0x{}", encoded.to_ascii_lowercase()))
+            .ok_or("address");
     }
-    evm_address_body(address)
-        .map(|encoded| format!("0x{}", encoded.to_ascii_lowercase()))
-        .ok_or("address")
+    if is_solana_payment_network(network) {
+        return canonical_solana_address(address).ok_or("address");
+    }
+    Ok(address.to_owned())
 }
 
 /// Compares two addresses using the canonical rules for their algorithm.

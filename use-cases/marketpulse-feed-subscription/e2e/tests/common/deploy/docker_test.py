@@ -5,7 +5,7 @@ from json import dumps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from common.deploy.docker import (
     AGENTVAULT_CHART,
@@ -70,6 +70,76 @@ class BuildProxyEnvironmentTest(unittest.TestCase):
 
 
 class BuildBoundaryTest(unittest.TestCase):
+    def test_command_progress_operation_omits_sensitive_arguments(self) -> None:
+        operation = DockerE2EDeployer._command_operation([
+            "sudo", "-n", "-E", "docker", "compose", "--profile", "payer",
+            "exec", "agentvault", "client", "--private-key", "do-not-log",
+        ])
+
+        self.assertEqual(operation, "docker compose exec profiles=payer target=agentvault")
+        self.assertNotIn("do-not-log", operation)
+
+        run_operation = DockerE2EDeployer._command_operation([
+            "docker", "compose", "run", "--rm", "-e", "API_TOKEN=do-not-log", "quantstream-rust",
+        ])
+        self.assertEqual(run_operation, "docker compose run")
+        self.assertNotIn("do-not-log", run_operation)
+
+        helm_operation = DockerE2EDeployer._command_operation([
+            "sudo", "-n", "env", "KUBECONFIG=/private/path", "helm", "lint", "/tmp/chart",
+        ])
+        self.assertEqual(helm_operation, "helm lint")
+        self.assertNotIn("/private/path", helm_operation)
+
+    def test_component_chart_namespace_is_explicit(self) -> None:
+        chart = E2E_ROOT / "deploy" / "anvil" / "helm"
+
+        self.assertEqual(
+            DockerE2EDeployer._chart_namespace(chart),
+            "e2e-agentvault-payment-system",
+        )
+        self.assertEqual(DockerE2EDeployer._chart_name(chart), "anvil")
+
+    def test_component_chart_without_namespace_fails_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            chart = Path(directory)
+            (chart / "Chart.yaml").write_text("apiVersion: v2\nname: unsafe\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "does not declare"):
+                DockerE2EDeployer._chart_namespace(chart)
+
+    def test_component_chart_rejects_e2e_resource_prefix(self) -> None:
+        with TemporaryDirectory() as directory:
+            chart = Path(directory)
+            (chart / "Chart.yaml").write_text(
+                "apiVersion: v2\nname: e2e-anvil\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "namespace isolation"):
+                DockerE2EDeployer._chart_name(chart)
+
+    def test_all_language_services_have_an_isolated_runtime_stage(self) -> None:
+        components = (
+            *(f"mock-payee-marketpulse-{language}-service" for language in (
+                "rust", "golang", "java", "python", "typescript",
+            )),
+            *(f"mock-payer-quantstream-ingest-service-{language}" for language in (
+                "rust", "golang", "java", "python", "typescript",
+            )),
+        )
+        for component in components:
+            dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
+            stages = [
+                line.strip()
+                for line in dockerfile.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("FROM ")
+            ]
+            self.assertEqual(len(stages), 2, f"{component} must have builder and runtime stages")
+            self.assertIn(" AS builder", stages[0])
+            self.assertIn("_RUNTIME_IMAGE}", stages[1])
+            self.assertNotIn("_BUILD_IMAGE}", stages[1])
+
     def test_source_runtime_is_built_by_default(self) -> None:
         self.assertEqual(_agentvault_build_targets({}), ("agentvault",))
 
@@ -180,6 +250,93 @@ class FacilitatorRuntimeEvidenceTest(unittest.TestCase):
             deployer._facilitator_capabilities()
 
 
+class TempoLifecycleTest(unittest.TestCase):
+    @patch("common.deploy.docker.time.sleep")
+    @patch("common.deploy.docker.time.time", return_value=1_000)
+    def test_faucet_window_requires_a_current_non_genesis_block(
+        self,
+        _time: Mock,
+        _sleep: Mock,
+    ) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer._json_rpc_result = Mock(side_effect=[
+            {"number": "0x0", "timestamp": "0x3e8"},
+            {"number": "0x1", "timestamp": "0x3e8"},
+        ])
+
+        deployer._wait_tempo_faucet_window("http://tempo.local", attempts=2)
+
+        self.assertEqual(deployer._json_rpc_result.call_count, 2)
+        _sleep.assert_called_once_with(0.5)
+
+    @patch("common.deploy.docker.time.sleep")
+    @patch("common.deploy.docker.time.time", return_value=1_000)
+    def test_faucet_window_rejects_stale_chain_time(self, _time: Mock, _sleep: Mock) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer._json_rpc_result = Mock(return_value={"number": "0x1", "timestamp": "0x1"})
+
+        with self.assertRaisesRegex(RuntimeError, "faucet nonce window"):
+            deployer._wait_tempo_faucet_window("http://tempo.local", attempts=1)
+
+    def test_waits_for_current_official_node_block_before_running_rust_gate(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.context = SimpleNamespace(timeout_seconds=60)
+        deployer.compose = ["docker", "compose", "-p", "agentvault-e2e"]
+        deployer.environment = {"E2E_TEMPO_RPC_PORT": "28546"}
+        deployer.cleanup = Mock()
+        deployer._compose = Mock()
+        deployer._wait_rpc = Mock()
+        deployer._wait_tempo_faucet_window = Mock()
+        deployer._target_budget = Mock()
+        deployer._run = Mock(return_value="passed")
+
+        self.assertEqual(deployer.mpp_tempo(), "passed")
+
+        deployer._compose.assert_called_once_with(("tempo",), "up", "-d", "tempo")
+        deployer._wait_rpc.assert_called_once_with("http://127.0.0.1:28546/", "eth_chainId", "0x539", 90)
+        deployer._wait_tempo_faucet_window.assert_called_once_with("http://127.0.0.1:28546/")
+        deployer._target_budget.assert_called_once_with()
+        deployer._run.assert_called_once()
+
+
+class SolanaLifecycleTest(unittest.TestCase):
+    def test_bootstraps_finalized_spl_fixture_before_running_official_x402_gate(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.context = SimpleNamespace(timeout_seconds=60)
+        deployer.environment = {"E2E_SOLANA_RPC_PORT": "28899"}
+        deployer.cleanup = Mock()
+        deployer._compose = Mock()
+        deployer._wait_rpc = Mock()
+        deployer._solana_command = Mock()
+        deployer._solana_pubkey = Mock(side_effect=["B" * 32, "C" * 32, "D" * 32, "E" * 32])
+        deployer._solana_json = Mock(side_effect=[
+            {"commandOutput": {"address": "E" * 32}},
+            {},
+            {},
+            {"associatedTokenAddress": "F" * 32},
+            {"associatedTokenAddress": "G" * 32},
+            {},
+        ])
+        deployer._wait_solana_token_balance = Mock()
+        deployer._solana_rpc_result = Mock(return_value="H" * 44)
+        deployer._solana_keypair_json = Mock(side_effect=["[1]", "[2]"])
+        deployer._target_budget = Mock()
+        deployer._run = Mock(return_value="passed")
+
+        self.assertEqual(deployer.x402_solana(), "passed")
+
+        deployer._compose.assert_called_once_with(("payer",), "up", "-d", "solana")
+        deployer._wait_rpc.assert_called_once_with("http://127.0.0.1:28899/", "getHealth", "ok", 120)
+        self.assertEqual(
+            deployer._wait_solana_token_balance.call_args_list,
+            [unittest.mock.call("F" * 32, 1_000_000_000), unittest.mock.call("G" * 32, 0)],
+        )
+        self.assertEqual(deployer.environment["SOLANA_CHAIN_REFERENCE"], "H" * 32)
+        self.assertEqual(deployer.environment["SOLANA_RECIPIENT_ADDRESS"], "C" * 32)
+        deployer._target_budget.assert_called_once_with()
+        deployer._run.assert_called_once()
+
+
 class CleanupIsolationTest(unittest.TestCase):
     def test_removes_only_volumes_owned_by_the_compose_project(self) -> None:
         deployer = object.__new__(DockerE2EDeployer)
@@ -201,6 +358,38 @@ class CleanupIsolationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "could not inventory"):
             deployer._remove_owned_volumes()
+
+    def test_image_inventory_accepts_only_known_local_e2e_images(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._try = Mock(return_value=(0, "\n".join((
+            "localhost/quantstream-ingestor-rust-e2e:local",
+            "marketpulse-go-e2e:local",
+            "example/unrelated-e2e:local",
+            "registry.cn-shenzhen.aliyuncs.com/wl4g/agentvault:latest",
+        ))))
+
+        self.assertEqual(
+            deployer._owned_images(),
+            [
+                "localhost/quantstream-ingestor-rust-e2e:local",
+                "marketpulse-go-e2e:local",
+            ],
+        )
+
+    def test_removes_only_allowlisted_local_e2e_images(self) -> None:
+        deployer = object.__new__(DockerE2EDeployer)
+        deployer.docker = ["docker"]
+        deployer._owned_images = Mock(side_effect=[["localhost/marketpulse-rust-e2e:local"], []])
+        deployer._try = Mock(return_value=(0, "removed\n"))
+
+        output = deployer.cleanup_images()
+
+        self.assertEqual(output, "removed\n")
+        deployer._try.assert_called_once_with(
+            ["docker", "image", "rm", "localhost/marketpulse-rust-e2e:local"],
+            180,
+        )
 
 
 class MatrixCheckpointTest(unittest.TestCase):

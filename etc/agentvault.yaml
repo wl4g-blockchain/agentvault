@@ -109,8 +109,8 @@ agentvault:
           symbol: USDC
           decimals: 6
     mpp:
-      # Challenge parsing exists, but AgentVault intentionally rejects this
-      # switch until the Tempo payer signing plan is fully implemented.
+      # Tempo charge signs an official type-0x76 transaction inside the Vault.
+      # session, fee-payer, split and delegated-key methods remain unsupported.
       enabled: false
       max_challenge_ttl: 5m
       assets:
@@ -175,7 +175,7 @@ agentvault:
             prefix: "Bearer "
 
   # Shared payer/payee chain registry. `family` selects the concrete chain
-  # adapter; current x402 exact and MPP Tempo implementations require EVM.
+  # adapter. x402 exact supports EVM and Solana; MPP Tempo charge is EVM-only.
   chains:
     "eip155:8453":
       family: evm

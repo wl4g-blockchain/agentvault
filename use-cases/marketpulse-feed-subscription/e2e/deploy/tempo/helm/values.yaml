@@ -1,0 +1,74 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "ghcr.io/tempoxyz/tempo-localnet@sha256"
+  tag: "86f199f161be85d3610d990e5bc2653ece29de3ee9c91e8c8e768cf2b8c05c3b"
+  pullPolicy: IfNotPresent
+command: ["/usr/local/bin/tempo"]
+args:
+  - node
+  - --dev
+  - --dev.block-time
+  - 1ms
+  - --datadir
+  - /data
+  - --tempo.bootnodes-endpoint
+  - none
+  - --disable-discovery
+  - --no-persist-peers
+  - --http
+  - --http.addr
+  - 0.0.0.0
+  - --http.port
+  - "8545"
+  - --http.api
+  - all
+  - --http.corsdomain
+  - "*"
+  - --builder.gaslimit
+  - "3000000000"
+  - --faucet.enabled
+  - --faucet.private-key
+  - ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+  - --faucet.amount
+  - "1000000000000000"
+  - --faucet.node-address
+  - http://127.0.0.1:8545
+  - --faucet.address
+  - "0x20c0000000000000000000000000000000000000"
+  - --faucet.address
+  - "0x20c0000000000000000000000000000000000001"
+  - --faucet.address
+  - "0x20c0000000000000000000000000000000000002"
+  - --faucet.address
+  - "0x20c0000000000000000000000000000000000003"
+env: {}
+secret:
+  name: marketpulse-e2e-secrets
+  env: {}
+ports:
+  - { name: rpc, containerPort: 8545, servicePort: 8545 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: tcp
+  path: "/"
+  port: 8545
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: 750m, memory: 1Gi }
