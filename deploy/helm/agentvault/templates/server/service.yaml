@@ -1,3 +1,4 @@
+{{- $backend := .Values.agentvault.backend -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -5,12 +6,12 @@ metadata:
   labels:
     {{- include "agentvault.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ $backend.service.type }}
   selector:
     {{- include "agentvault.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: server
   ports:
-    - { name: api, port: {{ .Values.service.apiPort }}, targetPort: api }
-    {{- if .Values.runtime.grpc.enabled }}
-    - { name: grpc, port: {{ .Values.service.grpcPort }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }
+    - { name: api, port: {{ $backend.service.apiPort }}, targetPort: api }
+    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
+    - { name: grpc, port: {{ $backend.service.grpcPort }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }
     {{- end }}

@@ -12,4 +12,10 @@ fn domain_errors_have_stable_http_statuses() {
             .status(),
         StatusCode::CONFLICT
     );
+    assert_eq!(
+        ApiError::from(Error::DependencyUnavailable("cache".to_owned()))
+            .into_response()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }

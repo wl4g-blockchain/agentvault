@@ -18,6 +18,7 @@ from playwright.sync_api import Page, Route, expect, sync_playwright
 from common.context import VerificationContext
 from common.project import REPORT_ROOT, REPOSITORY_ROOT
 from common.sdk_matrix import matrix_case_keys
+from verifier.web.wallet_creation import WalletCreationApi, WalletCreationJourney
 
 
 CASE_HEADER = re.compile(
@@ -188,12 +189,19 @@ class DashboardApi:
         ]
         self.scenarios: list[dict[str, Any]] = []
         self.created_request: dict[str, Any] | None = None
+        self.wallet_creation = WalletCreationApi(self.wallets)
 
     def handle(self, route: Route) -> None:
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
         query = parse_qs(parsed.query)
+        if path == "/api/v1/admin/wallets/encryption-sessions" and request.method == "POST":
+            payload, status = self.wallet_creation.start_session()
+            return self._json(route, payload, status)
+        if path == "/api/v1/admin/wallets" and request.method == "POST":
+            payload, status = self.wallet_creation.create_wallet(request.post_data_json)
+            return self._json(route, payload, status)
         if path == "/api/v1/admin/payments":
             items = self.outbound if query.get("direction") == ["outbound"] else self.inbound
             return self._json(route, self._page(items, query))
@@ -410,6 +418,7 @@ def verify(context: VerificationContext) -> str:
                     expect(page.get_by_role("navigation", name="Clients pagination")).to_contain_text("1–1 of 1")
                     client_shot = _screenshot(page, screenshot_root, "UI-07-client-scenario-ownership")
                     screenshots.append(("Client to Scenario ownership", client_shot))
+                    screenshots.extend(WalletCreationJourney(api.wallet_creation).verify(page, screenshot_root))
                 finally:
                     browser.close()
         finally:
@@ -443,6 +452,11 @@ def verify(context: VerificationContext) -> str:
         "Scenario Wallet selector exposed 12 options in one scrolling dropdown column",
         "Scenario creation selected two Wallets and issued one atomic Scenario + Policy request",
         "Client management displayed the trusted identity owner and its associated Scenario",
+        "Wallet listing/navigation/input did not request encryption sessions or encrypt data",
+        "Wallet create fetched one RSA public key and submitted one server-decryptable ciphertext",
+        "Malformed input, unavailable/expired sessions and invalid public keys did not submit a Wallet",
+        "EOA plaintext was absent from HTTP requests, browser console and Web Storage",
+        "Wallet encryption used real Chromium Web Crypto and a controlled RSA API fixture; SQL custody is a separate Rust gate",
         "screenshot_gallery=web/screenshots/index.md",
         *(f"screenshot={path}" for path in relative),
     ))

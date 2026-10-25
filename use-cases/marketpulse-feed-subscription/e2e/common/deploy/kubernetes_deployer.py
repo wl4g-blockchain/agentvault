@@ -25,6 +25,7 @@ from common.context import VerificationContext
 from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
 from common.project import E2E_ROOT, REPOSITORY_ROOT
+from common.resource_import import render_agentvault_resources
 from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
@@ -408,7 +409,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             }
         )
 
-    def _bootstrap_manifests(self) -> None:
+    def _bootstrap_manifests(self, payee_language: str | None = None) -> None:
         shared = {
             "postgres-password": self.environment.get("E2E_POSTGRES_PASSWORD", "agentvault-e2e-only"),
             "emqx-dashboard-password": self.environment["E2E_EMQX_DASHBOARD_PASSWORD"],
@@ -432,53 +433,63 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 {"agentvault-mqtt-password": self.environment["E2E_MARKETPULSE_MQTT_PASSWORD"]},
             )
 
-        # The manifest refers to the AGENTVAULT_QUANTSTREAM_* names directly;
+        # The manifest refers to the HELPER_SECRET_QUANTSTREAM_* slots;
         # preserve explicit operator overrides while keeping deterministic E2E defaults.
         wallet_values = {
-            f"AGENTVAULT_QUANTSTREAM_{language.upper()}_{slot}_WALLET_PRIVATE_KEY": self.environment.get(
+            agentvault_key_env: self.environment.get(
                 private_key_env,
                 PAYER_PRIVATE_KEY_DEFAULTS[language][index],
             )
             for language in LANGUAGES
-            for index, (slot, private_key_env) in enumerate(
+            for index, (agentvault_key_env, private_key_env) in enumerate(
                 (
-                    ("PRIMARY", PAYER_IDENTITIES[language].primary_private_key_env),
-                    ("SECONDARY", PAYER_IDENTITIES[language].secondary_private_key_env),
+                    (
+                        PAYER_IDENTITIES[language].primary_agentvault_key_env,
+                        PAYER_IDENTITIES[language].primary_private_key_env,
+                    ),
+                    (
+                        PAYER_IDENTITIES[language].secondary_agentvault_key_env,
+                        PAYER_IDENTITIES[language].secondary_private_key_env,
+                    ),
                 )
             )
         }
         agentvault_secret = {
-            "AGENTVAULT_STORAGE_POSTGRES_URL": (
+            "HELPER_SECRET_STORAGE_POSTGRES_URL": (
                 "postgres://agentvault:"
                 + shared["postgres-password"]
                 + f"@postgres.{INFRA_NAMESPACE}.svc.cluster.local:5432/agentvault"
             ),
-            "AGENTVAULT_CACHE_REDIS_URL": "redis://127.0.0.1:6379/0",
-            "AGENTVAULT_WALLET_KEK_V1": self.environment.get(
+            "HELPER_SECRET_CACHE_REDIS_URL": "redis://127.0.0.1:6379/0",
+            "HELPER_SECRET_WALLET_KEK_V1": self.environment.get(
                 "E2E_AGENTVAULT_WALLET_KEK",
                 "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
             ),
-            "AGENTVAULT_RECOVERY_KEY_V1": self.environment.get(
+            "HELPER_SECRET_RECOVERY_KEY_V1": self.environment.get(
                 "E2E_AGENTVAULT_RECOVERY_KEY",
                 "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
             ),
-            "AGENTVAULT_APPROVAL_JWT_KEY_V1": self.environment.get(
+            "HELPER_SECRET_APPROVAL_JWT_KEY_V1": self.environment.get(
                 "E2E_AGENTVAULT_APPROVAL_KEY",
                 "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
             ),
-            "AGENTVAULT_MQTT_PASSWORD": self.environment["E2E_AGENTVAULT_MQTT_PASSWORD"],
+            "HELPER_SECRET_MQTT_PASSWORD": self.environment["E2E_AGENTVAULT_MQTT_PASSWORD"],
             "AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY": "agentvault-e2e-authguard-disabled-key",
             **wallet_values,
         }
         self._apply_secret(AGENTVAULT_NAMESPACE, "agentvault-secrets", agentvault_secret)
+        resource_fixture = E2E_ROOT / "common" / "contract" / "agentvault-resources.yaml"
+        resource_manifest = resource_fixture.read_text(encoding="utf-8")
+        if payee_language is not None:
+            if payee_language not in LANGUAGE_CHART_NAMES:
+                raise ValueError(f"unsupported payee language: {payee_language}")
+            payee_name = self._payee_name(payee_language)
+            marketpulse_origin = f"http://{payee_name}.{PAYEE_NAMESPACE}.svc.cluster.local:8081"
+            resource_manifest = render_agentvault_resources(resource_fixture, marketpulse_origin)
         self._apply_config_map(
             AGENTVAULT_NAMESPACE,
-            "agentvault-e2e-provision",
-            {
-                "scenario.json": (E2E_ROOT / "common" / "contract" / "scenario.json").read_text(
-                    encoding="utf-8"
-                )
-            },
+            "agentvault-e2e-resources",
+            {"resources.yaml": resource_manifest},
         )
 
         evm_root = self.context.deploy_root / "evm"
@@ -595,7 +606,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             values=(E2E_ROOT / "common" / "mock-payee-kubernetes-values.yaml",),
             set_strings={
                 "env.AGENTVAULT_TRANSPORT": self.context.transport,
-                "env.AGENTVAULT_GRPC_ENDPOINT": f"agentvault.{AGENTVAULT_NAMESPACE}.svc.cluster.local:50051",
+                "env.AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
                 "env.MARKETPULSE_RESOURCE_URL": f"http://{fqdn}:8081/mcp",
                 "env.MARKETPULSE_ORIGIN": f"http://{fqdn}:8081",
             },
@@ -616,9 +627,15 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             },
         )
 
-    def _deploy_base(self, role: str, *, include_solana: bool) -> None:
+    def _deploy_base(
+        self,
+        role: str,
+        *,
+        include_solana: bool,
+        payee_language: str | None = None,
+    ) -> None:
         self._apply_namespaces()
-        self._bootstrap_manifests()
+        self._bootstrap_manifests(payee_language)
         self._install_dependencies(role, include_solana=include_solana)
         with self._runtime_forwards(("emqx-mqtt", "emqx-dashboard")):
             self._bootstrap_emqx()
@@ -929,12 +946,10 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             "env.QUANTSTREAM_CLIENT_ID": identity.client_id,
             "env.QUANTSTREAM_SCENARIO_ID": identity.scenario_id,
             "env.AGENTVAULT_TRANSPORT": self.context.transport,
-            "env.AGENTVAULT_GRPC_ENDPOINT": (
-                f"agentvault.{AGENTVAULT_NAMESPACE}.svc.cluster.local:50051"
-            ),
+            "env.AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
             "env.AGENTVAULT_GRPC_TLS": "false",
             "env.AGENTVAULT_GRPC_TIMEOUT_SECONDS": "15",
-            "env.AGENTVAULT_MQTT_HOST": f"emqx.{INFRA_NAMESPACE}.svc.cluster.local",
+            "env.AGENTVAULT_MQTT_HOST": "127.0.0.1",
             "env.AGENTVAULT_MQTT_PORT": "1883",
             "env.AGENTVAULT_MQTT_TLS": "false",
             "env.AGENTVAULT_MQTT_USERNAME": identity.mqtt_username,
@@ -962,6 +977,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             job,
             self._payer_chart(payer),
             PAYER_NAMESPACE,
+            values=(E2E_ROOT / "common" / "mock-payer-kubernetes-values.yaml",),
             set_strings=values,
             wait=False,
         )
@@ -1102,7 +1118,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             self.cleanup()
         try:
             self._build_images(payer_language, payee_language)
-            self._deploy_base("payee", include_solana=False)
+            self._deploy_base("payee", include_solana=False, payee_language=payee_language)
             self._install_agentvault()
             self._install_payee(payee_language)
             self._install_admin_ui(payer_language)

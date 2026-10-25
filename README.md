@@ -7,7 +7,7 @@ AgentVault is a Rust service that mediates both sides of machine payments:
 - Payer / OUTBOUND: authorize a paid HTTP/MCP request, reserve budget, obtain approval when needed, sign an intent-bound credential, and reconcile settlement.
 - Payee / INBOUND: resolve a fixed Offer, issue a 402 challenge, verify and settle an incoming credential through an external provider, then publish a trusted receipt.
 
-Private keys and all financial state are stored only in PostgreSQL or SQLite. Keys use versioned AES-256-GCM envelope encryption with full UUID v4 nonces; Ledger rows are append-only. Memory/Redis caches contain only reconstructible state and never decide budgets, approvals, idempotency, settlement, or balances.
+Private keys and all financial state are stored only in PostgreSQL or SQLite. Keys use versioned AES-256-GCM envelope encryption with full UUID v4 nonces; Ledger rows are append-only. Memory/Redis caches contain only reconstructible or safely disposable short-lived coordination state and never decide budgets, approvals, idempotency, settlement, or balances.
 
 ## Architecture
 

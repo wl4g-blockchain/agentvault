@@ -79,7 +79,7 @@ export function ClientsPage() {
       </section>
     </div>
     {error && <p className="error-banner">{error}</p>}
-    <Notice>Client identity bindings are provisioned through controlled deployment manifests and remain read-only in the Dashboard.</Notice>
+    <Notice>Client identity bindings are imported through controlled console resources and remain read-only in the Dashboard.</Notice>
     <section className="panel section-gap governance-note"><ShieldCheck /><div><small>TRUSTED OWNERSHIP</small><h2>Why Client remains explicit</h2><p>AuthGuard principals and MQTT client identities resolve to a Client before Scenario authorization. A caller cannot nominate a different Client inside a signing payload.</p></div></section>
   </>
 }

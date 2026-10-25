@@ -1,6 +1,6 @@
 import {
   Activity, ArrowDownLeft, ArrowUpRight, BookOpenCheck, Boxes, CircleGauge,
-  Landmark, Network, PanelLeftClose, Scale, Users,
+  Landmark, Network, PanelLeftClose, Scale, Users, WalletCards,
 } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 
@@ -14,6 +14,7 @@ const transactionLinks = [
 const governanceLinks = [
   { to: '/clients', label: 'Clients', icon: Users },
   { to: '/scenarios', label: 'Scenarios', icon: Network },
+  { to: '/wallets', label: 'Wallets', icon: WalletCards },
 ]
 
 const operationsLinks = [

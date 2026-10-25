@@ -1260,19 +1260,16 @@ fn live_tempo_storage_config(database: &std::path::Path, kek_env: &str) -> crate
     config
 }
 
-async fn provision_live_tempo_storage(
+async fn import_live_tempo_storage(
     config: &crate::config::AppConfig,
     manifest_path: &std::path::Path,
     manifest: &Value,
 ) -> std::sync::Arc<crate::storage::sqlite::SqliteStorage> {
-    std::fs::write(
-        manifest_path,
-        serde_json::to_vec(manifest).expect("encode live Tempo provisioning manifest"),
-    )
-    .expect("write live Tempo provisioning manifest");
-    crate::handler::provision_from_path(config, manifest_path)
+    std::fs::write(manifest_path, crate::handler::encode_test_resource_documents(manifest))
+        .expect("write live Tempo resource documents");
+    crate::handler::import_from_paths(config, &[manifest_path.to_path_buf()])
         .await
-        .expect("provision live Tempo Vault storage");
+        .expect("import live Tempo Vault resources");
     std::sync::Arc::new(
         crate::storage::sqlite::SqliteStorage::connect(&config.storage.sqlite)
             .await
@@ -1383,13 +1380,13 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
             "amount": "1000000", "wallet_id": "payee-wallet"
         }]
     });
-    let payer_storage = provision_live_tempo_storage(
+    let payer_storage = import_live_tempo_storage(
         &payer_config,
         &temporary.path().join("payer-manifest.json"),
         &payer_manifest,
     )
     .await;
-    let payee_storage = provision_live_tempo_storage(
+    let payee_storage = import_live_tempo_storage(
         &payee_config,
         &temporary.path().join("payee-manifest.json"),
         &payee_manifest,
@@ -1484,7 +1481,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
         .expect("payee settlement handler"),
     );
 
-    // Provisioning timestamps are the key activation boundary. Advance the
+    // Import timestamps are the key activation boundary. Advance the
     // request clock by one second so the test exercises an active key without
     // relying on wall-clock scheduling between the two operations.
     let now = time::OffsetDateTime::now_utc().unix_timestamp().saturating_add(1);

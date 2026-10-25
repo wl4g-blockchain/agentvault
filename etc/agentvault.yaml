@@ -4,6 +4,9 @@
 # Canonical keys use snake_case. Environment overrides use double underscores:
 # AGENTVAULT__SERVER__PORT=8080
 # AGENTVAULT__AGENTVAULT__PAYER__ENABLED=true
+# Sensitive leaves use the same full field path, for example
+# AGENTVAULT__STORAGE__POSTGRES__URL. They are resolved indirectly and never
+# materialized in the serializable AppConfig object.
 # =============================================================================
 
 server:
@@ -18,7 +21,7 @@ server:
     enabled: true
     direct_context_hmac_key:
       file: ""
-      env: AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY
+      env: AGENTVAULT__SERVER__AUTHGUARD__DIRECT_CONTEXT_HMAC_KEY
     scope_resolver:
       enabled: true
       target: http://127.0.0.1:8081
@@ -54,22 +57,21 @@ logging:
 # Shared durable authority. Intents, Ledger entries, encrypted Wallet EOA key
 # versions, approvals, events, and Outbox records use this SQL provider.
 storage:
-  instance_key: primary
   provider: sqlite # sqlite | postgres
   sqlite:
     database_file: /var/lib/agentvault/agentvault.sqlite3
     max_connections: 1
     busy_timeout: 5s
   postgres:
-    dsn:
+    # Rust SQLx native URL. JDBC URLs are JVM-driver syntax and are rejected.
+    url:
       file: ""
-      env: AGENTVAULT_STORAGE_POSTGRES_URL
+      env: AGENTVAULT__STORAGE__POSTGRES__URL
     max_connections: 16
     connect_timeout: 5s
 
 # Shared best-effort acceleration. Financial correctness never depends on it.
 cache:
-  instance_key: primary
   provider: memory # memory | redis
   memory:
     max_entries: 10000
@@ -79,7 +81,7 @@ cache:
     mode: standalone # standalone | cluster
     urls:
       - file: ""
-        env: AGENTVAULT_CACHE_REDIS_URL
+        env: AGENTVAULT__CACHE__REDIS__URLS
     key_prefix: agentvault
     max_value_bytes: 1048576
     connect_timeout: 3s
@@ -140,19 +142,14 @@ agentvault:
         timeout: 10s
         max_response_bytes: 262144
         allow_insecure_loopback: false
-        secret_headers:
-          Authorization:
-            source:
-              file: ""
-              env: AGENTVAULT_X402_PROVIDER_TOKEN
-            prefix: "Bearer "
+        secret_headers: {}
     mpp:
       enabled: false
       max_challenge_ttl: 5m
       realm: agentvault
       challenge_secret:
         file: ""
-        env: AGENTVAULT_MPP_CHALLENGE_SECRET
+        env: AGENTVAULT__AGENTVAULT__PAYEE__MPP__CHALLENGE_SECRET
       assets:
         - network: eip155:42431
           currency: "0x0000000000000000000000000000000000001002"
@@ -167,12 +164,7 @@ agentvault:
         timeout: 10s
         max_response_bytes: 262144
         allow_insecure_loopback: false
-        secret_headers:
-          Authorization:
-            source:
-              file: ""
-              env: AGENTVAULT_MPP_PROVIDER_TOKEN
-            prefix: "Bearer "
+        secret_headers: {}
 
   # Shared payer/payee chain registry. `family` selects the concrete chain
   # adapter. x402 exact supports EVM and Solana; MPP Tempo charge is EVM-only.
@@ -212,10 +204,13 @@ agentvault:
   # as immutable wallet_key_version rows owned by pay_wallet.
   key_management:
     active_key_id: wallet-kek-v1
+    # Browser wallet imports use a one-use RSA-OAEP public-key session. The server
+    # private key is sealed before this short-lived cache entry is written.
+    import_session_ttl: 2m
     keys:
       wallet-kek-v1:
         file: ""
-        env: AGENTVAULT_WALLET_KEK_V1
+        env: AGENTVAULT__AGENTVAULT__KEY_MANAGEMENT__KEYS__WALLET_KEK_V1
 
   # Separate AEAD keys protect durable retry/approval envelopes. They are not
   # Wallet KEKs and never contain an EOA private key.
@@ -224,7 +219,7 @@ agentvault:
     keys:
       recovery-v1:
         file: ""
-        env: AGENTVAULT_RECOVERY_KEY_V1
+        env: AGENTVAULT__AGENTVAULT__RECOVERY_ENCRYPTION__KEYS__RECOVERY_V1
 
   approval:
     request_ttl: 15m
@@ -238,7 +233,7 @@ agentvault:
       signing_keys:
         approval-hs256-v1:
           file: ""
-          env: AGENTVAULT_APPROVAL_JWT_KEY_V1
+          env: AGENTVAULT__AGENTVAULT__APPROVAL__JWT__SIGNING_KEYS__APPROVAL_HS256_V1
 
   reconciliation:
     enabled: true
@@ -281,6 +276,6 @@ agentvault:
       username: ""
       password:
         file: ""
-        env: AGENTVAULT_MQTT_PASSWORD
+        env: AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__PASSWORD
       request_timeout: 10s
       reconnect_delay: 1s

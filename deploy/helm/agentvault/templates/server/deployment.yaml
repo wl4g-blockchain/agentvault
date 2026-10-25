@@ -1,4 +1,6 @@
+{{- $backend := .Values.agentvault.backend -}}
 {{- $provider := include "agentvault.secretsProvider" . -}}
+{{- $runtimeConfig := index .Values.agentvault "agentvault-config" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +9,7 @@ metadata:
     {{- include "agentvault.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ $backend.replicaCount }}
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector:
     matchLabels:
@@ -17,19 +19,19 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/platform/runtime-config-map.yaml") . | sha256sum }}
-        checksum/secrets: {{ .Values.secrets | toJson | sha256sum }}
-        checksum/provisioning: {{ .Values.provisioning | toJson | sha256sum }}
+        checksum/secrets: {{ $backend.secrets | toJson | sha256sum }}
+        checksum/resource-import: {{ $backend.resourceImport | toJson | sha256sum }}
         {{- if eq $provider "vault" }}
         {{- include "agentvault.vaultAnnotations" . | nindent 8 }}
         {{- end }}
-        {{- with .Values.podAnnotations }}
+        {{- with $backend.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
         {{- include "agentvault.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: server
         authguard.io/scope-client: "true"
-        {{- with .Values.podLabels }}
+        {{- with $backend.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
@@ -43,42 +45,47 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or .Values.provisioning.enabled .Values.extraInitContainers }}
+      {{- if or $backend.resourceImport.enabled $backend.extraInitContainers }}
       initContainers:
-        {{- if .Values.provisioning.enabled }}
-        - name: provision
-          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if $backend.resourceImport.enabled }}
+        - name: resource-import
+          image: "{{ $backend.image.repository }}:{{ default .Chart.AppVersion $backend.image.tag }}"
+          imagePullPolicy: {{ $backend.image.pullPolicy }}
           args:
             - --config
             - /etc/agentvault/agentvault.yaml
-            - provision
-            - --manifest
-            - /etc/agentvault-provision/{{ .Values.provisioning.manifestKey }}
+            - console
+            - import
+            - /etc/agentvault-import/{{ $backend.resourceImport.key }}
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
-          {{- if or (eq $provider "gcp") (eq $provider "aws") }}
           env:
-            - name: AGENTVAULT_SECRETS_ENV_FILE
+            {{- range $name, $value := $backend.env }}
+            - name: {{ $name }}
+              value: {{ tpl ($value | toString) $ | quote }}
+            {{- end }}
+          {{- if or (eq $provider "gcp") (eq $provider "aws") }}
+            - name: AGENTVAULT__SECRETS__ENV_FILE
               value: {{ include "agentvault.csiSecretsMountPath" . }}/env
           {{- else if eq $provider "vault" }}
-          env:
-            - name: AGENTVAULT_SECRETS_ENV_FILE
+            - name: AGENTVAULT__SECRETS__ENV_FILE
               value: /vault/secrets/env
           {{- end }}
-          {{- if and (eq $provider "kubernetes") .Values.secrets.kubernetes.existingSecret }}
+          {{- if and (eq $provider "kubernetes") $backend.secrets.kubernetes.existingSecret }}
           envFrom:
             - secretRef:
-                name: {{ .Values.secrets.kubernetes.existingSecret | quote }}
+                name: {{ $backend.secrets.kubernetes.existingSecret | quote }}
           {{- end }}
           volumeMounts:
+            {{- if $runtimeConfig }}
             - { name: config, mountPath: /etc/agentvault, readOnly: true }
-            # ConfigMap volumes are symlink projections, while provisioning
-            # deliberately opens manifests with O_NOFOLLOW. Mount the selected
+            {{- end }}
+            # ConfigMap volumes are symlink projections, while resource import
+            # deliberately opens inputs with O_NOFOLLOW. Mount the selected
             # key as a file so the security check and Kubernetes projection
             # semantics remain compatible.
-            - name: provisioning
-              mountPath: /etc/agentvault-provision/{{ .Values.provisioning.manifestKey }}
-              subPath: {{ .Values.provisioning.manifestKey | quote }}
+            - name: resource-import
+              mountPath: /etc/agentvault-import/{{ $backend.resourceImport.key }}
+              subPath: {{ $backend.resourceImport.key | quote }}
               readOnly: true
             - { name: runtime, mountPath: /run/agentvault }
             {{- if or (eq $provider "gcp") (eq $provider "aws") }}
@@ -87,64 +94,71 @@ spec:
               readOnly: true
             {{- end }}
         {{- end }}
-        {{- with .Values.extraInitContainers }}
+        {{- with $backend.extraInitContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- end }}
       containers:
         - name: agentvault
-          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: "{{ $backend.image.repository }}:{{ default .Chart.AppVersion $backend.image.tag }}"
+          imagePullPolicy: {{ $backend.image.pullPolicy }}
           args: [--config, /etc/agentvault/agentvault.yaml, serve]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
-          {{- if or (eq $provider "gcp") (eq $provider "aws") }}
           env:
-            - name: AGENTVAULT_SECRETS_ENV_FILE
+            {{- range $name, $value := $backend.env }}
+            - name: {{ $name }}
+              value: {{ tpl ($value | toString) $ | quote }}
+            {{- end }}
+          {{- if or (eq $provider "gcp") (eq $provider "aws") }}
+            - name: AGENTVAULT__SECRETS__ENV_FILE
               value: {{ include "agentvault.csiSecretsMountPath" . }}/env
           {{- else if eq $provider "vault" }}
-          env:
-            - name: AGENTVAULT_SECRETS_ENV_FILE
+            - name: AGENTVAULT__SECRETS__ENV_FILE
               value: /vault/secrets/env
           {{- end }}
-          {{- if and (eq $provider "kubernetes") .Values.secrets.kubernetes.existingSecret }}
+          {{- if and (eq $provider "kubernetes") $backend.secrets.kubernetes.existingSecret }}
           envFrom:
             - secretRef:
-                name: {{ .Values.secrets.kubernetes.existingSecret | quote }}
+                name: {{ $backend.secrets.kubernetes.existingSecret | quote }}
           {{- end }}
           ports:
-            - { name: api, containerPort: {{ .Values.service.apiPort }} }
-            - { name: management, containerPort: {{ .Values.service.managementPort }} }
-            {{- if .Values.runtime.grpc.enabled }}
-            - { name: grpc, containerPort: {{ .Values.service.grpcPort }} }
+            - { name: api, containerPort: {{ $backend.service.apiPort }} }
+            - { name: management, containerPort: {{ $backend.service.managementPort }} }
+            {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
+            - { name: grpc, containerPort: {{ $backend.service.grpcPort }} }
             {{- end }}
           startupProbe: { httpGet: { path: /healthz, port: management }, periodSeconds: 2, failureThreshold: 30 }
           livenessProbe: { httpGet: { path: /healthz, port: management }, periodSeconds: 10, timeoutSeconds: 2 }
           readinessProbe: { httpGet: { path: /readyz, port: management }, periodSeconds: 5, timeoutSeconds: 2 }
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml $backend.resources | nindent 12 }}
           volumeMounts:
+            {{- if $runtimeConfig }}
             - { name: config, mountPath: /etc/agentvault, readOnly: true }
+            {{- end }}
             - { name: runtime, mountPath: /run/agentvault }
             {{- if or (eq $provider "gcp") (eq $provider "aws") }}
             - name: csi-secrets
               mountPath: {{ include "agentvault.csiSecretsMountPath" . }}
               readOnly: true
             {{- end }}
-        {{- with .Values.extraContainers }}
+        {{- with $backend.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       volumes:
+        {{- if $runtimeConfig }}
         - name: config
           configMap: { name: {{ include "agentvault.fullname" . }}-config }
+        {{- end }}
         - name: runtime
           emptyDir: {}
-        {{- if .Values.provisioning.enabled }}
-        - name: provisioning
+        {{- if $backend.resourceImport.enabled }}
+        - name: resource-import
           configMap:
-            name: {{ required "provisioning.manifestConfigMap is required when provisioning is enabled" .Values.provisioning.manifestConfigMap | quote }}
+            name: {{ required "agentvault.backend.resourceImport.configMap is required when resource import is enabled" $backend.resourceImport.configMap | quote }}
             items:
-              - key: {{ .Values.provisioning.manifestKey | quote }}
-                path: {{ .Values.provisioning.manifestKey | quote }}
+              - key: {{ $backend.resourceImport.key | quote }}
+                path: {{ $backend.resourceImport.key | quote }}
         {{- end }}
         {{- if or (eq $provider "gcp") (eq $provider "aws") }}
         - name: csi-secrets
@@ -154,18 +168,18 @@ spec:
             volumeAttributes:
               secretProviderClass: {{ printf "%s-%s-secrets" (include "agentvault.fullname" .) $provider }}
         {{- end }}
-        {{- with .Values.extraVolumes }}
+        {{- with $backend.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.nodeSelector }}
+      {{- with $backend.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with $backend.affinity }}
       affinity: {{ toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with $backend.tolerations }}
       tolerations: {{ toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
+      {{- with $backend.topologySpreadConstraints }}
       topologySpreadConstraints: {{ toYaml . | nindent 8 }}
       {{- end }}

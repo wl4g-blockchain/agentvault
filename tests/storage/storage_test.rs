@@ -2,9 +2,8 @@ use super::*;
 use crate::{
     config::{SqliteStorageConfig, StorageConfig, StorageProvider},
     model::{Amount, BudgetUnit, Wallet},
-    Error,
 };
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn payment_wallet() -> PaymentWallet {
@@ -75,16 +74,11 @@ fn local_wallet_must_match_payment_network_before_signing() {
     assert!(!wallet.signing_ready_for_payment_network("eip155:8453"));
 }
 
-fn sqlite_config(directory: &TempDir, instance_key: &str) -> StorageConfig {
+fn sqlite_config(directory: &TempDir, name: &str) -> StorageConfig {
     StorageConfig {
-        instance_key: instance_key.to_owned(),
         provider: StorageProvider::Sqlite,
         sqlite: SqliteStorageConfig {
-            database_file: directory
-                .path()
-                .join(format!("{instance_key}.sqlite3"))
-                .display()
-                .to_string(),
+            database_file: directory.path().join(format!("{name}.sqlite3")).display().to_string(),
             max_connections: 2,
             busy_timeout: Duration::from_secs(2),
         },
@@ -93,7 +87,7 @@ fn sqlite_config(directory: &TempDir, instance_key: &str) -> StorageConfig {
 }
 
 #[tokio::test]
-async fn factory_selects_reuses_and_closes_the_sqlite_provider() {
+async fn factory_selects_and_initializes_the_sqlite_provider() {
     let directory = TempDir::new().unwrap();
     let config = sqlite_config(&directory, "primary");
     let factory = StorageFactory::new();
@@ -101,34 +95,14 @@ async fn factory_selects_reuses_and_closes_the_sqlite_provider() {
 
     assert_eq!(storage.provider(), StorageProvider::Sqlite);
     storage.ping().await.unwrap();
-    let reused = factory.create(&config).await.unwrap();
-    assert!(Arc::ptr_eq(&storage, &reused));
-    assert!(Arc::ptr_eq(&storage, &factory.get("primary").await.unwrap()));
-
-    factory.close("primary").await.unwrap();
+    storage.close().await.unwrap();
     assert!(storage.ping().await.is_err());
-    factory.close("primary").await.unwrap();
-    assert!(matches!(factory.get("primary").await, Err(Error::NotFound(_))));
 }
 
 #[tokio::test]
-async fn factory_rejects_same_key_with_different_storage_configuration() {
-    let directory = TempDir::new().unwrap();
-    let config = sqlite_config(&directory, "primary");
-    let factory = StorageFactory::new();
-    factory.create(&config).await.unwrap();
-
-    let mut conflicting = config;
-    conflicting.sqlite.max_connections += 1;
-    assert!(matches!(factory.create(&conflicting).await, Err(Error::Config(message)) if message.contains("different")));
-    factory.shutdown_all().await.unwrap();
-}
-
-#[tokio::test]
-async fn initialization_failure_rolls_back_storage_registration() {
+async fn initialization_failure_is_reported_without_retaining_a_provider() {
     let factory = StorageFactory::new();
     let config = StorageConfig {
-        instance_key: "cannot-open".to_owned(),
         sqlite: SqliteStorageConfig {
             database_file: "/proc/agentvault/cannot-open.sqlite3".to_owned(),
             ..SqliteStorageConfig::default()
@@ -137,25 +111,4 @@ async fn initialization_failure_rolls_back_storage_registration() {
     };
 
     assert!(factory.create(&config).await.is_err());
-    assert!(matches!(factory.get("cannot-open").await, Err(Error::NotFound(_))));
-}
-
-#[tokio::test]
-async fn shutdown_all_unregisters_every_storage_instance() {
-    let first_directory = TempDir::new().unwrap();
-    let second_directory = TempDir::new().unwrap();
-    let factory = StorageFactory::new();
-    factory
-        .create(&sqlite_config(&first_directory, "primary"))
-        .await
-        .unwrap();
-    factory
-        .create(&sqlite_config(&second_directory, "secondary"))
-        .await
-        .unwrap();
-
-    factory.shutdown_all().await.unwrap();
-    factory.shutdown_all().await.unwrap();
-    assert!(matches!(factory.get("primary").await, Err(Error::NotFound(_))));
-    assert!(matches!(factory.get("secondary").await, Err(Error::NotFound(_))));
 }

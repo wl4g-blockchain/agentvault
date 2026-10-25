@@ -6,6 +6,7 @@ import re
 from common.context import VerificationContext
 from common.payer_identity import PAYER_IDENTITIES
 from common.project import E2E_ROOT, REPOSITORY_ROOT
+from common.resource_import import load_agentvault_resources
 
 
 REQUIRED = (
@@ -16,6 +17,9 @@ REQUIRED = (
     "common/deploy/kubernetes.py",
     "common/deploy/kubernetes_deployer.py",
     "common/payer_identity.py",
+    "common/resource_import.py",
+    "common/mock-payer-kubernetes-values.yaml",
+    "deploy/mock-payer-loopback-bridge.yaml",
     "verifier/payment/s20_full.py",
     "verifier/payment/s21_payer_signing.py",
     "verifier/payment/s22_payee_settlement.py",
@@ -25,6 +29,8 @@ REQUIRED = (
     "verifier/payment/s26_x402_solana.py",
     "verifier/payment/s30_matrix.py",
     "verifier/web/s40_dashboard.py",
+    "verifier/web/wallet_creation.py",
+    "requirements-web.txt",
     "deploy/anvil/docker-compose.yaml",
     "deploy/solana/docker-compose.yaml",
     "deploy/facilitator/docker-compose.yaml",
@@ -80,7 +86,7 @@ REQUIRED = (
     "deploy/mock-payer-quantstream-ingest-service-typescript/src/agent/mcp.ts",
     "deploy/mock-payer-quantstream-ingest-service-typescript/src/job/ingestion_job.ts",
     "common/contract/payment-mqtt.schema.json",
-    "common/contract/scenario.json",
+    "common/contract/agentvault-resources.yaml",
     "docker-compose.yaml",
 )
 
@@ -645,6 +651,8 @@ def verify(_context: VerificationContext) -> str:
     forbidden_entry = E2E_ROOT / "deploy" / "e2e.sh"
     if forbidden_entry.exists():
         raise RuntimeError("runner.py must be the only outer E2E orchestrator; delete deploy/e2e.sh")
+    if (E2E_ROOT / "tests").exists():
+        raise RuntimeError("top-level e2e/tests duplicates runner scenarios; keep checks in verifier scenarios")
     outer_python = sorted(path.name for path in E2E_ROOT.glob("*.py"))
     if outer_python != ["runner.py"]:
         raise RuntimeError(f"runner.py must be the only outer Python entry: {outer_python}")
@@ -709,7 +717,7 @@ def _verify_kubernetes_namespace_boundaries() -> None:
 
     errors: list[str] = []
     agentvault_values = (E2E_ROOT / "common" / "agentvault-values.yaml").read_text(encoding="utf-8")
-    if not re.search(r"(?m)^fullnameOverride: agentvault$", agentvault_values):
+    if not re.search(r"(?m)^    fullnameOverride: agentvault$", agentvault_values):
         errors.append("AgentVault E2E resources must use the production-style agentvault name")
     for namespace, components in E2E_NAMESPACE_GROUPS.items():
         for component in components:
@@ -732,6 +740,11 @@ def _verify_kubernetes_namespace_boundaries() -> None:
                 errors.append(f"{component} does not bind Helm release state to its resource namespace")
             if "{{- $name := .Chart.Name -}}" not in template:
                 errors.append(f"{component} must not prefix resource names with its E2E release")
+            if (
+                component.startswith("mock-payer-quantstream-ingest-service-")
+                and "with .Values.initContainers" not in template
+            ):
+                errors.append(f"{component} must support the loopback transport sidecar")
     if errors:
         raise RuntimeError("; ".join(errors))
 
@@ -901,7 +914,7 @@ def _verify_payer_chain_boundary() -> None:
 
 def _verify_wallet_pool_contract() -> None:
     """Require five isolated Payer identities with two local wallets each."""
-    manifest = json.loads((E2E_ROOT / "common/contract/scenario.json").read_text(encoding="utf-8"))
+    manifest = load_agentvault_resources(E2E_ROOT / "common/contract/agentvault-resources.yaml")
     wallets = {item.get("id"): item for item in manifest.get("wallets", [])}
     policies = {item.get("id"): item for item in manifest.get("policies", [])}
     scenarios = {item.get("id"): item for item in manifest.get("scenarios", [])}

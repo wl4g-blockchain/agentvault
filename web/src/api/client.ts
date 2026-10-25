@@ -16,6 +16,9 @@ import type {
   PaymentReceipt,
   ScenarioConfiguration,
   ScenarioConfigurationInput,
+  CreateWalletInput,
+  Wallet,
+  WalletImportSession,
 } from './types'
 
 export const API_ROOT = '/api/v1'
@@ -195,6 +198,19 @@ export const managementApi = {
 
   createScenario(input: ScenarioConfigurationInput) {
     return request<ScenarioConfiguration>('/admin/scenarios', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  createWalletImportSession() {
+    return request<WalletImportSession>('/admin/wallets/encryption-sessions', {
+      method: 'POST',
+    })
+  },
+
+  createWallet(input: CreateWalletInput) {
+    return request<Wallet>('/admin/wallets', {
       method: 'POST',
       body: JSON.stringify(input),
     })

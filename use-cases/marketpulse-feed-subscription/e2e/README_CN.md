@@ -55,7 +55,7 @@ QuantStream（Go/Rust/Python/Java/TS）
 
 ## 双向额度与审批
 
-Provisioning Manifest 明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
+Console 资源导入夹具明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
 `Policy 1:N Wallet membership`。生产环境允许多个 Policy 共享 Wallet；本矩阵则
 刻意使用五套隔离 Payer 身份和十个不同 EOA，以便直接发现 SDK 之间的越权串用。
 AgentVault 在同等授权结果中优先选择当日使用量最低的钱包，稳定散列负责并列决胜。
@@ -116,7 +116,7 @@ marketpulse-feed-subscription/e2e/
 │   ├── mock-payer-quantstream-ingest-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # 与源码相对路径一致的单元测试
-├── common/contract/       # Provisioning 与 MQTT 契约
+├── common/contract/       # 声明式资源与 MQTT 契约
 ├── verifier/              # 结构、业务与资金证据断言
 ├── reports/               # 分层验收报告
 ├── docker-compose.yaml

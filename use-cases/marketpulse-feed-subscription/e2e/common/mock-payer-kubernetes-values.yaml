@@ -1,0 +1,33 @@
+env:
+  AGENTVAULT_GRPC_ENDPOINT: "127.0.0.1:50051"
+  AGENTVAULT_GRPC_TLS: "false"
+  AGENTVAULT_MQTT_HOST: "127.0.0.1"
+  AGENTVAULT_MQTT_PORT: "1883"
+  AGENTVAULT_MQTT_TLS: "false"
+
+# A native sidecar init container becomes ready before the one-shot payer
+# starts, so its loopback-only Vault transports cannot race Envoy startup.
+initContainers:
+  - name: loopback-bridge
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+    imagePullPolicy: IfNotPresent
+    restartPolicy: Always
+    args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+    startupProbe:
+      exec:
+        command: ["/usr/local/bin/envoy", "--version"]
+      periodSeconds: 1
+      failureThreshold: 30
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: [ALL] }
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+    volumeMounts:
+      - { name: loopback-bridge-config, mountPath: /etc/envoy, readOnly: true }
+
+extraVolumes:
+  - name: loopback-bridge-config
+    configMap: { name: loopback-bridge }

@@ -1289,7 +1289,7 @@ class DockerE2EDeployer(E2EDeployer):
             self._build_images(payer_language, payee_language)
             self._dependency_up("payee", include_solana=False)
             self._dependency_health("payee", include_solana=False)
-            self._full(payer_language, payee_language, "up", "--no-deps", "agentvault-provision")
+            self._full(payer_language, payee_language, "up", "--no-deps", "agentvault-import")
             self._full(payer_language, payee_language, "up", "-d", "--no-deps", "agentvault")
             self._wait_http(self._url("E2E_AGENTVAULT_MGMT_PORT", "/readyz"), 90)
             self._full(

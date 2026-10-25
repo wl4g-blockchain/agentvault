@@ -7,6 +7,8 @@ use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use axum::{
     extract::{Path, Query, State},
+    http::header,
+    response::IntoResponse as _,
     routing::{get, post},
     Json, Router,
 };
@@ -22,7 +24,7 @@ use crate::{
         ApprovalHandler, ApprovalPrincipalAuthorizer, AuthorizePayment, IssuePaymentChallenge, OfferHandler,
         OutboundEvidenceHandler, OutboundSigningHandler, ProtocolRegistry, RecordOutboundPaymentResponse,
         ScenarioHandler, SettleIncomingPayment, SettlementHandler, SignAuthorizedPayment, SubmitApprovalDecision,
-        VerifyIncomingPayment, WalletBalanceSource,
+        VerifyIncomingPayment, WalletBalanceSource, WalletHandler,
     },
     model::{
         Amount, ApprovalDecisionKind, ApprovalRequest, AssetIdentity, BudgetUnit, LedgerEntryType,
@@ -61,6 +63,7 @@ pub struct PaymentApiDependencies {
     pub offers: Arc<dyn OfferStorage>,
     pub policies: Arc<dyn PolicyStorage>,
     pub wallets: Arc<dyn WalletStorage>,
+    pub wallet_handler: Arc<WalletHandler>,
     pub events: Arc<dyn EventStorage>,
     pub ledger: Arc<dyn LedgerStorage>,
     pub balances: Arc<dyn WalletBalanceSource>,
@@ -86,6 +89,7 @@ pub struct PaymentApi {
     offers: Arc<dyn OfferStorage>,
     policies: Arc<dyn PolicyStorage>,
     wallets: Arc<dyn WalletStorage>,
+    wallet_handler: Arc<WalletHandler>,
     events: Arc<dyn EventStorage>,
     ledger: Arc<dyn LedgerStorage>,
     balances: Arc<dyn WalletBalanceSource>,
@@ -112,6 +116,7 @@ impl PaymentApi {
             offers: dependencies.offers,
             policies: dependencies.policies,
             wallets: dependencies.wallets,
+            wallet_handler: dependencies.wallet_handler,
             events: dependencies.events,
             ledger: dependencies.ledger,
             balances: dependencies.balances,
@@ -616,7 +621,8 @@ pub fn payment_router(api: Arc<PaymentApi>) -> Router {
         .route("/admin/clients", get(list_clients))
         .route("/admin/scenarios", get(list_scenarios).post(create_scenario))
         .route("/admin/policies", get(list_policies))
-        .route("/admin/wallets", get(list_wallets))
+        .route("/admin/wallets", get(list_wallets).post(create_wallet))
+        .route("/admin/wallets/encryption-sessions", post(create_wallet_import_session))
         .route("/admin/offers", get(list_offers))
         .route("/admin/payments", get(list_payments))
         .route("/admin/ledger", get(list_ledger))
@@ -692,6 +698,29 @@ async fn list_wallets(
     Query(query): Query<AdminPageQuery>,
 ) -> std::result::Result<Json<Page<crate::model::wallet::Wallet>>, ApiError> {
     Ok(Json(api.wallets.list(query.page()?).await?))
+}
+
+async fn create_wallet_import_session(
+    State(api): State<Arc<PaymentApi>>,
+    principal: CallerPrincipal,
+) -> std::result::Result<axum::response::Response, ApiError> {
+    let session = api
+        .wallet_handler
+        .create_import_session(principal.as_str(), unix_time()?)
+        .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(session)).into_response())
+}
+
+async fn create_wallet(
+    State(api): State<Arc<PaymentApi>>,
+    principal: CallerPrincipal,
+    Json(request): Json<crate::handler::CreateEncryptedWallet>,
+) -> std::result::Result<Json<crate::model::wallet::Wallet>, ApiError> {
+    Ok(Json(
+        api.wallet_handler
+            .create_wallet(principal.as_str(), request, unix_time()?)
+            .await?,
+    ))
 }
 
 async fn list_offers(

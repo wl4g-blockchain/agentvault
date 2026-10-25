@@ -200,6 +200,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .scenario-list article > div { min-width: 0; display: grid; gap: 4px; }
 .scenario-list code, .scenario-list small { color: var(--muted); font-size: 8px; }
 .client-layout { display: grid; grid-template-columns: minmax(300px, .75fr) minmax(0, 1.25fr); gap: 18px; align-items: start; margin-bottom: 18px; }
+.wallet-layout { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }
+.wallet-form { padding: 22px; }
+.wallet-list { overflow: hidden; margin-top: 0; }
+.wallet-list article { padding: 15px 20px; border-top: 1px solid var(--line); }
+.wallet-list article > div { min-width: 0; display: grid; gap: 4px; }
+.wallet-list code, .wallet-list small { color: var(--muted); font-size: 8px; overflow-wrap: anywhere; }
 .client-list, .client-scenarios { overflow: hidden; }
 .client-scenarios { margin-top: 0; }
 .client-row { width: 100%; min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 20px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text); text-align: left; }
@@ -220,7 +226,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .app-shell > main { display: block; }
   .topbar { top: 61px; padding: 0 18px; }
   .page { padding: 24px 15px 55px; }
-  .metric-grid, .split-grid, .runtime-grid, .scenario-layout, .client-layout { grid-template-columns: 1fr; }
+  .metric-grid, .split-grid, .runtime-grid, .scenario-layout, .client-layout, .wallet-layout { grid-template-columns: 1fr; }
   .inline-form { grid-template-columns: 1fr; align-items: stretch; }
   .transaction-filter { grid-template-columns: 1fr 1fr; }
   .approval-list article { grid-template-columns: 1fr auto; }

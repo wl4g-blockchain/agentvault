@@ -31,8 +31,11 @@ docker compose -p agentvault-open --env-file deploy/docker/.env \
   -f deploy/docker/docker-compose.open.yaml up -d
 ```
 
-The Payee-owned provider and shared `agentvault.chains` entries in
-`config/agentvault.yaml` are operator-owned examples and must be replaced for a real network. Chain nodes
+The Payee-owned provider and shared `agentvault.chains` entries in the single
+canonical [`etc/agentvault.yaml`](../../etc/agentvault.yaml) are operator-owned
+examples and must be replaced for a real network. `config/agentvault.yaml` is a
+symlink to that file; deployment-specific scalar and secret values belong in
+`.env`, not in a copied YAML document. Chain nodes
 and the official x402 Facilitator are deliberately not embedded here; the full
 disposable stack lives under `use-cases/marketpulse-feed-subscription/e2e`.
 

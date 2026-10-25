@@ -26,6 +26,8 @@ pub enum Error {
     Settlement(String),
     #[error("storage error: {0}")]
     Storage(String),
+    #[error("required dependency is unavailable: {0}")]
+    DependencyUnavailable(String),
     #[error("cryptographic operation failed: {0}")]
     Crypto(String),
     #[error("failed to read {path}: {source}")]

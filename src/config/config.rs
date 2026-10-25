@@ -3,8 +3,17 @@
 //! Precedence is: built-in defaults < YAML file < `AGENTVAULT__...`
 //! environment variables. Double underscores address nested fields, for
 //! example `AGENTVAULT__MGMT__OTEL__ENABLED=true`.
+//!
+//! Sensitive leaves use the same canonical field-path names. Their values are
+//! resolved by [`SecretRefConfig`] and are deliberately filtered out of the
+//! serializable configuration source.
 
-use std::{collections::BTreeMap, net::IpAddr, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    net::IpAddr,
+    path::Path,
+    time::Duration,
+};
 
 use ::config::{Config as ConfigLoader, Environment, File};
 use serde::{Deserialize, Serialize};
@@ -18,6 +27,7 @@ use crate::{
 };
 
 pub const DEFAULT_MQTT_TOPIC_PREFIX: &str = "agentvault/v1/clients";
+pub(crate) const SECRETS_ENV_FILE_ENV: &str = "AGENTVAULT__SECRETS__ENV_FILE";
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_GRPC_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CACHE_ENTRIES: usize = 1_000_000;
@@ -211,6 +221,9 @@ pub struct PayeeConfig {
 pub struct WalletKeyRingConfig {
     pub active_key_id: String,
     pub keys: BTreeMap<String, SecretRefConfig>,
+    /// Lifetime of a one-use browser-to-Vault wallet-key import session.
+    #[serde(with = "humantime_serde")]
+    pub import_session_ttl: Duration,
 }
 
 /// Versioned keys protecting durable credential and approval recovery
@@ -230,12 +243,9 @@ pub enum StorageProvider {
     Postgres,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageConfig {
-    /// Stable process-local registry key used by [`StorageFactory`].
-    #[serde(default = "default_component_instance_key")]
-    pub instance_key: String,
     pub provider: StorageProvider,
     pub sqlite: SqliteStorageConfig,
     pub postgres: PostgresStorageConfig,
@@ -254,8 +264,10 @@ pub struct SqliteStorageConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PostgresStorageConfig {
-    /// `PostgreSQL` DSN source. The DSN itself is never a serializable field.
-    pub dsn: SecretRefConfig,
+    /// `PostgreSQL` connection URL source. The URL itself is never a
+    /// serializable field. Rust `sqlx` accepts `postgresql://`/`postgres://`
+    /// URLs; JDBC URLs belong to JVM drivers and are intentionally rejected.
+    pub url: SecretRefConfig,
     pub max_connections: u32,
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
@@ -290,12 +302,9 @@ pub enum RedisCacheMode {
 
 /// Non-authoritative cache configuration. Budget reservations, approval grant
 /// consumption, settlement state, and ledger entries must never depend on it.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
-    /// Stable process-local registry key used by [`CacheFactory`].
-    #[serde(default = "default_component_instance_key")]
-    pub instance_key: String,
     pub provider: CacheProvider,
     pub memory: MemoryCacheConfig,
     pub redis: RedisCacheConfig,
@@ -572,7 +581,7 @@ impl Default for AuthGuardIntegrationConfig {
             enabled: true,
             direct_context_hmac_key: SecretRefConfig {
                 file: String::new(),
-                env: "AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY".to_owned(),
+                env: "AGENTVAULT__SERVER__AUTHGUARD__DIRECT_CONTEXT_HMAC_KEY".to_owned(),
             },
             scope_resolver: AuthGuardScopeResolverConfig::default(),
         }
@@ -652,21 +661,6 @@ impl Default for LoggingConfig {
     }
 }
 
-fn default_component_instance_key() -> String {
-    "default".to_owned()
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            instance_key: default_component_instance_key(),
-            provider: StorageProvider::default(),
-            sqlite: SqliteStorageConfig::default(),
-            postgres: PostgresStorageConfig::default(),
-        }
-    }
-}
-
 impl Default for SqliteStorageConfig {
     fn default() -> Self {
         Self {
@@ -685,9 +679,10 @@ impl Default for WalletKeyRingConfig {
                 "wallet-kek-v1".to_owned(),
                 SecretRefConfig {
                     file: String::new(),
-                    env: "AGENTVAULT_WALLET_KEK_V1".to_owned(),
+                    env: "AGENTVAULT__AGENTVAULT__KEY_MANAGEMENT__KEYS__WALLET_KEK_V1".to_owned(),
                 },
             )]),
+            import_session_ttl: Duration::from_mins(2),
         }
     }
 }
@@ -700,7 +695,7 @@ impl Default for RecoveryEncryptionConfig {
                 "recovery-v1".to_owned(),
                 SecretRefConfig {
                     file: String::new(),
-                    env: "AGENTVAULT_RECOVERY_KEY_V1".to_owned(),
+                    env: "AGENTVAULT__AGENTVAULT__RECOVERY_ENCRYPTION__KEYS__RECOVERY_V1".to_owned(),
                 },
             )]),
         }
@@ -710,20 +705,12 @@ impl Default for RecoveryEncryptionConfig {
 impl Default for PostgresStorageConfig {
     fn default() -> Self {
         Self {
-            dsn: SecretRefConfig::default(),
+            url: SecretRefConfig {
+                file: String::new(),
+                env: "AGENTVAULT__STORAGE__POSTGRES__URL".to_owned(),
+            },
             max_connections: 16,
             connect_timeout: Duration::from_secs(5),
-        }
-    }
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            instance_key: default_component_instance_key(),
-            provider: CacheProvider::default(),
-            memory: MemoryCacheConfig::default(),
-            redis: RedisCacheConfig::default(),
         }
     }
 }
@@ -742,7 +729,10 @@ impl Default for RedisCacheConfig {
     fn default() -> Self {
         Self {
             mode: RedisCacheMode::Standalone,
-            urls: Vec::new(),
+            urls: vec![SecretRefConfig {
+                file: String::new(),
+                env: "AGENTVAULT__CACHE__REDIS__URLS".to_owned(),
+            }],
             key_prefix: "agentvault".to_owned(),
             max_value_bytes: 1024 * 1024,
             connect_timeout: Duration::from_secs(3),
@@ -804,7 +794,10 @@ impl Default for PayeeMppConfig {
             enabled: false,
             max_challenge_ttl: Duration::from_mins(5),
             realm: String::new(),
-            challenge_secret: SecretRefConfig::default(),
+            challenge_secret: SecretRefConfig {
+                file: String::new(),
+                env: "AGENTVAULT__AGENTVAULT__PAYEE__MPP__CHALLENGE_SECRET".to_owned(),
+            },
             assets: Vec::new(),
             provider: ExternalProviderConfig::default(),
         }
@@ -871,7 +864,7 @@ impl Default for ApprovalJwtConfig {
                 DEFAULT_APPROVAL_JWT_KEY_ID.to_owned(),
                 SecretRefConfig {
                     file: String::new(),
-                    env: "AGENTVAULT_APPROVAL_JWT_KEY_V1".to_owned(),
+                    env: "AGENTVAULT__AGENTVAULT__APPROVAL__JWT__SIGNING_KEYS__APPROVAL_HS256_V1".to_owned(),
                 },
             )]),
         }
@@ -936,7 +929,10 @@ impl Default for MqttTransportConfig {
             qos: 1,
             tls: false,
             username: String::new(),
-            password: SecretRefConfig::default(),
+            password: SecretRefConfig {
+                file: String::new(),
+                env: "AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__PASSWORD".to_owned(),
+            },
             request_timeout: Duration::from_secs(10),
             reconnect_delay: Duration::from_secs(1),
         }
@@ -951,17 +947,98 @@ impl AppConfig {
     /// Returns an error when the source cannot be loaded or deserialized.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        let base = Self::load_file(path)?;
+        let secret_variables = base.secret_environment_variables();
+        let mut source = HashMap::new();
+        for (key, value) in std::env::vars_os() {
+            let Ok(key) = key.into_string() else {
+                continue;
+            };
+            if !key.starts_with("AGENTVAULT__") {
+                continue;
+            }
+            if secret_variables.contains(&key) || key == SECRETS_ENV_FILE_ENV {
+                continue;
+            }
+            let value = value
+                .into_string()
+                .map_err(|_| Error::Config(format!("environment variable {key} must contain UTF-8 text")))?;
+            source.insert(key, value);
+        }
+        Self::load_with_filtered_environment(path, source)
+    }
+
+    fn environment(source: HashMap<String, String>) -> Environment {
+        Environment::with_prefix("AGENTVAULT")
+            .prefix_separator("__")
+            .separator("__")
+            .try_parsing(true)
+            .source(Some(source))
+    }
+
+    fn load_file(path: &Path) -> Result<Self> {
         ConfigLoader::builder()
             .add_source(File::from(path))
-            .add_source(
-                Environment::with_prefix("AGENTVAULT")
-                    .prefix_separator("__")
-                    .separator("__")
-                    .try_parsing(true),
-            )
             .build()
             .and_then(ConfigLoader::try_deserialize::<Self>)
             .map_err(|error| Error::Config(error.to_string()))
+    }
+
+    #[cfg(test)]
+    fn load_with_environment(path: &Path, source: HashMap<String, String>) -> Result<Self> {
+        let secret_variables = Self::load_file(path)?.secret_environment_variables();
+        let source = source
+            .into_iter()
+            .filter(|(key, _)| !secret_variables.contains(key) && key != SECRETS_ENV_FILE_ENV)
+            .collect();
+        Self::load_with_filtered_environment(path, source)
+    }
+
+    fn load_with_filtered_environment(path: &Path, source: HashMap<String, String>) -> Result<Self> {
+        ConfigLoader::builder()
+            .add_source(File::from(path))
+            .add_source(Self::environment(source))
+            .build()
+            .and_then(ConfigLoader::try_deserialize::<Self>)
+            .map_err(|error| Error::Config(error.to_string()))
+    }
+
+    fn secret_environment_variables(&self) -> BTreeSet<String> {
+        fn insert(names: &mut BTreeSet<String>, reference: &SecretRefConfig) {
+            if !reference.env.is_empty() {
+                names.insert(reference.env.clone());
+            }
+        }
+
+        fn insert_headers(names: &mut BTreeSet<String>, headers: &BTreeMap<String, SecretHeaderConfig>) {
+            for header in headers.values() {
+                insert(names, &header.source);
+            }
+        }
+
+        let mut names = BTreeSet::new();
+        insert(&mut names, &self.server.authguard.direct_context_hmac_key);
+        insert(&mut names, &self.storage.postgres.url);
+        for reference in &self.cache.redis.urls {
+            insert(&mut names, reference);
+        }
+        insert_headers(&mut names, &self.agentvault.payee.x402.facilitator.secret_headers);
+        insert(&mut names, &self.agentvault.payee.mpp.challenge_secret);
+        insert_headers(&mut names, &self.agentvault.payee.mpp.provider.secret_headers);
+        for chain in self.agentvault.chains.values() {
+            insert_headers(&mut names, &chain.rpc.secret_headers);
+        }
+        for reference in self.agentvault.key_management.keys.values() {
+            insert(&mut names, reference);
+        }
+        for reference in self.agentvault.recovery_encryption.keys.values() {
+            insert(&mut names, reference);
+        }
+        for reference in self.agentvault.approval.jwt.signing_keys.values() {
+            insert(&mut names, reference);
+        }
+        insert(&mut names, &self.agentvault.transport.mqtt.password);
+        names
     }
 
     /// Validates the complete daemon configuration.
@@ -1057,6 +1134,19 @@ impl AppConfig {
 
     fn validate_agentvault(&self) -> Result<()> {
         validate_wallet_key_ring(&self.agentvault.key_management)?;
+        let cache_ttl = match self.cache.provider {
+            CacheProvider::Memory => self.cache.memory.default_ttl,
+            CacheProvider::Redis => self.cache.redis.default_ttl,
+        };
+        if self.agentvault.key_management.import_session_ttl < Duration::from_secs(30)
+            || self.agentvault.key_management.import_session_ttl > Duration::from_mins(5)
+            || self.agentvault.key_management.import_session_ttl > cache_ttl
+        {
+            return Err(Error::Config(
+                "agentvault.key_management.import_session_ttl must be between 30s and 5m and not exceed the selected cache default_ttl"
+                    .to_owned(),
+            ));
+        }
         validate_recovery_encryption(&self.agentvault.recovery_encryption)?;
         self.validate_payer()?;
         self.validate_payee()?;
@@ -1065,7 +1155,6 @@ impl AppConfig {
     }
 
     fn validate_storage(&self) -> Result<()> {
-        validate_config_identifier("storage.instance_key", &self.storage.instance_key)?;
         match self.storage.provider {
             StorageProvider::Sqlite => {
                 let sqlite = &self.storage.sqlite;
@@ -1082,7 +1171,7 @@ impl AppConfig {
             }
             StorageProvider::Postgres => {
                 let postgres = &self.storage.postgres;
-                validate_secret_ref("storage.postgres.dsn", &postgres.dsn)?;
+                validate_secret_ref("storage.postgres.url", &postgres.url)?;
                 if postgres.max_connections == 0
                     || postgres.max_connections > MAX_STORAGE_CONNECTIONS
                     || postgres.connect_timeout.is_zero()
@@ -1097,7 +1186,6 @@ impl AppConfig {
     }
 
     fn validate_cache(&self) -> Result<()> {
-        validate_config_identifier("cache.instance_key", &self.cache.instance_key)?;
         match self.cache.provider {
             CacheProvider::Memory => {
                 let memory = &self.cache.memory;

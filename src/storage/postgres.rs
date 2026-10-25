@@ -1630,7 +1630,7 @@ mod catalog {
             model::{wallet::Wallet, Amount, AssetIdentity, BudgetUnit},
             storage::{
                 EncryptedWalletKeyVersion, Page, PageRequest, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage,
-                WalletCustody, WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
+                WalletCreationConfig, WalletCustody, WalletKeyStatus, WalletStorage,
             },
             Error, Result,
         };
@@ -1662,9 +1662,9 @@ mod catalog {
                 self.create_local_configured(
                     wallet,
                     key,
-                    &WalletProvisioningConfig {
+                    &WalletCreationConfig {
                         enabled: true,
-                        ..WalletProvisioningConfig::default()
+                        ..WalletCreationConfig::default()
                     },
                 )
                 .await
@@ -1674,11 +1674,11 @@ mod catalog {
                 &self,
                 wallet: &Wallet,
                 key: &EncryptedWalletKeyVersion,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet> {
                 let wallet = canonical_wallet(wallet)?;
                 validate_key_for_wallet(&wallet, key, true)?;
-                validate_provisioning_config(config)?;
+                validate_creation_config(config)?;
                 if key.version != 1 {
                     return Err(Error::InvalidKey("initial wallet key version must be 1".to_owned()));
                 }
@@ -1697,9 +1697,9 @@ mod catalog {
             async fn create_external(&self, wallet: &Wallet) -> Result<Wallet> {
                 self.create_external_configured(
                     wallet,
-                    &WalletProvisioningConfig {
+                    &WalletCreationConfig {
                         enabled: true,
-                        ..WalletProvisioningConfig::default()
+                        ..WalletCreationConfig::default()
                     },
                 )
                 .await
@@ -1708,10 +1708,10 @@ mod catalog {
             async fn create_external_configured(
                 &self,
                 wallet: &Wallet,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet> {
                 let wallet = canonical_wallet(wallet)?;
-                validate_provisioning_config(config)?;
+                validate_creation_config(config)?;
                 let config = config.clone();
                 self.transaction(|connection| {
                     Box::pin(async move {
@@ -2129,7 +2129,7 @@ mod catalog {
             Ok(())
         }
 
-        fn validate_provisioning_config(config: &WalletProvisioningConfig) -> Result<()> {
+        fn validate_creation_config(config: &WalletCreationConfig) -> Result<()> {
             config
                 .validate()
                 .map_err(|field| Error::InvalidRequest(format!("invalid initial wallet {field}")))
@@ -2139,7 +2139,7 @@ mod catalog {
             connection: &mut PgConnection,
             wallet: &Wallet,
             custody: WalletCustody,
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
         ) -> Result<()> {
             let public_key = if wallet.public_key.is_empty() {
                 None
@@ -2478,8 +2478,8 @@ mod key_repository {
         config::WalletKeyRingConfig,
         model::wallet::{is_evm_wallet_algorithm, is_solana_wallet_algorithm, Wallet, EVM_EOA_ALGORITHM},
         storage::{
-            EncryptedWalletKeyVersion, IntentBoundPaymentSignatureRequest, WalletKeyManager, WalletKeyStatus,
-            WalletPaymentSignature, WalletPaymentSigner, WalletProvisioningConfig, WalletStorage as _,
+            EncryptedWalletKeyVersion, IntentBoundPaymentSignatureRequest, WalletCreationConfig, WalletKeyManager,
+            WalletKeyStatus, WalletPaymentSignature, WalletPaymentSigner, WalletStorage as _,
         },
         utils::{
             aead::{new_uuid_nonce, parse_uuid_nonce, Aes256GcmUuidNonce, UuidNonce, WALLET_KEY_ENCRYPTION_SCHEME},
@@ -2555,7 +2555,7 @@ mod key_repository {
             wallet_id: &str,
             algorithm: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             self.create_local_configured_for_algorithm(wallet_id, algorithm, private_key, config, created_at)
@@ -2658,9 +2658,9 @@ mod key_repository {
             self.create_local_configured(
                 wallet_id,
                 private_key,
-                &WalletProvisioningConfig {
+                &WalletCreationConfig {
                     enabled: true,
-                    ..WalletProvisioningConfig::default()
+                    ..WalletCreationConfig::default()
                 },
                 created_at,
             )
@@ -2678,7 +2678,7 @@ mod key_repository {
             &self,
             wallet_id: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             self.create_local_configured_for_algorithm(wallet_id, EVM_EOA_ALGORITHM, private_key, config, created_at)
@@ -2697,7 +2697,7 @@ mod key_repository {
             wallet_id: &str,
             algorithm: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             validate_wallet_id(wallet_id)?;
@@ -6060,21 +6060,27 @@ impl PostgresStorage {
     /// [`crate::storage::IStorage::init`] after registration to establish the
     /// connection and apply or verify schema version one.
     ///
-    /// The DSN is accepted as already-resolved sensitive material and is never
+    /// The URL is accepted as already-resolved sensitive material and is never
     /// retained by this adapter or included in an error.
     ///
     /// # Errors
     ///
     /// Fails for invalid limits, an invalid/unreachable database, a partial or
     /// unsupported schema, or a migration/advisory-lock failure.
-    pub(crate) fn from_config(dsn: &str, max_connections: u32, connect_timeout: Duration) -> Result<Self> {
-        if dsn.trim().is_empty() || max_connections == 0 || connect_timeout.is_zero() {
+    pub(crate) fn from_config(url: &str, max_connections: u32, connect_timeout: Duration) -> Result<Self> {
+        if url.trim().is_empty() || max_connections == 0 || connect_timeout.is_zero() {
             return Err(Error::Config(
-                "PostgreSQL payment storage requires a DSN and positive connection limits".to_owned(),
+                "PostgreSQL payment storage requires a URL and positive connection limits".to_owned(),
             ));
         }
-        let options = PgConnectOptions::from_str(dsn)
-            .map_err(|_| Error::Config("PostgreSQL payment storage DSN is invalid".to_owned()))?
+        if url.starts_with("jdbc:") {
+            return Err(Error::Config(
+                "PostgreSQL storage URL must use postgres:// or postgresql://; JDBC URLs require a JVM driver"
+                    .to_owned(),
+            ));
+        }
+        let options = PgConnectOptions::from_str(url)
+            .map_err(|_| Error::Config("PostgreSQL payment storage URL is invalid".to_owned()))?
             .application_name("agentvault");
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
@@ -6090,10 +6096,10 @@ impl PostgresStorage {
     }
 
     #[cfg(test)]
-    pub(crate) async fn connect(dsn: &str, max_connections: u32, connect_timeout: Duration) -> Result<Self> {
+    pub(crate) async fn connect(url: &str, max_connections: u32, connect_timeout: Duration) -> Result<Self> {
         use crate::storage::IStorage as _;
 
-        let storage = Self::from_config(dsn, max_connections, connect_timeout)?;
+        let storage = Self::from_config(url, max_connections, connect_timeout)?;
         storage.init().await?;
         Ok(storage)
     }

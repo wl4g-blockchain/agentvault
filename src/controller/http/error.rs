@@ -78,6 +78,11 @@ impl From<Error> for ApiError {
                 code: "PAYMENT_CONFLICT",
                 message: error.to_string(),
             },
+            Error::DependencyUnavailable(_) => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "DEPENDENCY_UNAVAILABLE",
+                message: "a required service is temporarily unavailable".to_owned(),
+            },
             _ => {
                 tracing::error!(%error, "API operation failed");
                 Self {

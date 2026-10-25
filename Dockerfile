@@ -18,7 +18,7 @@ FROM ${RUNTIME_IMAGE}
 COPY --from=builder /agentvault /usr/local/bin/agentvault
 COPY --from=builder --chown=65532:65532 /runtime/var/lib/agentvault /var/lib/agentvault
 COPY --from=builder --chown=65532:65532 /runtime/run/agentvault /run/agentvault
-COPY --chown=65532:65532 etc/agentvault.yaml /etc/agentvault.yaml
+COPY --chown=65532:65532 etc/agentvault.yaml /etc/agentvault/agentvault.yaml
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/agentvault"]
 CMD ["--help"]

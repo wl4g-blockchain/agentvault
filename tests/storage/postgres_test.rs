@@ -29,11 +29,26 @@ use crate::{
 
 use super::{key_repository::PgWalletKeyRepository, PostgresStorage};
 
-const TEST_DSN_ENV: &str = "AGENTVAULT_TEST_POSTGRES_DSN";
+const TEST_URL_ENV: &str = "AGENTVAULT_TEST_POSTGRES_URL";
+
+#[test]
+fn rejects_jdbc_urls_before_creating_a_pool() {
+    let result = PostgresStorage::from_config(
+        "jdbc:postgresql://127.0.0.1:5432/agentvault",
+        8,
+        Duration::from_secs(10),
+    );
+
+    assert!(matches!(
+        result,
+        Err(Error::Config(message))
+            if message == "PostgreSQL storage URL must use postgres:// or postgresql://; JDBC URLs require a JVM driver"
+    ));
+}
 
 async fn storage() -> PostgresStorage {
-    let dsn = std::env::var(TEST_DSN_ENV).expect("set AGENTVAULT_TEST_POSTGRES_DSN to a dedicated test database");
-    PostgresStorage::connect(&dsn, 8, Duration::from_secs(10))
+    let url = std::env::var(TEST_URL_ENV).expect("set AGENTVAULT_TEST_POSTGRES_URL to a dedicated test database");
+    PostgresStorage::connect(&url, 8, Duration::from_secs(10))
         .await
         .expect("connect dedicated PostgreSQL test database")
 }
@@ -47,7 +62,7 @@ fn unique_key(prefix: &str) -> [u8; 32] {
 }
 
 #[tokio::test]
-#[ignore = "requires AGENTVAULT_TEST_POSTGRES_DSN pointing at a dedicated PostgreSQL database"]
+#[ignore = "requires AGENTVAULT_TEST_POSTGRES_URL pointing at a dedicated PostgreSQL database"]
 async fn migrates_schema_and_signs_only_through_intent_bound_active_keys() {
     let storage = storage().await;
     let version: i32 = sqlx::query_scalar("SELECT version FROM pay_schema_version")
@@ -127,7 +142,7 @@ async fn migrates_schema_and_signs_only_through_intent_bound_active_keys() {
 }
 
 #[tokio::test]
-#[ignore = "requires AGENTVAULT_TEST_POSTGRES_DSN pointing at a dedicated PostgreSQL database"]
+#[ignore = "requires AGENTVAULT_TEST_POSTGRES_URL pointing at a dedicated PostgreSQL database"]
 async fn outbox_class_claim_isolated_and_replayed_after_worker_restart() {
     let database = storage().await;
     let approval_id = unique("pg-approval-outbox");
@@ -207,7 +222,7 @@ async fn outbox_class_claim_isolated_and_replayed_after_worker_restart() {
 }
 
 #[tokio::test]
-#[ignore = "requires AGENTVAULT_TEST_POSTGRES_DSN pointing at a dedicated PostgreSQL database"]
+#[ignore = "requires AGENTVAULT_TEST_POSTGRES_URL pointing at a dedicated PostgreSQL database"]
 #[allow(clippy::too_many_lines)]
 async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically() {
     let storage = storage().await;

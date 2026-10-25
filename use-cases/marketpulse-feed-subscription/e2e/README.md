@@ -65,8 +65,8 @@ override either identity.
 
 ## Limits and approval behavior
 
-The provisioning manifest expresses `Client 1:N Scenario`, `Scenario 1:N
-Policy`, and `Policy 1:N Wallet membership`. Production may share a Wallet
+The canonical console-resource fixture expresses `Client 1:N Scenario`,
+`Scenario 1:N Policy`, and `Policy 1:N Wallet membership`. Production may share a Wallet
 across Policies, but this matrix deliberately provisions five isolated Payer
 identities and ten distinct EOAs so cross-SDK leakage is observable. Among
 equally authorized candidates AgentVault prefers the lowest daily usage and
@@ -136,7 +136,7 @@ marketpulse-feed-subscription/e2e/
 │   ├── mock-payer-quantstream-ingest-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # source-path-mirrored unit tests
-├── common/contract/       # provisioning and MQTT wire contracts
+├── common/contract/       # declarative resources and MQTT wire contracts
 ├── verifier/              # structure and financial/business assertions
 ├── reports/               # generated layered reports
 ├── docker-compose.yaml

@@ -27,7 +27,7 @@ use crate::{
         PaymentHandler, ProtocolRegistry, ReceiptSource, ScenarioHandler, SettlementDependencies, SettlementHandler,
         SettlementProviderConfig, SettlementProviderRegistry, SolanaRpcBalanceSource, SolanaRpcReceiptConfig,
         SolanaRpcReceiptSource, StoredApprovalPrincipalAuthorizer, WalletBalanceRegistry, WalletBalanceSource,
-        WalletBalanceSynchronizer, X402FacilitatorProvider,
+        WalletBalanceSynchronizer, WalletHandler, X402FacilitatorProvider,
     },
     protocol::{
         mpp::{MppAdapter, MppAsset},
@@ -37,7 +37,7 @@ use crate::{
     storage::{
         ApprovalStorage, ApproverStorage, ClientStorage, EventStorage, IStorage, LedgerStorage, OfferStorage,
         OutboxStorage, PaymentStorage, PolicyStorage, ScenarioStorage, SigningStorage, StorageFactory, StoragePorts,
-        WalletBalanceStorage, WalletPaymentSigner, WalletStorage,
+        WalletBalanceStorage, WalletKeyManager, WalletPaymentSigner, WalletStorage,
     },
     utils::secret::read_secret_ref,
     utils::secure_material::{Aes256GcmMaterialProtector, SensitiveMaterialProtector},
@@ -69,106 +69,98 @@ pub(super) async fn assemble(
     config: &AppConfig,
     metrics: AgentVaultMetrics,
 ) -> anyhow::Result<AssembledPaymentRuntime> {
-    let cache_factory = Arc::new(CacheFactory::new());
-    let storage_factory = Arc::new(StorageFactory::new());
-    let assembled = assemble_with_factories(
-        config,
-        Arc::clone(&cache_factory),
-        Arc::clone(&storage_factory),
-        metrics,
-    )
-    .await;
-    if assembled.is_err() {
-        let _ = cache_factory.shutdown_all().await;
-        let _ = storage_factory.shutdown_all().await;
-    }
-    assembled
-}
-
-async fn assemble_with_factories(
-    config: &AppConfig,
-    cache_factory: Arc<CacheFactory>,
-    storage_factory: Arc<StorageFactory>,
-    metrics: AgentVaultMetrics,
-) -> anyhow::Result<AssembledPaymentRuntime> {
-    let cache = cache_factory
+    let cache = CacheFactory::new()
         .create(&config.cache)
         .await
         .context("initialize non-authoritative cache")?;
-    let storage = storage_factory
-        .create(&config.storage)
-        .await
-        .context("initialize authoritative storage")?;
-    let wallet_signer = Arc::clone(&storage)
-        .wallet_payment_signer(&config.agentvault.key_management)
-        .context("load wallet KEK ring")?;
-    let ports = PaymentPorts::from_storage(Arc::clone(&storage).ports(), wallet_signer);
-    let clients = Arc::clone(&ports.clients);
-    let scenarios = Arc::clone(&ports.scenarios);
-    let outbox = Arc::clone(&ports.outbox);
-    let application = build_application(config, ports, metrics.clone())?;
-    let api = application.api;
-    let local = config
-        .agentvault
-        .transport
-        .local
-        .enabled
-        .then(|| LocalController::new(config.agentvault.transport.local.clone(), Arc::clone(&api)))
-        .transpose()
-        .context("build Unix-socket payment controller")?;
-    let mqtt = config
-        .agentvault
-        .transport
-        .mqtt
-        .enabled
-        .then(|| {
-            MqttController::new(
-                config.agentvault.transport.mqtt.clone(),
-                Arc::clone(&api),
-                clients,
-                scenarios,
-                outbox,
-                Arc::clone(&cache),
-            )
-        })
-        .transpose()
-        .context("build MQTT payment controller")?;
-    let router = payment_router(api);
-    let grpc = config
-        .agentvault
-        .transport
-        .grpc
-        .enabled
-        .then(|| {
-            PrincipalContext::from_config(&config.server.authguard).map(|principals| {
-                GrpcController::new(
-                    config.agentvault.transport.grpc.clone(),
-                    principals,
-                    router.clone(),
-                    metrics.clone(),
+    let storage = match StorageFactory::new().create(&config.storage).await {
+        Ok(storage) => storage,
+        Err(error) => {
+            let _ = cache.close().await;
+            return Err(error).context("initialize authoritative storage");
+        }
+    };
+    let assembled = async {
+        let wallet_keys = Arc::clone(&storage)
+            .wallet_key_manager(&config.agentvault.key_management)
+            .context("load wallet custody key ring")?;
+        let wallet_signer: Arc<dyn WalletPaymentSigner> = wallet_keys.clone();
+        let ports = PaymentPorts::from_storage(Arc::clone(&storage).ports(), wallet_keys, wallet_signer);
+        let clients = Arc::clone(&ports.clients);
+        let scenarios = Arc::clone(&ports.scenarios);
+        let outbox = Arc::clone(&ports.outbox);
+        let application = build_application(config, ports, Arc::clone(&cache), metrics.clone())?;
+        let api = application.api;
+        let local = config
+            .agentvault
+            .transport
+            .local
+            .enabled
+            .then(|| LocalController::new(config.agentvault.transport.local.clone(), Arc::clone(&api)))
+            .transpose()
+            .context("build Unix-socket payment controller")?;
+        let mqtt = config
+            .agentvault
+            .transport
+            .mqtt
+            .enabled
+            .then(|| {
+                MqttController::new(
+                    config.agentvault.transport.mqtt.clone(),
+                    Arc::clone(&api),
+                    clients,
+                    scenarios,
+                    outbox,
+                    Arc::clone(&cache),
                 )
             })
+            .transpose()
+            .context("build MQTT payment controller")?;
+        let router = payment_router(api);
+        let grpc = config
+            .agentvault
+            .transport
+            .grpc
+            .enabled
+            .then(|| {
+                PrincipalContext::from_config(&config.server.authguard).map(|principals| {
+                    GrpcController::new(
+                        config.agentvault.transport.grpc.clone(),
+                        principals,
+                        router.clone(),
+                        metrics.clone(),
+                    )
+                })
+            })
+            .transpose()
+            .context("build gRPC payment controller")?;
+        Ok(AssembledPaymentRuntime {
+            router,
+            grpc,
+            local,
+            mqtt,
+            cache_health: CacheHealthComponent {
+                cache: Arc::clone(&cache),
+                interval: std::time::Duration::from_secs(30),
+            },
+            reconciliation: application.reconciliation,
+            wallet_balance_sync: application.wallet_balance_sync,
+            approval_expiration: application.approval_expiration,
+            storage_readiness: Arc::new(StorageReadinessProbe {
+                storage: Arc::clone(&storage),
+            }),
+            resources: PaymentRuntimeResources {
+                cache: Arc::clone(&cache),
+                storage: Arc::clone(&storage),
+            },
         })
-        .transpose()
-        .context("build gRPC payment controller")?;
-    Ok(AssembledPaymentRuntime {
-        router,
-        grpc,
-        local,
-        mqtt,
-        cache_health: CacheHealthComponent {
-            cache,
-            interval: std::time::Duration::from_secs(30),
-        },
-        reconciliation: application.reconciliation,
-        wallet_balance_sync: application.wallet_balance_sync,
-        approval_expiration: application.approval_expiration,
-        storage_readiness: Arc::new(StorageReadinessProbe { storage }),
-        resources: PaymentRuntimeResources {
-            cache_factory,
-            storage_factory,
-        },
-    })
+    }
+    .await;
+    if assembled.is_err() {
+        let _ = cache.close().await;
+        let _ = storage.close().await;
+    }
+    assembled
 }
 
 struct StorageReadinessProbe {
@@ -187,23 +179,19 @@ impl ReadinessProbe for StorageReadinessProbe {
 }
 
 pub(super) struct PaymentRuntimeResources {
-    cache_factory: Arc<CacheFactory>,
-    storage_factory: Arc<StorageFactory>,
+    cache: Arc<dyn ICache>,
+    storage: Arc<dyn IStorage>,
 }
 
 #[async_trait]
 impl RuntimeResource for PaymentRuntimeResources {
     fn name(&self) -> &'static str {
-        "payment provider registries"
+        "payment providers"
     }
 
     async fn close(self: Box<Self>) -> anyhow::Result<()> {
-        let cache_result = self.cache_factory.shutdown_all().await.context("close cache providers");
-        let storage_result = self
-            .storage_factory
-            .shutdown_all()
-            .await
-            .context("close storage providers");
+        let cache_result = self.cache.close().await.context("close cache provider");
+        let storage_result = self.storage.close().await.context("close storage provider");
         cache_result.and(storage_result)
     }
 }
@@ -348,10 +336,15 @@ struct PaymentPorts {
     outbox: Arc<dyn OutboxStorage>,
     signing: Arc<dyn SigningStorage>,
     wallet_signer: Arc<dyn WalletPaymentSigner>,
+    wallet_keys: Arc<dyn WalletKeyManager>,
 }
 
 impl PaymentPorts {
-    fn from_storage(ports: StoragePorts, wallet_signer: Arc<dyn WalletPaymentSigner>) -> Self {
+    fn from_storage(
+        ports: StoragePorts,
+        wallet_keys: Arc<dyn WalletKeyManager>,
+        wallet_signer: Arc<dyn WalletPaymentSigner>,
+    ) -> Self {
         Self {
             clients: ports.clients,
             scenarios: ports.scenarios,
@@ -367,6 +360,7 @@ impl PaymentPorts {
             outbox: ports.outbox,
             signing: ports.signing,
             wallet_signer,
+            wallet_keys,
         }
     }
 }
@@ -385,6 +379,22 @@ struct PaymentAdapters {
     providers: Arc<SettlementProviderRegistry>,
     balances: Arc<dyn WalletBalanceSource>,
     receipts: Arc<EvmReceiptRegistry>,
+}
+
+impl PaymentAdapters {
+    fn build_wallet_handler(
+        &self,
+        config: &AppConfig,
+        cache: Arc<dyn ICache>,
+        wallet_keys: Arc<dyn WalletKeyManager>,
+    ) -> Arc<WalletHandler> {
+        Arc::new(WalletHandler::new(
+            cache,
+            wallet_keys,
+            Arc::clone(&self.material_protector),
+            config.agentvault.key_management.import_session_ttl,
+        ))
+    }
 }
 
 struct ExecutionDependencies {
@@ -413,6 +423,7 @@ struct ExecutionHandlers {
 fn build_application(
     config: &AppConfig,
     ports: PaymentPorts,
+    cache: Arc<dyn ICache>,
     metrics: AgentVaultMetrics,
 ) -> anyhow::Result<BuiltPaymentApplication> {
     let PaymentPorts {
@@ -430,9 +441,10 @@ fn build_application(
         outbox: _,
         signing,
         wallet_signer,
+        wallet_keys,
     } = ports;
     let adapters = build_adapters(config)?;
-
+    let wallet_handler = adapters.build_wallet_handler(config, cache, wallet_keys);
     let scenarios = Arc::new(ScenarioHandler::new(Arc::clone(&clients), Arc::clone(&scenarios_store)));
     let payments_handler = build_payment_handler(
         config,
@@ -486,30 +498,30 @@ fn build_application(
         metrics.clone(),
     )?;
     let approval_expiration = build_approval_expiration(config, Arc::clone(&approvals))?;
-    let api = build_payment_api(PaymentApiDependencies {
-        clients,
-        scenario_store: scenarios_store,
-        scenarios,
-        payments_handler,
-        signing_handler,
-        outbound_evidence_handler,
-        settlement_handler,
-        offer_handler,
-        approval_handler,
-        approval_authorizer,
-        payer_protocols: adapters.payer_protocols,
-        payments,
-        approvals,
-        offers,
-        policies,
-        wallets,
-        events,
-        ledger,
-        balances: adapters.balances,
-        metrics,
-    });
     Ok(BuiltPaymentApplication {
-        api,
+        api: build_payment_api(PaymentApiDependencies {
+            clients,
+            scenario_store: scenarios_store,
+            scenarios,
+            payments_handler,
+            signing_handler,
+            outbound_evidence_handler,
+            settlement_handler,
+            offer_handler,
+            approval_handler,
+            approval_authorizer,
+            payer_protocols: adapters.payer_protocols,
+            payments,
+            approvals,
+            offers,
+            policies,
+            wallets,
+            wallet_handler,
+            events,
+            ledger,
+            balances: adapters.balances,
+            metrics,
+        }),
         reconciliation,
         wallet_balance_sync,
         approval_expiration,

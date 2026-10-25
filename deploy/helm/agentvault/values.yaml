@@ -1,204 +1,133 @@
 global:
   imagePullSecrets: []
 
-replicaCount: 2
-image:
-  repository: ghcr.io/wl4g-blockchain/agentvault
-  tag: ""
-  pullPolicy: IfNotPresent
+agentvault:
+  # Kubernetes resources for the Rust AgentVault backend.
+  backend:
+    nameOverride: ""
+    fullnameOverride: ""
+    replicaCount: 2
+    image:
+      repository: ghcr.io/wl4g-blockchain/agentvault
+      tag: ""
+      pullPolicy: IfNotPresent
+    serviceAccount:
+      create: true
+      name: ""
+      annotations: {}
+    podAnnotations: {}
+    podLabels: {}
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    extraContainers: []
+    extraInitContainers: []
+    extraVolumes: []
 
-serviceAccount: { create: true, name: "", annotations: {} }
-podAnnotations: {}
-podLabels: {}
-resources:
-  requests: { cpu: 100m, memory: 128Mi }
-  limits: { cpu: 1000m, memory: 512Mi }
-nodeSelector: {}
-tolerations: []
-affinity: {}
-topologySpreadConstraints: []
-extraContainers: []
-extraInitContainers: []
-extraVolumes: []
+    # Optional declarative resource import before the backend starts. Each
+    # document uses {consoleVersion, kind, metadata, data}; this is not runtime
+    # configuration and does not create chain funds or submit payments.
+    resourceImport:
+      enabled: false
+      configMap: ""
+      key: resources.yaml
 
-# Optional idempotent bootstrap executed before the server container starts.
-# The operator owns the manifest ConfigMap; the chart only mounts it and
-# reuses the same image, runtime configuration, and secret provider as serve.
-provisioning:
-  enabled: false
-  manifestConfigMap: ""
-  manifestKey: scenario.json
+    service:
+      type: ClusterIP
+      apiPort: 8080
+      managementPort: 9091
+      grpcPort: 50051
 
-service:
-  type: ClusterIP
-  apiPort: 8080
-  managementPort: 9091
-  grpcPort: 50051
-
-web:
-  enabled: true
-  replicaCount: 2
-  image:
-    repository: ghcr.io/wl4g-blockchain/agentvault-web
-    tag: ""
-    pullPolicy: IfNotPresent
-  service: { type: ClusterIP, port: 8080 }
-  resources:
-    requests: { cpu: 20m, memory: 32Mi }
-    limits: { cpu: 250m, memory: 128Mi }
-
-# HTTP API traffic uses the AuthGuard-managed Gateway by default. When the
-# dependency is disabled, no route is created and service.type must explicitly
-# expose the intentionally open AgentVault service.
-routes:
-  enabled: true
-  gatewayName: agentvault-authguard
-  sectionName: http
-  hostnames: [agentvault.example.com]
-
-# Pick exactly one provider. Every source carries one KEY=VALUE payload using
-# the names documented by bootstrap/agentvault-secrets.env.example. Kubernetes
-# projects the keys as environment variables; GCP/AWS/Vault project the same
-# payload as a read-only file selected by AGENTVAULT_SECRETS_ENV_FILE.
-secrets:
-  provider: kubernetes  # kubernetes | gcp | aws | vault
-  kubernetes:
-    existingSecret: agentvault-secrets
-  gcp:
-    secretResourceName: ""
-  aws:
-    region: ""
-    secretName: ""
-  vault:
-    vaultRole: ""
-    secretPath: ""
-  serviceAccount:
-    annotations: {}
-
-runtime:
-  authguard:
-    scopeResolver:
+    route:
       enabled: true
-      # Empty derives http://<release>-authguard-middleware:8081.
-      target: ""
-      timeout: 2s
-  server:
-    serviceName: agentvault
-    shutdownTimeout: 15s
-    maxBodyBytes: 16384
-    requestTimeout: 5s
-  postgres: { maxConnections: 32, connectTimeout: 5s }
-  redis:
-    enabled: true
-    keyPrefix: agentvault
-    maxValueBytes: 1048576
-    connectTimeout: 3s
-    operationTimeout: 2s
-    defaultTtl: 5m
-    retryAttempts: 5
-    minRetryWait: 100ms
-    maxRetryWait: 2s
-  memory:
-    maxEntries: 10000
-    maxValueBytes: 1048576
-    defaultTtl: 5m
-  grpc:
-    enabled: false
-    maxMessageBytes: 2097152
-    requestTimeout: 30s
-  mqtt:
-    enabled: false
-    host: ""
-    port: 8883
-    tls: true
-    username: agentvault
-    clientId: agentvault
-    consumerGroup: agentvault
-    topicPrefix: agentvault/v1/clients
-    qos: 1
-    requestTimeout: 30s
-    reconnectDelay: 1s
-  payer:
-    enabled: true
-    walletSelection:
-      strategy: least_spent
-    x402:
+      gatewayName: agentvault-authguard
+      sectionName: http
+      hostnames: [agentvault.example.com]
+
+    # Sensitive values are injected as canonical AGENTVAULT__... field paths.
+    # Never put secret values in Helm values because Helm stores release values.
+    secrets:
+      provider: kubernetes  # kubernetes | gcp | aws | vault
+      kubernetes:
+        existingSecret: agentvault-secrets
+      gcp:
+        secretResourceName: ""
+      aws:
+        region: ""
+        secretName: ""
+      vault:
+        vaultRole: ""
+        secretPath: ""
+      serviceAccount:
+        annotations: {}
+
+    # Deployment-specific scalar overrides. Values are rendered with tpl.
+    # Complex maps/lists belong in agentvault.agentvault-config below.
+    env:
+      AGENTVAULT__SERVER__ENABLED: "true"
+      AGENTVAULT__SERVER__HOST: "0.0.0.0"
+      AGENTVAULT__SERVER__PORT: "{{ .Values.agentvault.backend.service.apiPort }}"
+      AGENTVAULT__SERVER__AUTHGUARD__ENABLED: '{{ include "agentvault.authguardEnabled" . }}'
+      AGENTVAULT__SERVER__AUTHGUARD__SCOPE_RESOLVER__TARGET: "http://{{ .Release.Name }}-authguard:8081"
+      AGENTVAULT__MGMT__HOST: "0.0.0.0"
+      AGENTVAULT__MGMT__PORT: "{{ .Values.agentvault.backend.service.managementPort }}"
+      AGENTVAULT__LOGGING__MODE: "JSON"
+      AGENTVAULT__STORAGE__PROVIDER: "postgres"
+      AGENTVAULT__STORAGE__POSTGRES__MAX_CONNECTIONS: "32"
+      AGENTVAULT__CACHE__PROVIDER: "redis"
+      AGENTVAULT__AGENTVAULT__PAYER__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYER__X402__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYEE__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYEE__X402__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED: "false"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__HOST: "0.0.0.0"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__PORT: "{{ .Values.agentvault.backend.service.grpcPort }}"
+
+    management:
+      serviceMonitor:
+        enabled: false
+        interval: 30s
+        labels: {}
+
+    networkPolicy:
       enabled: true
-      maxChallengeTtl: 5m
-      assets:
-        - network: eip155:8453
-          contract: "0x0000000000000000000000000000000000001001"
-          symbol: USDC
-          decimals: 6
-  payee:
+      envoyNamespaceSelector: {}
+      envoyPodSelector: { app.kubernetes.io/name: envoy }
+      monitoringNamespaceSelector: {}
+      monitoringPodSelector: { app.kubernetes.io/name: prometheus }
+
+  # Kubernetes resources for the static AgentVault web frontend.
+  frontend:
     enabled: true
-    x402:
+    replicaCount: 2
+    image:
+      repository: ghcr.io/wl4g-blockchain/agentvault-web
+      tag: ""
+      pullPolicy: IfNotPresent
+    service:
+      type: ClusterIP
+      port: 8080
+    route:
       enabled: true
-      maxChallengeTtl: 5m
-      assets:
-        - network: eip155:8453
-          contract: "0x0000000000000000000000000000000000001001"
-          symbol: USDC
-          decimals: 6
-      facilitator:
-        id: x402-primary
-        baseUrl: https://facilitator.example/x402/
-        verifyPath: verify
-        settlePath: settle
-        timeout: 10s
-        maxResponseBytes: 262144
-        allowInsecureLoopback: false
-  chains:
-    - network: eip155:8453
-      family: evm
-      rpc:
-        endpoint: https://mainnet.base.org
-        timeout: 5s
-        maxResponseBytes: 262144
-        allowInsecureLoopback: false
-      minimumNativeBalance: "1000000000000000"
-      confirmationDepth: 1
-  approval:
-    requestTtl: 15m
-    grantTtl: 5m
-    expiryInterval: 15s
-    expiryBatchSize: 100
-    issuer: agentvault
-    audience: agentvault:approval-grant
-  reconciliation:
-    enabled: true
-    interval: 15s
-    leaseTtl: 45s
-    batchSize: 100
-    initialBackoff: 5s
-    maxBackoff: 5m
-  walletBalanceSync:
-    enabled: true
-    interval: 3m
-    batchSize: 1000
+      gatewayName: agentvault-authguard
+      sectionName: http
+      hostnames: [agentvault.example.com]
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { cpu: 250m, memory: 128Mi }
 
-management:
-  health:
-    probeTimeout: 1s
-  otel:
-    enabled: false
-    endpoint: http://otel-collector.observability.svc:4317
-    protocol: grpc
-    timeout: 5s
-    sampleRate: 1.0
-  serviceMonitor: { enabled: false, interval: 30s, labels: {} }
+  # Optional native agentvault.yaml override. Keep empty to use the canonical
+  # etc/agentvault.yaml embedded in the runtime image; use this only for
+  # complex maps/lists that cannot be expressed as scalar ENV overrides.
+  agentvault-config: ""
 
-networkPolicy:
-  enabled: true
-  envoyNamespaceSelector: {}
-  envoyPodSelector: { app.kubernetes.io/name: envoy }
-  monitoringNamespaceSelector: {}
-  monitoringPodSelector: { app.kubernetes.io/name: prometheus }
-
-# Default-on umbrella dependency, matching Flowgent's integration pattern.
-# AuthGuard owns authentication/authorization; AgentVault is only a protected
-# workload and verifies the signed context produced by the edge.
-authguard-middleware:
+# AuthGuard dependency middleware. This subtree is passed directly to the
+# AuthGuard dependency chart without translating its native values.
+authguard:
   enabled: true
   envoy_gateway:
     enabled: true

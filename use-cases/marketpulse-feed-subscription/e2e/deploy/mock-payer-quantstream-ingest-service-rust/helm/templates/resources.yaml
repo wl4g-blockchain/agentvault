@@ -33,6 +33,10 @@ spec:
       labels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
     spec:
       restartPolicy: {{ .Values.workload.restartPolicy }}
+{{- with .Values.initContainers }}
+      initContainers:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -90,7 +94,7 @@ spec:
 {{- end }}
           resources:
 {{ toYaml .Values.resources | indent 12 }}
-{{- if or .Values.config.enabled .Values.persistence.enabled }}
+{{- if or .Values.config.enabled .Values.persistence.enabled .Values.extraVolumes }}
       volumes:
 {{- if .Values.config.enabled }}
         - name: config
@@ -99,6 +103,9 @@ spec:
 {{- if .Values.persistence.enabled }}
         - name: data
           emptyDir: {}
+{{- end }}
+{{- with .Values.extraVolumes }}
+{{ toYaml . | indent 8 }}
 {{- end }}
 {{- end }}
 {{- if .Values.config.enabled }}

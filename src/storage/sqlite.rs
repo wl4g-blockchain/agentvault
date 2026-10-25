@@ -1666,7 +1666,7 @@ mod catalog {
             model::{wallet::Wallet, Amount, AssetIdentity, BudgetUnit},
             storage::{
                 EncryptedWalletKeyVersion, Page, PageRequest, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage,
-                WalletCustody, WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
+                WalletCreationConfig, WalletCustody, WalletKeyStatus, WalletStorage,
             },
             Error, Result,
         };
@@ -1703,9 +1703,9 @@ mod catalog {
                 self.create_local_configured(
                     wallet,
                     key,
-                    &WalletProvisioningConfig {
+                    &WalletCreationConfig {
                         enabled: true,
-                        ..WalletProvisioningConfig::default()
+                        ..WalletCreationConfig::default()
                     },
                 )
                 .await
@@ -1715,11 +1715,11 @@ mod catalog {
                 &self,
                 wallet: &Wallet,
                 key: &EncryptedWalletKeyVersion,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet> {
                 let wallet = canonical_wallet(wallet)?;
                 validate_key_for_wallet(&wallet, key, true)?;
-                validate_provisioning_config(config)?;
+                validate_creation_config(config)?;
                 if key.version != 1 {
                     return Err(Error::InvalidKey("initial wallet key version must be 1".to_owned()));
                 }
@@ -1738,9 +1738,9 @@ mod catalog {
             async fn create_external(&self, wallet: &Wallet) -> Result<Wallet> {
                 self.create_external_configured(
                     wallet,
-                    &WalletProvisioningConfig {
+                    &WalletCreationConfig {
                         enabled: true,
-                        ..WalletProvisioningConfig::default()
+                        ..WalletCreationConfig::default()
                     },
                 )
                 .await
@@ -1749,10 +1749,10 @@ mod catalog {
             async fn create_external_configured(
                 &self,
                 wallet: &Wallet,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet> {
                 let wallet = canonical_wallet(wallet)?;
-                validate_provisioning_config(config)?;
+                validate_creation_config(config)?;
                 let wallet_for_write = wallet.clone();
                 let config = config.clone();
                 self.immediate(|connection| {
@@ -2158,7 +2158,7 @@ mod catalog {
             Ok(())
         }
 
-        fn validate_provisioning_config(config: &WalletProvisioningConfig) -> Result<()> {
+        fn validate_creation_config(config: &WalletCreationConfig) -> Result<()> {
             config
                 .validate()
                 .map_err(|field| Error::InvalidRequest(format!("invalid initial wallet {field}")))
@@ -2168,7 +2168,7 @@ mod catalog {
             connection: &mut sqlx::SqliteConnection,
             wallet: &Wallet,
             custody: WalletCustody,
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
         ) -> Result<()> {
             let public_key = if wallet.public_key.is_empty() {
                 None
@@ -2446,8 +2446,8 @@ mod key_repository {
         config::WalletKeyRingConfig,
         model::wallet::{is_evm_wallet_algorithm, is_solana_wallet_algorithm, Wallet, EVM_EOA_ALGORITHM},
         storage::{
-            EncryptedWalletKeyVersion, IntentBoundPaymentSignatureRequest, WalletKeyManager, WalletKeyStatus,
-            WalletPaymentSignature, WalletPaymentSigner, WalletProvisioningConfig, WalletStorage as _,
+            EncryptedWalletKeyVersion, IntentBoundPaymentSignatureRequest, WalletCreationConfig, WalletKeyManager,
+            WalletKeyStatus, WalletPaymentSignature, WalletPaymentSigner, WalletStorage as _,
         },
         utils::{
             aead::{new_uuid_nonce, parse_uuid_nonce, Aes256GcmUuidNonce, UuidNonce, WALLET_KEY_ENCRYPTION_SCHEME},
@@ -2523,7 +2523,7 @@ mod key_repository {
             wallet_id: &str,
             algorithm: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             self.create_local_configured_for_algorithm(wallet_id, algorithm, private_key, config, created_at)
@@ -2625,9 +2625,9 @@ mod key_repository {
             self.create_local_configured(
                 wallet_id,
                 private_key,
-                &WalletProvisioningConfig {
+                &WalletCreationConfig {
                     enabled: true,
-                    ..WalletProvisioningConfig::default()
+                    ..WalletCreationConfig::default()
                 },
                 created_at,
             )
@@ -2645,7 +2645,7 @@ mod key_repository {
             &self,
             wallet_id: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             self.create_local_configured_for_algorithm(wallet_id, EVM_EOA_ALGORITHM, private_key, config, created_at)
@@ -2664,7 +2664,7 @@ mod key_repository {
             wallet_id: &str,
             algorithm: &str,
             private_key: &[u8],
-            config: &WalletProvisioningConfig,
+            config: &WalletCreationConfig,
             created_at: i64,
         ) -> Result<Wallet> {
             validate_wallet_id(wallet_id)?;

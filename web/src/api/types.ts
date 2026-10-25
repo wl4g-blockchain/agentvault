@@ -195,6 +195,24 @@ export type Wallet = {
   created_at: number
 }
 
+export type WalletImportSession = {
+  session_id: string
+  server_public_key: string
+  expires_at: number
+}
+
+export type EncryptedWalletPrivateKey = {
+  session_id: string
+  ciphertext: string
+}
+
+export type CreateWalletInput = {
+  id: string
+  algorithm: 'secp256k1'
+  enabled: boolean
+  encrypted_private_key: EncryptedWalletPrivateKey
+}
+
 export type PaymentPolicyLimits = {
   max_per_payment: Amount
   max_per_day: Amount

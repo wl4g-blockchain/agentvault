@@ -7,6 +7,7 @@ import { OverviewPage } from './pages/OverviewPage'
 import { RuntimePage } from './pages/RuntimePage'
 import { ScenariosPage } from './pages/ScenariosPage'
 import { TransactionsPage } from './pages/TransactionsPage'
+import { WalletsPage } from './pages/WalletsPage'
 
 export function App() {
   return <Routes>
@@ -18,6 +19,7 @@ export function App() {
       <Route path="balances" element={<BalancesPage />} />
       <Route path="clients" element={<ClientsPage />} />
       <Route path="scenarios" element={<ScenariosPage />} />
+      <Route path="wallets" element={<WalletsPage />} />
       <Route path="runtime" element={<RuntimePage />} />
     </Route>
     <Route path="*" element={<Navigate to="/" replace />} />

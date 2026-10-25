@@ -1,14 +1,20 @@
-//! Idempotent provisioning for operator-owned payment identities and policy.
+//! Idempotent console resource import for payment identities and policy.
 //!
-//! The manifest contains only public metadata and environment-variable names.
+//! Resource files contain only public metadata and environment-variable names.
 //! Local private keys are resolved at execution time, zeroized in memory, and
 //! persisted only through the versioned SQL envelope-encryption repositories.
 
 use std::{
-    collections::BTreeSet, fs::OpenOptions, io::Read as _, os::unix::fs::OpenOptionsExt as _, path::Path, sync::Arc,
+    collections::BTreeSet,
+    fs::{self, OpenOptions},
+    io::Read as _,
+    os::unix::fs::OpenOptionsExt as _,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{de::Error as _, Deserialize, Deserializer};
+use serde_yaml::{Mapping, Value};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -20,32 +26,68 @@ use crate::{
     },
     storage::{
         ApproverStorage, ClientStorage, OfferStorage, PolicyStorage, ScenarioStorage, StorageFactory, StoragePorts,
-        WalletCustody, WalletKeyManager, WalletProvisioningConfig, WalletStorage,
+        WalletCreationConfig, WalletCustody, WalletKeyManager, WalletStorage,
     },
     utils::{crypto, secret::read_secret_env},
     Error, Result,
 };
 
-const MANIFEST_VERSION: u32 = 1;
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-const MAX_MANIFEST_BODY_BYTES: usize = 1024 * 1024;
+const CONSOLE_VERSION: &str = "core.agentvault.io/v1";
+const MAX_RESOURCE_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_RESOURCE_FILE_BODY_BYTES: usize = 1024 * 1024;
+const MAX_RESOURCE_FILES: usize = 1_000;
+const MAX_IMPORT_DEPTH: usize = 8;
+
+#[derive(Default)]
+struct ImportBatch {
+    clients: Vec<ClientSpec>,
+    wallets: Vec<WalletSpec>,
+    scenarios: Vec<ScenarioSpec>,
+    policies: Vec<PolicySpec>,
+    offers: Vec<OfferSpec>,
+    approvers: Vec<ApproverSpec>,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProvisionManifest {
-    version: u32,
+struct ResourceEnvelope {
+    #[serde(rename = "consoleVersion")]
+    console_version: String,
+    kind: ResourceKind,
+    metadata: ResourceMetadata,
+    data: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceMetadata {
+    name: String,
     #[serde(default)]
-    clients: Vec<ClientSpec>,
-    #[serde(default)]
-    wallets: Vec<WalletSpec>,
-    #[serde(default)]
-    scenarios: Vec<ScenarioSpec>,
-    #[serde(default)]
-    policies: Vec<PolicySpec>,
-    #[serde(default)]
-    offers: Vec<OfferSpec>,
-    #[serde(default)]
-    approvers: Vec<ApproverSpec>,
+    status: ResourceStatus,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResourceStatus {
+    #[default]
+    Active,
+    Disabled,
+}
+
+impl ResourceStatus {
+    const fn enabled(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum ResourceKind {
+    Client,
+    Wallet,
+    Scenario,
+    Policy,
+    Offer,
+    Approver,
 }
 
 #[derive(Deserialize)]
@@ -215,14 +257,14 @@ const fn default_true() -> bool {
     true
 }
 
-/// Counts produced by one idempotent provisioning run.
+/// Counts produced by one idempotent console import.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ProvisioningReport {
+pub struct ImportReport {
     pub created: usize,
     pub reused: usize,
 }
 
-impl ProvisioningReport {
+impl ImportReport {
     fn created(&mut self) {
         self.created += 1;
     }
@@ -232,7 +274,7 @@ impl ProvisioningReport {
     }
 }
 
-struct ProvisioningPorts {
+struct ImportPorts {
     clients: Arc<dyn ClientStorage>,
     scenarios: Arc<dyn ScenarioStorage>,
     policies: Arc<dyn PolicyStorage>,
@@ -242,29 +284,30 @@ struct ProvisioningPorts {
     local_keys: Arc<dyn WalletKeyManager>,
 }
 
-/// Applies one versioned JSON manifest to the configured SQL authority.
+/// Imports canonical `AgentVault` resource files into the configured SQL
+/// authority.
 ///
 /// Existing records are reused only when their immutable and effective
-/// configuration exactly matches the manifest. Drift fails closed instead of
+/// configuration exactly matches the resource. Drift fails closed instead of
 /// silently mutating payment authority.
 ///
 /// # Errors
 ///
-/// Fails for an unsafe manifest file, invalid/duplicate resources, unavailable
+/// Fails for unsafe input paths, invalid or duplicate resources, unavailable
 /// environment secrets, configuration drift, or any SQL transaction failure.
-pub async fn provision_from_path(config: &AppConfig, manifest_path: impl AsRef<Path>) -> Result<ProvisioningReport> {
-    let mut manifest = read_manifest(manifest_path.as_ref())?;
-    normalize_manifest(&mut manifest);
-    validate_manifest(&manifest)?;
+pub async fn import_from_paths(config: &AppConfig, paths: &[PathBuf]) -> Result<ImportReport> {
+    let mut batch = read_resources(paths)?;
+    normalize_batch(&mut batch);
+    validate_batch(&batch)?;
     let factory = StorageFactory::new();
+    let storage = factory.create(&config.storage).await?;
     let result = async {
-        let storage = factory.create(&config.storage).await?;
         let local_keys = Arc::clone(&storage).wallet_key_manager(&config.agentvault.key_management)?;
-        let ports = provisioning_ports(Arc::clone(&storage).ports(), local_keys);
-        apply_manifest(&ports, manifest).await
+        let ports = import_ports(Arc::clone(&storage).ports(), local_keys);
+        apply_batch(&ports, batch).await
     }
     .await;
-    let close = factory.shutdown_all().await;
+    let close = storage.close().await;
     match result {
         Err(error) => Err(error),
         Ok(report) => {
@@ -274,7 +317,92 @@ pub async fn provision_from_path(config: &AppConfig, manifest_path: impl AsRef<P
     }
 }
 
-fn read_manifest(path: &Path) -> Result<ProvisionManifest> {
+fn read_resources(paths: &[PathBuf]) -> Result<ImportBatch> {
+    if paths.is_empty() {
+        return Err(Error::InvalidRequest(
+            "console import requires at least one path".to_owned(),
+        ));
+    }
+    let mut files = Vec::new();
+    for path in paths {
+        collect_resource_files(path, 0, &mut files)?;
+    }
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return Err(Error::InvalidRequest(
+            "console import found no YAML or JSON resources".to_owned(),
+        ));
+    }
+    let mut batch = ImportBatch::default();
+    for path in files {
+        read_resource_file(&path, &mut batch)?;
+    }
+    Ok(batch)
+}
+
+fn collect_resource_files(path: &Path, depth: usize, files: &mut Vec<PathBuf>) -> Result<()> {
+    if depth > MAX_IMPORT_DEPTH || files.len() >= MAX_RESOURCE_FILES {
+        return Err(Error::Config("console import path limits were exceeded".to_owned()));
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|source| Error::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(Error::Config(format!(
+            "console import path must not be a symbolic link: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_file() {
+        if is_resource_file(path) {
+            files.push(path.to_path_buf());
+        } else {
+            return Err(Error::Config(format!(
+                "console import file must end in .yaml, .yml, or .json: {}",
+                path.display()
+            )));
+        }
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(Error::Config(format!(
+            "console import path is not a regular file or directory: {}",
+            path.display()
+        )));
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|source| Error::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|source| Error::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let child = entry.path();
+        let child_metadata = fs::symlink_metadata(&child).map_err(|source| Error::ReadFile {
+            path: child.clone(),
+            source,
+        })?;
+        if child_metadata.is_dir() || is_resource_file(&child) || child_metadata.file_type().is_symlink() {
+            collect_resource_files(&child, depth + 1, files)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_resource_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "yaml" | "yml" | "json"))
+}
+
+fn read_resource_file(path: &Path, batch: &mut ImportBatch) -> Result<()> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
@@ -287,55 +415,204 @@ fn read_manifest(path: &Path) -> Result<ProvisionManifest> {
         path: path.to_path_buf(),
         source,
     })?;
-    if !metadata.is_file() || metadata.len() > MAX_MANIFEST_BYTES {
+    if !metadata.is_file() || metadata.len() > MAX_RESOURCE_FILE_BYTES {
         return Err(Error::Config(
-            "provisioning manifest must be a regular file no larger than 1 MiB".to_owned(),
+            "console resource must be a regular file no larger than 1 MiB".to_owned(),
         ));
     }
-    let mut body = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(MAX_MANIFEST_BODY_BYTES));
-    file.take(MAX_MANIFEST_BYTES + 1)
+    let mut body = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(MAX_RESOURCE_FILE_BODY_BYTES));
+    file.take(MAX_RESOURCE_FILE_BYTES + 1)
         .read_to_end(&mut body)
         .map_err(|source| Error::ReadFile {
             path: path.to_path_buf(),
             source,
         })?;
-    if body.len() > MAX_MANIFEST_BODY_BYTES {
+    if body.len() > MAX_RESOURCE_FILE_BODY_BYTES {
         return Err(Error::Config(
-            "provisioning manifest changed while reading or exceeds 1 MiB".to_owned(),
+            "console resource changed while reading or exceeds 1 MiB".to_owned(),
         ));
     }
-    serde_json::from_slice(&body).map_err(Error::from)
-}
-
-fn validate_manifest(manifest: &ProvisionManifest) -> Result<()> {
-    if manifest.version != MANIFEST_VERSION {
+    let mut documents = 0_usize;
+    for document in serde_yaml::Deserializer::from_slice(&body) {
+        let envelope = ResourceEnvelope::deserialize(document)
+            .map_err(|error| Error::Config(format!("invalid console resource {}: {error}", path.display())))?;
+        append_resource(batch, envelope, path)?;
+        documents += 1;
+    }
+    if documents == 0 {
         return Err(Error::Config(format!(
-            "unsupported provisioning manifest version {}",
-            manifest.version
+            "console resource file is empty: {}",
+            path.display()
         )));
     }
-    unique(&manifest.clients, |item| item.id.as_str(), "client id")?;
-    unique(
-        &manifest.clients,
-        |item| item.auth_principal.as_str(),
-        "client principal",
-    )?;
-    unique(&manifest.wallets, |item| item.id.as_str(), "wallet id")?;
-    unique(&manifest.scenarios, |item| item.id.as_str(), "scenario id")?;
-    unique(&manifest.policies, |item| item.id.as_str(), "policy id")?;
-    unique(&manifest.offers, |item| item.id.as_str(), "offer id")?;
+    Ok(())
+}
+
+fn append_resource(batch: &mut ImportBatch, envelope: ResourceEnvelope, path: &Path) -> Result<()> {
+    if envelope.console_version != CONSOLE_VERSION {
+        return Err(Error::Config(format!(
+            "unsupported consoleVersion in {}: {}",
+            path.display(),
+            envelope.console_version
+        )));
+    }
+    if envelope.metadata.name.trim().is_empty() {
+        return Err(Error::InvalidRequest(format!(
+            "console resource in {} has an empty metadata.name",
+            path.display()
+        )));
+    }
+    let enabled = envelope.metadata.status.enabled();
+    match envelope.kind {
+        ResourceKind::Client => batch.clients.push(decode_named_resource(
+            envelope.metadata.name,
+            enabled,
+            envelope.data,
+            path,
+        )?),
+        ResourceKind::Wallet => batch.wallets.push(decode_named_resource(
+            envelope.metadata.name,
+            enabled,
+            envelope.data,
+            path,
+        )?),
+        ResourceKind::Scenario => batch.scenarios.push(decode_named_resource(
+            envelope.metadata.name,
+            enabled,
+            envelope.data,
+            path,
+        )?),
+        ResourceKind::Policy => batch.policies.push(decode_named_resource(
+            envelope.metadata.name,
+            enabled,
+            envelope.data,
+            path,
+        )?),
+        ResourceKind::Offer => batch.offers.push(decode_named_resource(
+            envelope.metadata.name,
+            enabled,
+            envelope.data,
+            path,
+        )?),
+        ResourceKind::Approver => {
+            let mut value = resource_mapping(envelope.data, path)?;
+            insert_field(&mut value, "enabled", Value::Bool(enabled), path)?;
+            batch
+                .approvers
+                .push(serde_yaml::from_value(Value::Mapping(value)).map_err(|error| {
+                    Error::Config(format!("invalid Approver resource {}: {error}", path.display()))
+                })?);
+        }
+    }
+    Ok(())
+}
+
+fn decode_named_resource<T: for<'de> Deserialize<'de>>(
+    name: String,
+    enabled: bool,
+    data: Value,
+    path: &Path,
+) -> Result<T> {
+    let mut value = resource_mapping(data, path)?;
+    insert_field(&mut value, "id", Value::String(name), path)?;
+    insert_field(&mut value, "enabled", Value::Bool(enabled), path)?;
+    serde_yaml::from_value(Value::Mapping(value))
+        .map_err(|error| Error::Config(format!("invalid console resource {}: {error}", path.display())))
+}
+
+fn resource_mapping(data: Value, path: &Path) -> Result<Mapping> {
+    match data {
+        Value::Mapping(value) => Ok(value),
+        _ => Err(Error::Config(format!(
+            "console resource data must be a mapping: {}",
+            path.display()
+        ))),
+    }
+}
+
+fn insert_field(mapping: &mut Mapping, field: &str, value: Value, path: &Path) -> Result<()> {
+    if mapping.insert(Value::String(field.to_owned()), value).is_some() {
+        return Err(Error::Config(format!(
+            "console resource {} duplicates metadata-owned field {field}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Converts aggregate test fixtures into the canonical one-resource-per-
+/// document import format. Production import intentionally has no aggregate
+/// compatibility path.
+#[cfg(test)]
+pub(crate) fn encode_test_resource_documents(aggregate: &serde_json::Value) -> String {
+    let kinds = [
+        ("clients", "Client"),
+        ("wallets", "Wallet"),
+        ("scenarios", "Scenario"),
+        ("policies", "Policy"),
+        ("offers", "Offer"),
+        ("approvers", "Approver"),
+    ];
+    let mut documents = Vec::new();
+    for (collection, kind) in kinds {
+        let Some(resources) = aggregate.get(collection).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for resource in resources {
+            let mut data = resource
+                .as_object()
+                .unwrap_or_else(|| panic!("{collection} test fixture entry must be an object"))
+                .clone();
+            let name = if kind == "Approver" {
+                format!(
+                    "{}--{}",
+                    data.get("scenario_id")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("approver scenario_id"),
+                    data.get("auth_principal")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("approver auth_principal")
+                )
+            } else {
+                data.remove("id")
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| panic!("{kind} test fixture requires id"))
+            };
+            let enabled = data.remove("enabled").and_then(|value| value.as_bool()).unwrap_or(true);
+            let document = serde_json::json!({
+                "consoleVersion": CONSOLE_VERSION,
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "status": if enabled { "active" } else { "disabled" }
+                },
+                "data": data
+            });
+            documents.push(serde_yaml::to_string(&document).expect("encode canonical test resource"));
+        }
+    }
+    documents.join("---\n")
+}
+
+fn validate_batch(batch: &ImportBatch) -> Result<()> {
+    unique(&batch.clients, |item| item.id.as_str(), "client id")?;
+    unique(&batch.clients, |item| item.auth_principal.as_str(), "client principal")?;
+    unique(&batch.wallets, |item| item.id.as_str(), "wallet id")?;
+    unique(&batch.scenarios, |item| item.id.as_str(), "scenario id")?;
+    unique(&batch.policies, |item| item.id.as_str(), "policy id")?;
+    unique(&batch.offers, |item| item.id.as_str(), "offer id")?;
     let mut approvers = BTreeSet::new();
-    for approver in &manifest.approvers {
+    for approver in &batch.approvers {
         if !approvers.insert((&approver.scenario_id, &approver.auth_principal)) {
             return Err(Error::InvalidRequest(
-                "duplicate scenario approver in provisioning manifest".to_owned(),
+                "duplicate scenario approver in console import".to_owned(),
             ));
         }
     }
-    for wallet in &manifest.wallets {
+    for wallet in &batch.wallets {
         validate_wallet_spec(wallet)?;
     }
-    for policy in &manifest.policies {
+    for policy in &batch.policies {
         unique_sorted_strings(&policy.wallet_ids, "policy wallet id")?;
         unique_sorted_strings(&policy.protocols, "policy protocol")?;
         unique_sorted_strings(&policy.networks, "policy network")?;
@@ -343,26 +620,26 @@ fn validate_manifest(manifest: &ProvisionManifest) -> Result<()> {
         unique_sorted_strings(&policy.allowed_origins, "policy origin")?;
         if policy.assets.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(Error::InvalidRequest(
-                "duplicate policy asset in provisioning manifest".to_owned(),
+                "duplicate policy asset in console import".to_owned(),
             ));
         }
     }
-    for offer in &manifest.offers {
+    for offer in &batch.offers {
         unique_sorted_strings(&offer.protocols, "offer protocol")?;
     }
     Ok(())
 }
 
-fn normalize_manifest(manifest: &mut ProvisionManifest) {
-    manifest.clients.sort_by(|left, right| left.id.cmp(&right.id));
-    manifest.wallets.sort_by(|left, right| left.id.cmp(&right.id));
-    manifest.scenarios.sort_by(|left, right| left.id.cmp(&right.id));
-    manifest.policies.sort_by(|left, right| left.id.cmp(&right.id));
-    manifest.offers.sort_by(|left, right| left.id.cmp(&right.id));
-    manifest.approvers.sort_by(|left, right| {
+fn normalize_batch(batch: &mut ImportBatch) {
+    batch.clients.sort_by(|left, right| left.id.cmp(&right.id));
+    batch.wallets.sort_by(|left, right| left.id.cmp(&right.id));
+    batch.scenarios.sort_by(|left, right| left.id.cmp(&right.id));
+    batch.policies.sort_by(|left, right| left.id.cmp(&right.id));
+    batch.offers.sort_by(|left, right| left.id.cmp(&right.id));
+    batch.approvers.sort_by(|left, right| {
         (&left.scenario_id, &left.auth_principal).cmp(&(&right.scenario_id, &right.auth_principal))
     });
-    for policy in &mut manifest.policies {
+    for policy in &mut batch.policies {
         policy.wallet_ids.sort();
         policy.protocols.sort();
         policy.networks.sort();
@@ -377,7 +654,7 @@ fn normalize_manifest(manifest: &mut ProvisionManifest) {
             ))
         });
     }
-    for offer in &mut manifest.offers {
+    for offer in &mut batch.offers {
         offer.protocols.sort();
     }
 }
@@ -385,7 +662,7 @@ fn normalize_manifest(manifest: &mut ProvisionManifest) {
 fn unique_sorted_strings(values: &[String], description: &str) -> Result<()> {
     if values.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(Error::InvalidRequest(format!(
-            "duplicate {description} in provisioning manifest"
+            "duplicate {description} in console import"
         )));
     }
     Ok(())
@@ -395,7 +672,7 @@ fn unique<'a, T>(items: &'a [T], key: impl Fn(&'a T) -> &'a str, description: &s
     let mut seen = BTreeSet::new();
     if items.iter().any(|item| !seen.insert(key(item))) {
         return Err(Error::InvalidRequest(format!(
-            "duplicate {description} in provisioning manifest"
+            "duplicate {description} in console import"
         )));
     }
     Ok(())
@@ -403,7 +680,7 @@ fn unique<'a, T>(items: &'a [T], key: impl Fn(&'a T) -> &'a str, description: &s
 
 fn validate_wallet_spec(wallet: &WalletSpec) -> Result<()> {
     if wallet.id.trim().is_empty() {
-        return Err(Error::InvalidRequest("provisioning wallet id is empty".to_owned()));
+        return Err(Error::InvalidRequest("imported wallet id is empty".to_owned()));
     }
     match &wallet.source {
         WalletSource::Local {
@@ -444,8 +721,8 @@ fn validate_wallet_spec(wallet: &WalletSpec) -> Result<()> {
     Ok(())
 }
 
-fn provisioning_ports(storage: StoragePorts, local_keys: Arc<dyn WalletKeyManager>) -> ProvisioningPorts {
-    ProvisioningPorts {
+fn import_ports(storage: StoragePorts, local_keys: Arc<dyn WalletKeyManager>) -> ImportPorts {
+    ImportPorts {
         clients: storage.clients,
         scenarios: storage.scenarios,
         policies: storage.policies,
@@ -456,29 +733,29 @@ fn provisioning_ports(storage: StoragePorts, local_keys: Arc<dyn WalletKeyManage
     }
 }
 
-async fn apply_manifest(ports: &ProvisioningPorts, manifest: ProvisionManifest) -> Result<ProvisioningReport> {
-    let provisioned_at = time::OffsetDateTime::now_utc().unix_timestamp();
-    if provisioned_at < 0 {
+async fn apply_batch(ports: &ImportPorts, batch: ImportBatch) -> Result<ImportReport> {
+    let imported_at = time::OffsetDateTime::now_utc().unix_timestamp();
+    if imported_at < 0 {
         return Err(Error::InvalidTransition(
-            "provisioning requires a non-negative UTC timestamp".to_owned(),
+            "console import requires a non-negative UTC timestamp".to_owned(),
         ));
     }
-    let mut report = ProvisioningReport::default();
+    let mut report = ImportReport::default();
 
-    provision_clients(ports, manifest.clients, provisioned_at, &mut report).await?;
-    provision_wallets(ports, manifest.wallets, provisioned_at, &mut report).await?;
-    provision_scenarios(ports, manifest.scenarios, provisioned_at, &mut report).await?;
-    provision_policies(ports, manifest.policies, provisioned_at, &mut report).await?;
-    provision_offers(ports, manifest.offers, provisioned_at, &mut report).await?;
-    provision_approvers(ports, manifest.approvers, provisioned_at, &mut report).await?;
+    import_clients(ports, batch.clients, imported_at, &mut report).await?;
+    import_wallets(ports, batch.wallets, imported_at, &mut report).await?;
+    import_scenarios(ports, batch.scenarios, imported_at, &mut report).await?;
+    import_policies(ports, batch.policies, imported_at, &mut report).await?;
+    import_offers(ports, batch.offers, imported_at, &mut report).await?;
+    import_approvers(ports, batch.approvers, imported_at, &mut report).await?;
     Ok(report)
 }
 
-async fn provision_clients(
-    ports: &ProvisioningPorts,
+async fn import_clients(
+    ports: &ImportPorts,
     specs: Vec<ClientSpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
         let desired = PaymentClient {
@@ -486,8 +763,8 @@ async fn provision_clients(
             name: spec.name,
             auth_principal: spec.auth_principal,
             enabled: spec.enabled,
-            created_at: provisioned_at,
-            updated_at: provisioned_at,
+            created_at: imported_at,
+            updated_at: imported_at,
         };
         match ports.clients.get(&desired.id).await? {
             Some(existing) if same_client(&existing, &desired) => report.reused(),
@@ -501,23 +778,23 @@ async fn provision_clients(
     Ok(())
 }
 
-async fn provision_wallets(
-    ports: &ProvisioningPorts,
+async fn import_wallets(
+    ports: &ImportPorts,
     specs: Vec<WalletSpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
-        provision_wallet(ports, spec, provisioned_at, report).await?;
+        import_wallet(ports, spec, imported_at, report).await?;
     }
     Ok(())
 }
 
-async fn provision_scenarios(
-    ports: &ProvisioningPorts,
+async fn import_scenarios(
+    ports: &ImportPorts,
     specs: Vec<ScenarioSpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
         let desired = PaymentScenario {
@@ -525,8 +802,8 @@ async fn provision_scenarios(
             client_id: spec.client_id,
             name: spec.name,
             enabled: spec.enabled,
-            created_at: provisioned_at,
-            updated_at: provisioned_at,
+            created_at: imported_at,
+            updated_at: imported_at,
         };
         match ports.scenarios.get(&desired.id).await? {
             Some(existing) if same_scenario(&existing, &desired) => report.reused(),
@@ -540,11 +817,11 @@ async fn provision_scenarios(
     Ok(())
 }
 
-async fn provision_policies(
-    ports: &ProvisioningPorts,
+async fn import_policies(
+    ports: &ImportPorts,
     specs: Vec<PolicySpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
         let desired = PaymentPolicy {
@@ -560,12 +837,12 @@ async fn provision_policies(
             inbound_limits: spec.inbound_limits,
             outbound_limits: spec.outbound_limits,
             enabled: spec.enabled,
-            created_at: provisioned_at,
-            updated_at: provisioned_at,
+            created_at: imported_at,
+            updated_at: imported_at,
         };
         desired
             .validate()
-            .map_err(|field| Error::InvalidRequest(format!("invalid provisioned policy {field}")))?;
+            .map_err(|field| Error::InvalidRequest(format!("invalid imported policy {field}")))?;
         match ports.policies.get(&desired.id).await? {
             Some(existing) if same_policy(&existing, &desired) => report.reused(),
             Some(_) => return Err(drift("policy", &desired.id)),
@@ -578,11 +855,11 @@ async fn provision_policies(
     Ok(())
 }
 
-async fn provision_offers(
-    ports: &ProvisioningPorts,
+async fn import_offers(
+    ports: &ImportPorts,
     specs: Vec<OfferSpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
         let desired = PaymentOffer {
@@ -595,12 +872,12 @@ async fn provision_offers(
             amount: spec.amount,
             wallet_id: spec.wallet_id,
             enabled: spec.enabled,
-            created_at: provisioned_at,
-            updated_at: provisioned_at,
+            created_at: imported_at,
+            updated_at: imported_at,
         };
         desired
             .validate()
-            .map_err(|field| Error::InvalidRequest(format!("invalid provisioned offer {field}")))?;
+            .map_err(|field| Error::InvalidRequest(format!("invalid imported offer {field}")))?;
         match ports.offers.get(&desired.id).await? {
             Some(existing) if same_offer(&existing, &desired) => report.reused(),
             Some(_) => return Err(drift("offer", &desired.id)),
@@ -613,19 +890,19 @@ async fn provision_offers(
     Ok(())
 }
 
-async fn provision_approvers(
-    ports: &ProvisioningPorts,
+async fn import_approvers(
+    ports: &ImportPorts,
     specs: Vec<ApproverSpec>,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
     for spec in specs {
         let desired = PaymentScenarioApprover {
             scenario_id: spec.scenario_id,
             auth_principal: spec.auth_principal,
             enabled: spec.enabled,
-            created_at: provisioned_at,
-            updated_at: provisioned_at,
+            created_at: imported_at,
+            updated_at: imported_at,
         };
         match ports
             .approvers
@@ -648,13 +925,13 @@ async fn provision_approvers(
     Ok(())
 }
 
-async fn provision_wallet(
-    ports: &ProvisioningPorts,
+async fn import_wallet(
+    ports: &ImportPorts,
     spec: WalletSpec,
-    provisioned_at: i64,
-    report: &mut ProvisioningReport,
+    imported_at: i64,
+    report: &mut ImportReport,
 ) -> Result<()> {
-    let (expected, private_key) = wallet_material(&spec, provisioned_at)?;
+    let (expected, private_key) = wallet_material(&spec, imported_at)?;
     if let Some(existing) = ports.wallets.get_payment_wallet(&spec.id).await? {
         if !same_wallet(&existing.wallet, &expected)
             || existing.custody != wallet_custody(&spec.source)
@@ -670,7 +947,7 @@ async fn provision_wallet(
         return Ok(());
     }
 
-    let config = WalletProvisioningConfig {
+    let config = WalletCreationConfig {
         enabled: spec.enabled,
         budget_unit: spec.budget_unit.clone(),
         max_per_payment: spec.max_per_payment,
@@ -679,10 +956,10 @@ async fn provision_wallet(
     match &spec.source {
         WalletSource::Local { algorithm, .. } => {
             let private_key = private_key
-                .ok_or_else(|| Error::InvalidTransition("local wallet provisioning key is unavailable".to_owned()))?;
+                .ok_or_else(|| Error::InvalidTransition("local wallet import key is unavailable".to_owned()))?;
             ports
                 .local_keys
-                .create_local(&spec.id, algorithm, &private_key, &config, provisioned_at)
+                .create_local(&spec.id, algorithm, &private_key, &config, imported_at)
                 .await?;
         }
         WalletSource::External { .. } => {
@@ -730,7 +1007,7 @@ fn wallet_material(spec: &WalletSpec, created_at: i64) -> Result<(Wallet, Option
 }
 
 fn private_key_from_env(variable: &str, algorithm: &str) -> Result<Zeroizing<Vec<u8>>> {
-    let encoded = read_secret_env(variable.trim(), "provisioned wallet private key", 1024)?;
+    let encoded = read_secret_env(variable.trim(), "imported wallet private key", 1024)?;
     let encoded = encoded.strip_prefix("0x").unwrap_or(encoded.as_str());
     let decoded = Zeroizing::new(
         hex::decode(encoded).map_err(|_| Error::InvalidKey(format!("private key in {variable} is not hexadecimal")))?,
@@ -780,10 +1057,10 @@ fn same_offer(left: &PaymentOffer, right: &PaymentOffer) -> bool {
 
 fn drift(kind: &str, id: &str) -> Error {
     Error::PaymentConflict(format!(
-        "provisioned {kind} {id} exists with different authoritative content"
+        "imported {kind} {id} exists with different authoritative content"
     ))
 }
 
 #[cfg(test)]
-#[path = "../../tests/handler/provisioning_test.rs"]
+#[path = "../../tests/handler/resource_import_test.rs"]
 mod tests;

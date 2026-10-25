@@ -1,20 +1,19 @@
 //! Shared durable-storage contracts, provider lifecycle, and aggregate transaction ports.
 
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 
 use crate::{
     config::{StorageConfig, StorageProvider, WalletKeyRingConfig},
     model::wallet::Wallet,
     utils::secret::read_secret_ref,
-    Error, Result,
+    Result,
 };
 
 use super::{postgres::PostgresStorage, sqlite::SqliteStorage};
 
-const MAX_STORAGE_DSN_BYTES: usize = 16 * 1024;
+const MAX_STORAGE_URL_BYTES: usize = 16 * 1024;
 
 mod catalog {
     mod approver {
@@ -216,17 +215,17 @@ mod catalog {
         }
 
         /// Initial lifecycle and aggregate-limit metadata committed with a new wallet.
-        /// Keeping this in the wallet creation transaction prevents provisioning
+        /// Keeping this in the wallet creation transaction prevents import or API
         /// crashes from leaving an unprovable half-configured authority record.
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
-        pub struct WalletProvisioningConfig {
+        pub struct WalletCreationConfig {
             pub enabled: bool,
             pub budget_unit: Option<BudgetUnit>,
             pub max_per_payment: Option<Amount>,
             pub max_per_day: Option<Amount>,
         }
 
-        impl WalletProvisioningConfig {
+        impl WalletCreationConfig {
             /// Validates initial wallet limit metadata.
             ///
             /// # Errors
@@ -455,7 +454,7 @@ mod catalog {
                 &self,
                 wallet: &Wallet,
                 key: &EncryptedWalletKeyVersion,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet>;
 
             /// Registers a read-only external recipient. No private-key row is
@@ -469,7 +468,7 @@ mod catalog {
             async fn create_external_configured(
                 &self,
                 wallet: &Wallet,
-                config: &WalletProvisioningConfig,
+                config: &WalletCreationConfig,
             ) -> Result<Wallet>;
 
             async fn get(&self, wallet_id: &str) -> Result<Option<Wallet>>;
@@ -529,8 +528,8 @@ mod catalog {
     pub use policy::PolicyStorage;
     pub use scenario::{ScenarioConfiguration, ScenarioStorage};
     pub use wallet::{
-        EncryptedWalletKeyVersion, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage, WalletCustody,
-        WalletKeyStatus, WalletProvisioningConfig, WalletStorage,
+        EncryptedWalletKeyVersion, PaymentWallet, WalletBalanceRecord, WalletBalanceStorage, WalletCreationConfig,
+        WalletCustody, WalletKeyStatus, WalletStorage,
     };
 }
 
@@ -1458,8 +1457,8 @@ mod transaction {
 
 pub use catalog::{
     ApproverStorage, ClientStorage, EncryptedWalletKeyVersion, OfferStorage, PaymentWallet, PolicyStorage,
-    ScenarioConfiguration, ScenarioStorage, WalletBalanceRecord, WalletBalanceStorage, WalletCustody, WalletKeyStatus,
-    WalletProvisioningConfig, WalletStorage,
+    ScenarioConfiguration, ScenarioStorage, WalletBalanceRecord, WalletBalanceStorage, WalletCreationConfig,
+    WalletCustody, WalletKeyStatus, WalletStorage,
 };
 pub use signing::{
     IntentBoundPaymentSignatureRequest, OutboundSigningAuthorization, OutboundSigningIdentity, OutboundSigningRead,
@@ -1505,7 +1504,7 @@ pub trait WalletKeyManager: WalletPaymentSigner {
         wallet_id: &str,
         algorithm: &str,
         private_key: &[u8],
-        config: &WalletProvisioningConfig,
+        config: &WalletCreationConfig,
         created_at: i64,
     ) -> Result<Wallet>;
 
@@ -1552,141 +1551,40 @@ pub type StorageLifecycleFuture = Pin<Box<dyn Future<Output = Result<()>> + 'sta
 pub type StorageHealthFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 pub type StorageCloseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 
-struct RegisteredStorage {
-    config: StorageConfig,
-    component: Arc<dyn IStorage>,
-}
-
-/// Sole factory and registry for authoritative storage components.
+/// Sole composition boundary for the authoritative storage provider.
 #[derive(Default)]
-pub struct StorageFactory {
-    registry: Mutex<BTreeMap<String, RegisteredStorage>>,
-}
+pub struct StorageFactory;
 
 impl StorageFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
-    /// Selects a provider, registers it, initializes it, and rolls registration
-    /// back on failure. A compatible instance key is reused by identity.
+    /// Selects and initializes the configured process-wide provider.
     ///
     /// # Errors
     ///
-    /// Returns an error when configuration or secrets are invalid, the key is
-    /// already bound to different configuration, or provider initialization
+    /// Returns an error when configuration, secrets, or provider initialization
     /// fails.
     pub async fn create(&self, config: &StorageConfig) -> Result<Arc<dyn IStorage>> {
-        validate_storage_instance_key(&config.instance_key)?;
-        let mut registry = self.registry.lock().await;
-        if let Some(registered) = registry.get(&config.instance_key) {
-            return if registered.config == *config {
-                Ok(Arc::clone(&registered.component))
-            } else {
-                Err(Error::Config(format!(
-                    "storage instance {} is already registered with different configuration",
-                    config.instance_key
-                )))
-            };
-        }
-
         let component: Arc<dyn IStorage> = match config.provider {
             StorageProvider::Sqlite => Arc::new(SqliteStorage::from_config(&config.sqlite)?),
             StorageProvider::Postgres => {
-                let dsn = read_secret_ref(&config.postgres.dsn, "PostgreSQL payment DSN", MAX_STORAGE_DSN_BYTES)?;
+                let url = read_secret_ref(&config.postgres.url, "PostgreSQL payment URL", MAX_STORAGE_URL_BYTES)?;
                 Arc::new(PostgresStorage::from_config(
-                    &dsn,
+                    &url,
                     config.postgres.max_connections,
                     config.postgres.connect_timeout,
                 )?)
             }
         };
-        registry.insert(
-            config.instance_key.clone(),
-            RegisteredStorage {
-                config: config.clone(),
-                component: Arc::clone(&component),
-            },
-        );
         if let Err(error) = component.init().await {
-            registry.remove(&config.instance_key);
-            drop(registry);
             let _ = component.close().await;
             return Err(error);
         }
         Ok(component)
     }
-
-    /// Returns an initialized authoritative storage by stable instance key.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the key is invalid or no storage is registered.
-    pub async fn get(&self, instance_key: &str) -> Result<Arc<dyn IStorage>> {
-        validate_storage_instance_key(instance_key)?;
-        self.registry
-            .lock()
-            .await
-            .get(instance_key)
-            .map(|registered| Arc::clone(&registered.component))
-            .ok_or_else(|| Error::NotFound(format!("storage instance {instance_key}")))
-    }
-
-    /// Unregisters before closing. Repeated close calls are idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the key is invalid or the provider cannot close.
-    pub async fn close(&self, instance_key: &str) -> Result<()> {
-        validate_storage_instance_key(instance_key)?;
-        let component = self
-            .registry
-            .lock()
-            .await
-            .remove(instance_key)
-            .map(|registered| registered.component);
-        if let Some(component) = component {
-            component.close().await?;
-        }
-        Ok(())
-    }
-
-    /// Unregisters all instances before closing every provider. All closes are
-    /// attempted and the first error is returned.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first provider shutdown failure after attempting every
-    /// registered storage instance.
-    pub async fn shutdown_all(&self) -> Result<()> {
-        let components = {
-            let mut registry = self.registry.lock().await;
-            std::mem::take(&mut *registry)
-                .into_values()
-                .map(|registered| registered.component)
-                .collect::<Vec<_>>()
-        };
-        let mut first_error = None;
-        for component in components {
-            if let Err(error) = component.close().await {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-}
-
-fn validate_storage_instance_key(value: &str) -> Result<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-    {
-        return Err(Error::Config("storage.instance_key is invalid".to_owned()));
-    }
-    Ok(())
 }
 
 /// Bounded, offset-based page request used by management queries.

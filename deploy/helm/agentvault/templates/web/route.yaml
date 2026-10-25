@@ -1,5 +1,6 @@
-{{- $middleware := index .Values "authguard-middleware" -}}
-{{- if and .Values.routes.enabled $middleware.enabled .Values.web.enabled }}
+{{- $authguard := .Values.authguard -}}
+{{- $frontend := .Values.agentvault.frontend -}}
+{{- if and $frontend.route.enabled $authguard.enabled $frontend.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -8,11 +9,11 @@ metadata:
     {{- include "agentvault.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - { name: {{ .Values.routes.gatewayName }}, sectionName: {{ .Values.routes.sectionName }} }
-  {{- with .Values.routes.hostnames }}
+    - { name: {{ $frontend.route.gatewayName }}, sectionName: {{ $frontend.route.sectionName }} }
+  {{- with $frontend.route.hostnames }}
   hostnames: {{ toYaml . | nindent 4 }}
   {{- end }}
   rules:
     - matches: [{ path: { type: PathPrefix, value: / } }]
-      backendRefs: [{ name: {{ include "agentvault.fullname" . }}-web, port: {{ .Values.web.service.port }} }]
+      backendRefs: [{ name: {{ include "agentvault.fullname" . }}-web, port: {{ $frontend.service.port }} }]
 {{- end }}

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 
-use crate::{handler::provision_from_path, AgentVaultServer, AppConfig};
+use crate::{handler::import_from_paths, AgentVaultServer, AppConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "agentvault", version, about = "AgentVault payment infrastructure")]
@@ -18,11 +18,20 @@ struct Cli {
 enum Command {
     /// Run the configured payment and management components.
     Serve,
-    /// Idempotently register payment identities, wallets, policy, and offers.
-    Provision {
-        /// Versioned JSON manifest containing public metadata and secret environment references.
-        #[arg(long)]
-        manifest: PathBuf,
+    /// Operate on declarative `AgentVault` resources.
+    Console {
+        #[command(subcommand)]
+        operation: ConsoleCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConsoleCommand {
+    /// Idempotently import resource YAML/JSON files or directories.
+    Import {
+        /// Resource files or directories. Directories are traversed in stable order.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -30,18 +39,20 @@ enum Command {
 ///
 /// # Errors
 ///
-/// Returns configuration, provisioning, or runtime startup failures.
+/// Returns configuration, resource-import, or runtime startup failures.
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = AppConfig::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
     match cli.command {
         Command::Serve => AgentVaultServer::assemble(config).await?.run().await,
-        Command::Provision { manifest } => {
-            let report = provision_from_path(&config, &manifest)
+        Command::Console {
+            operation: ConsoleCommand::Import { paths },
+        } => {
+            let report = import_from_paths(&config, &paths)
                 .await
-                .with_context(|| format!("apply {}", manifest.display()))?;
+                .context("import AgentVault console resources")?;
             println!(
-                "provisioning completed: {} created, {} reused",
+                "resource import completed: {} created, {} reused",
                 report.created, report.reused
             );
             Ok(())

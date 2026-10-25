@@ -613,19 +613,16 @@ fn live_solana_storage_config(database: &std::path::Path, kek_env: &str) -> crat
     config
 }
 
-async fn provision_live_solana_storage(
+async fn import_live_solana_storage(
     config: &crate::config::AppConfig,
     manifest_path: &std::path::Path,
     manifest: &Value,
 ) -> std::sync::Arc<crate::storage::sqlite::SqliteStorage> {
-    std::fs::write(
-        manifest_path,
-        serde_json::to_vec(manifest).expect("encode live Solana provisioning manifest"),
-    )
-    .expect("write live Solana provisioning manifest");
-    crate::handler::provision_from_path(config, manifest_path)
+    std::fs::write(manifest_path, crate::handler::encode_test_resource_documents(manifest))
+        .expect("write live Solana resource documents");
+    crate::handler::import_from_paths(config, &[manifest_path.to_path_buf()])
         .await
-        .expect("provision live Solana Vault storage");
+        .expect("import live Solana Vault resources");
     std::sync::Arc::new(
         crate::storage::sqlite::SqliteStorage::connect(&config.storage.sqlite)
             .await
@@ -1057,13 +1054,13 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
             "asset": policy_asset, "amount": "1000000", "wallet_id": "payee-wallet"
         }]
     });
-    let payer_storage = provision_live_solana_storage(
+    let payer_storage = import_live_solana_storage(
         &payer_config,
         &temporary.path().join("payer-manifest.json"),
         &payer_manifest,
     )
     .await;
-    let payee_storage = provision_live_solana_storage(
+    let payee_storage = import_live_solana_storage(
         &payee_config,
         &temporary.path().join("payee-manifest.json"),
         &payee_manifest,

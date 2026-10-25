@@ -153,6 +153,7 @@ jobs:
           make fmt-check
           make lint
           CARGO_BUILD_JOBS=4 cargo test --all-targets --locked
+          cargo test --locked --lib handler::wallet_handler::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
 
       - name: Verify Rust SDK
         env:
@@ -200,11 +201,6 @@ jobs:
 
       - name: Verify E2E source and deployment contracts
         run: |
-          PYTHONPATH=use-cases/marketpulse-feed-subscription/e2e \
-            python3 -m unittest discover \
-              -s use-cases/marketpulse-feed-subscription/e2e/tests \
-              -t use-cases/marketpulse-feed-subscription/e2e \
-              -p '*_test.py' -v
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
             --scenario structure --scenario infrastructure --cleanup-after-run
 

@@ -13,9 +13,10 @@ mod outbound_evidence;
 mod outbound_signing_handler;
 mod payment_handler;
 mod policy_handler;
-mod provisioning;
+mod resource_import;
 mod scenario_handler;
 mod settlement_handler;
+mod wallet_handler;
 mod x402_facilitator;
 mod x402_wire;
 
@@ -45,7 +46,9 @@ pub use outbound_signing_handler::{
 };
 pub use payment_handler::{AuthorizePayment, PaymentHandler};
 pub use policy_handler::{PolicyDecision, PolicyEngine, PolicyEvaluation, WalletBudget};
-pub use provisioning::{provision_from_path, ProvisioningReport};
+#[cfg(test)]
+pub(crate) use resource_import::encode_test_resource_documents;
+pub use resource_import::{import_from_paths, ImportReport};
 pub(crate) use scenario_handler::UNRESTRICTED_PRINCIPAL;
 pub use scenario_handler::{AccessContext, ScenarioHandler};
 
@@ -56,6 +59,7 @@ pub use settlement_handler::{
     SettlementProviderConfig, SettlementProviderRegistry, SettlementProviderRequest, SettlementProviderResult,
     VerifyIncomingPayment,
 };
+pub use wallet_handler::{CreateEncryptedWallet, EncryptedWalletPrivateKey, WalletHandler, WalletImportSession};
 pub use x402_facilitator::X402FacilitatorProvider;
 
 #[cfg(test)]
