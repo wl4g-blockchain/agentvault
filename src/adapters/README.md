@@ -9,7 +9,7 @@ machines out of business code:
 | Go | `StandardPayerMiddleware` (`net/http`) | `GinPayeeMiddleware` / `StandardPayeeMiddleware` |
 | Python | `HttpxPayerMiddleware` | `FastPayeeMiddleware` (ASGI/FastAPI) |
 | TypeScript | `FetchPayerMiddleware` | `ExpressPayeeMiddleware` |
-| Java | `SpringInterceptorPayerMiddleware` | `SpringInterceptorPayeeMiddleware` |
+| Java | `SpringRestPayerMiddleware` | `SpringInterceptorPayeeMiddleware` |
 
 `PayerMiddleware` owns 402 detection, stable operation identity, approval wait,
 credential-origin binding, bounded retry, and settlement-response reporting.

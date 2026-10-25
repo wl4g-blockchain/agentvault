@@ -39,7 +39,7 @@ use crate::{
         AuthorizePaymentRequest, CreateChallengeRequest, PaymentApi, ReportOutboundResponseRequest,
         ResolveOfferRequest, SettlePaymentRequest, SubmitApprovalDecisionRequest, VerifyPaymentRequest,
     },
-    handler::job::{PaymentEventDelivery, PaymentEventDispatcher, PaymentEventDispatcherConfig, PaymentEventSink},
+    handler::{PaymentEventDelivery, PaymentEventDispatcher, PaymentEventDispatcherConfig, PaymentEventSink},
     storage::{ClientStorage, OutboxDeliveryClass, OutboxLeaseRequest, OutboxMessage, OutboxStorage, ScenarioStorage},
     utils::secret::read_secret_ref,
     Error,

@@ -18,7 +18,7 @@ from agentvault.protocol import X402Adapter
 class X402AdapterTest(unittest.TestCase):
     def test_native_challenge_header(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         required = fixture["protocols"]["x402"]["challenge_response"]["result"][
             "structuredContent"
@@ -48,7 +48,7 @@ class X402AdapterTest(unittest.TestCase):
 
     def test_chain_specific_v2_payloads_and_crossovers(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "x402_v2_chain_payloads.json")
+            (Path(__file__).resolve().parents[4] / "tests" / "x402_v2_chain_payloads.json")
             .read_text()
         )
         evm = fixture["cases"]["evm_eip3009"]["payment_payload"]

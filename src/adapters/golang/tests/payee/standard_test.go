@@ -390,7 +390,7 @@ func payeeJSONResponse(t *testing.T, value any) transport.TransportResponse {
 
 func readPayeeMCPFixture(t *testing.T) map[string]any {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payment_protocol_mcp.json"))
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "payment_protocol_mcp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -82,6 +82,29 @@ Dashboard checks:
   --matrix-evidence-run <completed-matrix-run>)
 ```
 
+## Management console
+
+`agentvault console` opens the interactive administrator console; the same
+commands can be executed non-interactively. Catalog creation reuses the
+canonical resource importer, lifecycle changes reuse the storage/domain ports,
+approval decisions reuse the production approval state machine, and payment,
+approval, Ledger, and Event history is read-only.
+
+```bash
+agentvault --config etc/agentvault.yaml console import resources/
+agentvault --config etc/agentvault.yaml console list client
+agentvault --config etc/agentvault.yaml console wallet create wallet.yaml
+agentvault --config etc/agentvault.yaml console wallet list
+agentvault --config etc/agentvault.yaml console wallet get wallet-id
+```
+
+Wallet custody intentionally has a narrower command surface than other
+catalog resources: only `create`, `list`, and `get` exist, and both read
+commands return public metadata only. There is no console or Dashboard command
+to reveal, export, update, rotate, disable, or delete an EOA private key. Once
+created, the encrypted key is available only to the runtime signer through the
+custody port; neither API serializes key material.
+
 ## Deployment
 
 The default Docker topology includes AuthGuard and Envoy:

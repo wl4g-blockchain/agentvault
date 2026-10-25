@@ -13,7 +13,7 @@ from agentvault.protocol import PaymentProtocolFactory
 class ProtocolAdapterTest(unittest.TestCase):
     def test_shared_protocol_http_fixture(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_http.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_http.json").read_text()
         )
         self.assertEqual(fixture["schema"], "agentvault.sdk.protocol-http.v1")
         registry = PaymentProtocolFactory().create(("x402", "mpp"))
@@ -62,7 +62,7 @@ class ProtocolAdapterTest(unittest.TestCase):
 
     def test_shared_protocol_mcp_fixture_uses_native_models(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         self.assertEqual(fixture["schema"], "agentvault.sdk.protocol-mcp.v1")
         registry = PaymentProtocolFactory().create(("x402", "mpp"))

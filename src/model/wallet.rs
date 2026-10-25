@@ -1,6 +1,17 @@
+use aws_lc_rs::rsa::{OaepPrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA256_MGF1SHA256};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use solana_pubkey::Pubkey;
 use std::str::FromStr as _;
+use zeroize::Zeroizing;
+
+pub use super::domain::Wallet;
+use super::{Amount, BudgetUnit};
+use crate::{utils::secure_material::SealedSensitiveMaterial, Error, Result as AppResult};
+
+pub(crate) const RSA_CIPHERTEXT_BYTES: usize = 384;
+const EOA_PRIVATE_KEY_BYTES: usize = 32;
 
 /// Deterministic wallet-pool selection used for outbound payments.
 ///
@@ -91,7 +102,7 @@ fn canonical_solana_address(address: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns `address` when an explicitly EVM algorithm has an invalid address.
-pub fn canonicalize_wallet_address(algorithm: &str, address: &str) -> Result<String, &'static str> {
+pub fn canonicalize_wallet_address(algorithm: &str, address: &str) -> std::result::Result<String, &'static str> {
     if let Some(encoded) = evm_address_body(address) {
         return Ok(format!("0x{}", encoded.to_ascii_lowercase()));
     }
@@ -109,7 +120,7 @@ pub fn canonicalize_wallet_address(algorithm: &str, address: &str) -> Result<Str
 /// # Errors
 ///
 /// Returns `address` when an EIP-155 recipient is not a 20-byte EVM address.
-pub fn canonicalize_payment_recipient(network: &str, address: &str) -> Result<String, &'static str> {
+pub fn canonicalize_payment_recipient(network: &str, address: &str) -> std::result::Result<String, &'static str> {
     if is_evm_payment_network(network) {
         return evm_address_body(address)
             .map(|encoded| format!("0x{}", encoded.to_ascii_lowercase()))
@@ -146,41 +157,118 @@ pub fn payment_recipients_match(network: &str, left: &str, right: &str) -> bool 
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Wallet {
-    pub id: String,
-    pub algorithm: String,
-    pub address: String,
-    pub public_key: String,
-    pub created_at: i64,
+/// Public half of a principal-bound, one-use RSA-3072 OAEP/SHA-256 session.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct WalletImportSession {
+    pub session_id: String,
+    pub server_public_key: String,
+    pub expires_at: i64,
 }
 
-impl Wallet {
-    /// Returns wallet metadata with its address validated and canonicalized.
-    ///
-    /// # Errors
-    ///
-    /// Returns `address` for a malformed EVM address.
-    pub fn canonicalized(mut self) -> Result<Self, &'static str> {
-        self.address = canonicalize_wallet_address(&self.algorithm, &self.address)?;
-        Ok(self)
+/// One-use server key retained only in the configured TTL cache. This is an
+/// internal transport record, not an authoritative SQL entity.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CachedWalletImportSession {
+    pub(crate) version: u8,
+    pub(crate) principal_hash: String,
+    pub(crate) sealed_server_private_key: SealedSensitiveMaterial,
+    pub(crate) expires_at: i64,
+}
+
+impl CachedWalletImportSession {
+    pub(crate) fn principal_hash(principal: &str) -> String {
+        URL_SAFE_NO_PAD.encode(Sha256::digest(principal.as_bytes()))
     }
 
-    /// Additionally validates the address family required by a payment
-    /// network. This keeps external custody separate from EVM address type.
-    ///
-    /// # Errors
-    ///
-    /// Returns `address` for malformed EIP-155 recipient metadata.
-    pub fn canonicalized_for_payment_network(mut self, network: &str) -> Result<Self, &'static str> {
-        self = self.canonicalized()?;
-        self.address = canonicalize_payment_recipient(network, &self.address)?;
-        Ok(self)
+    pub(crate) fn context(session_id: &str, principal: &str) -> String {
+        format!("wallet-import-session:{session_id}:{}", Self::principal_hash(principal))
+    }
+}
+
+/// Browser-produced RSA ciphertext containing exactly one EOA private key.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EncryptedWalletPrivateKey {
+    pub session_id: String,
+    pub ciphertext: String,
+}
+
+impl EncryptedWalletPrivateKey {
+    pub(crate) fn label(&self, wallet_id: &str, algorithm: &str) -> String {
+        format!(
+            "agentvault.wallet-import.v2\0{}\0{wallet_id}\0{algorithm}",
+            self.session_id
+        )
     }
 
-    #[must_use]
-    pub fn address_matches(&self, candidate: &str) -> bool {
-        wallet_addresses_match(&self.algorithm, &self.address, candidate)
+    pub(crate) fn decrypt(
+        &self,
+        server_key: &[u8],
+        wallet_id: &str,
+        algorithm: &str,
+    ) -> AppResult<Zeroizing<[u8; 32]>> {
+        let invalid = || Error::InvalidRequest("encrypted wallet private key is invalid".to_owned());
+        if self.ciphertext.len() != RSA_CIPHERTEXT_BYTES * 4 / 3 {
+            return Err(invalid());
+        }
+        let ciphertext = URL_SAFE_NO_PAD.decode(&self.ciphertext).map_err(|_| invalid())?;
+        if ciphertext.len() != RSA_CIPHERTEXT_BYTES || URL_SAFE_NO_PAD.encode(&ciphertext) != self.ciphertext {
+            return Err(invalid());
+        }
+        let key = PrivateDecryptingKey::from_pkcs8(server_key)
+            .map_err(|_| Error::Crypto("wallet import server key is invalid".to_owned()))?;
+        let key = OaepPrivateDecryptingKey::new(key)
+            .map_err(|_| Error::Crypto("wallet import server key is invalid".to_owned()))?;
+        let mut output = Zeroizing::new([0_u8; RSA_CIPHERTEXT_BYTES]);
+        let label = self.label(wallet_id, algorithm);
+        let plaintext = key
+            .decrypt(
+                &OAEP_SHA256_MGF1SHA256,
+                &ciphertext,
+                output.as_mut(),
+                Some(label.as_bytes()),
+            )
+            .map_err(|_| invalid())?;
+        if plaintext.len() != EOA_PRIVATE_KEY_BYTES {
+            return Err(invalid());
+        }
+        let mut private_key = Zeroizing::new([0_u8; EOA_PRIVATE_KEY_BYTES]);
+        private_key.copy_from_slice(plaintext);
+        Ok(private_key)
+    }
+}
+
+impl std::fmt::Debug for EncryptedWalletPrivateKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EncryptedWalletPrivateKey")
+            .field("session_id", &self.session_id)
+            .field("ciphertext", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Complete atomic wallet-creation request after HTTP authentication.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateEncryptedWallet {
+    pub id: String,
+    pub algorithm: String,
+    #[serde(default = "CreateEncryptedWallet::enabled_by_default")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub budget_unit: Option<BudgetUnit>,
+    #[serde(default)]
+    pub max_per_payment: Option<Amount>,
+    #[serde(default)]
+    pub max_per_day: Option<Amount>,
+    pub encrypted_private_key: EncryptedWalletPrivateKey,
+}
+
+impl CreateEncryptedWallet {
+    const fn enabled_by_default() -> bool {
+        true
     }
 }
 

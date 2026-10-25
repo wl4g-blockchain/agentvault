@@ -120,27 +120,36 @@ same official x402 body always maps to the same durable Challenge Hash.
 ```text
 marketpulse-feed-subscription/e2e/
 ├── deploy/
+│   ├── deployer/          # Docker/Kubernetes lifecycle and scoped cleanup
+│   ├── namespaces.yaml    # cluster-level E2E namespace manifest
+│   ├── agentvault-helm-shared/
+│   ├── mock-payee-marketpulse-config/
+│   ├── mock-payer-quantstream-config/
 │   ├── anvil/  solana/  facilitator/
 │   ├── mock-payee-marketpulse-{golang,rust,python,java,typescript}-service/
 │   │   └── {main/Application,server,route/feed,handler/feed,storage/feed}
-│   ├── mock-payer-quantstream-ingest-ui/src/
-│   ├── mock-payer-quantstream-ingest-service-golang/
+│   ├── mock-payer-quantstream-ui/src/
+│   ├── mock-payer-quantstream-service-golang/
 │   │   ├── main.go
 │   │   └── pkg/{route,handler,job,agent}/
-│   ├── mock-payer-quantstream-ingest-service-rust/
+│   ├── mock-payer-quantstream-service-rust/
 │   │   └── src/{lib.rs,main.rs,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-python/
+│   ├── mock-payer-quantstream-service-python/
 │   │   └── app/{main.py,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-java/
+│   ├── mock-payer-quantstream-service-java/
 │   │   └── src/io/agentvault/e2e/{Application.java,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-typescript/
+│   ├── mock-payer-quantstream-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # source-path-mirrored unit tests
-├── common/contract/       # declarative resources and MQTT wire contracts
+├── common/                # Python-only case context and shared utilities
+├── config/                # AgentVault runtime and initialization configuration
+│   ├── agentvault/
+│   │   ├── values.yaml    # the single Helm/Kubernetes values source
+│   │   └── init.import.yaml # canonical console-resource import
 ├── verifier/              # structure and financial/business assertions
 ├── reports/               # generated layered reports
 ├── docker-compose.yaml
-└── runner.py              # standard-library layered orchestrator
+└── runner.py              # layered orchestrator with dependencies in requirements.txt
 ```
 
 The five payer services intentionally keep the same composition: thin
@@ -157,6 +166,7 @@ framework glue never implements payment logic.
 
 ```bash
 cd use-cases/marketpulse-feed-subscription/e2e
+python3 -m pip install --requirement requirements.txt
 
 python3 runner.py --list
 python3 runner.py -s structure

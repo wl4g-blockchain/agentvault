@@ -33,7 +33,7 @@ func TestFactoryCreatesIsolatedProtocolProviders(t *testing.T) {
 }
 
 func TestSharedProtocolHTTPFixture(t *testing.T) {
-	value, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payment_protocol_http.json"))
+	value, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "payment_protocol_http.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestMPPMCPRejectsUnsupportedSessionAndPreservesRawCredential(t *testing.T) 
 
 func readMCPFixture(t *testing.T) map[string]any {
 	t.Helper()
-	value, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payment_protocol_mcp.json"))
+	value, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "payment_protocol_mcp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

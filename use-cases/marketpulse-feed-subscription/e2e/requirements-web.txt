@@ -1,3 +1,0 @@
-# Optional real-browser Dashboard verifier dependencies.
-playwright>=1.55,<2
-cryptography>=41

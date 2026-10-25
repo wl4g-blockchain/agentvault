@@ -1,10 +1,24 @@
-use std::{collections::BTreeMap, fmt, net::IpAddr, str::FromStr as _, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    net::IpAddr,
+    str::FromStr as _,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand_core::{OsRng, RngCore as _};
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, SubAck, SubscribeReasonCode, Transport};
+use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish, QoS, SubAck, SubscribeReasonCode, Transport};
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
+use tokio::{
+    sync::{oneshot, watch, Mutex, OnceCell},
+    task::JoinHandle,
+    time::timeout,
+};
 use zeroize::Zeroizing;
 
 use crate::{paths, HttpMethod, MqttConfig, TransportError, TransportRequest, TransportResponse, VaultTransport};
@@ -23,6 +37,28 @@ pub struct MqttVaultTransport {
     vault_client_id: String,
     request_timeout: Duration,
     max_response_bytes: usize,
+    runtime: Arc<OnceCell<MqttRuntime>>,
+}
+
+struct MqttRuntime {
+    client: AsyncClient,
+    state: Arc<MqttRuntimeState>,
+    task: StdMutex<Option<JoinHandle<()>>>,
+}
+
+struct MqttRuntimeState {
+    pending: Mutex<HashMap<String, PendingRequest>>,
+    ready: watch::Sender<bool>,
+    closed: AtomicBool,
+    max_response_bytes: usize,
+    result_prefix: String,
+}
+
+struct PendingRequest {
+    expected_type: &'static str,
+    command_topic: String,
+    payload: Vec<u8>,
+    result: oneshot::Sender<Result<TransportResponse, TransportError>>,
 }
 
 impl fmt::Debug for MqttVaultTransport {
@@ -38,6 +74,7 @@ impl fmt::Debug for MqttVaultTransport {
             .field("vault_client_id", &self.vault_client_id)
             .field("request_timeout", &self.request_timeout)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("runtime", &"<shared>")
             .finish()
     }
 }
@@ -92,6 +129,7 @@ impl MqttVaultTransport {
             vault_client_id: config.vault_client_id,
             request_timeout: config.request_timeout,
             max_response_bytes: config.max_response_bytes,
+            runtime: Arc::new(OnceCell::new()),
         };
         if transport.port == 0
             || transport.request_timeout.is_zero()
@@ -108,26 +146,17 @@ impl MqttVaultTransport {
         Ok(transport)
     }
 
+    async fn runtime(&self) -> &MqttRuntime {
+        self.runtime.get_or_init(|| async { MqttRuntime::start(self) }).await
+    }
+
     async fn execute(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError> {
         let operation = mqtt_operation(request)?;
         let trace = producer_trace_context(&request.headers);
-        let request_span_id = trace.span_id.as_str();
-        let connection_id = format!("{}-{}", self.connection_prefix, &request_span_id[..12]);
-        let mut options = MqttOptions::new(connection_id, &self.host, self.port);
-        options.set_keep_alive(Duration::from_secs(15));
-        options.set_clean_session(true);
-        options.set_credentials(&self.username, self.password.as_str());
-        if self.tls {
-            options.set_transport(Transport::tls_with_default_config());
-        }
+        let request_span_id = trace.span_id.clone();
         let command_topic = format!(
             "agentvault/v1/clients/{}/commands/{}",
             self.vault_client_id, operation.command
-        );
-        let result_filter = format!("agentvault/v1/clients/{}/results/+", self.vault_client_id);
-        let result_topic = format!(
-            "agentvault/v1/clients/{}/results/{request_span_id}",
-            self.vault_client_id
         );
         tracing::info!(
             event.name = "agentvault.sdk.transport.mqtt.produced",
@@ -139,7 +168,7 @@ impl MqttVaultTransport {
         let envelope = RequestEnvelope {
             message_type: operation.message_type,
             version: 1,
-            request_span_id,
+            request_span_id: &request_span_id,
             request: WireRequest {
                 method: "POST",
                 path: &request.path,
@@ -149,60 +178,204 @@ impl MqttVaultTransport {
         };
         let payload = serde_json::to_vec(&envelope)
             .map_err(|error| TransportError::new(format!("encode MQTT request: {error}")))?;
-        let (client, mut event_loop) = AsyncClient::new(options, 16);
-        let mut published = false;
-        loop {
+        if payload.len() > self.max_response_bytes {
+            return Err(TransportError::response_too_large(
+                "AgentVault MQTT request exceeds configured limit",
+            ));
+        }
+        let runtime = self.runtime().await;
+        if runtime.state.closed.load(Ordering::Acquire) {
+            return Err(TransportError::new("AgentVault MQTT transport is closed"));
+        }
+        let (sender, receiver) = oneshot::channel();
+        {
+            let mut pending = runtime.state.pending.lock().await;
+            if pending.len() >= 256 {
+                return Err(TransportError::new("too many pending MQTT payment requests"));
+            }
+            if pending.contains_key(&request_span_id) {
+                return Err(TransportError::new("MQTT requestSpanId collision"));
+            }
+            pending.insert(
+                request_span_id.clone(),
+                PendingRequest {
+                    expected_type: operation.response_type,
+                    command_topic,
+                    payload,
+                    result: sender,
+                },
+            );
+        }
+        if *runtime.state.ready.borrow() {
+            runtime.publish_pending(&request_span_id).await;
+        }
+        let outcome = timeout(self.request_timeout, receiver).await;
+        runtime.state.pending.lock().await.remove(&request_span_id);
+        match outcome {
+            Err(_) => Err(TransportError::timeout("AgentVault MQTT request timed out")),
+            Ok(Err(_)) => Err(TransportError::new("AgentVault MQTT response task stopped")),
+            Ok(Ok(result)) => result,
+        }
+    }
+}
+
+impl MqttRuntime {
+    fn start(transport: &MqttVaultTransport) -> Self {
+        let connection_id = format!("{}-{}", transport.connection_prefix, random_hex(6));
+        let mut options = MqttOptions::new(connection_id, &transport.host, transport.port);
+        options.set_keep_alive(Duration::from_secs(15));
+        options.set_clean_session(true);
+        options.set_credentials(&transport.username, transport.password.as_str());
+        if transport.tls {
+            options.set_transport(Transport::tls_with_default_config());
+        }
+        let (client, event_loop) = AsyncClient::new(options, 512);
+        let (ready, _) = watch::channel(false);
+        let state = Arc::new(MqttRuntimeState {
+            pending: Mutex::new(HashMap::new()),
+            ready,
+            closed: AtomicBool::new(false),
+            max_response_bytes: transport.max_response_bytes,
+            result_prefix: format!("agentvault/v1/clients/{}/results", transport.vault_client_id),
+        });
+        let task_state = Arc::clone(&state);
+        let task_client = client.clone();
+        let result_filter = format!("{}/+", state.result_prefix);
+        let task = tokio::spawn(async move {
+            MqttRuntimeState::run(task_state, task_client, event_loop, result_filter).await;
+        });
+        Self {
+            client,
+            state,
+            task: StdMutex::new(Some(task)),
+        }
+    }
+
+    async fn publish_pending(&self, request_span_id: &str) {
+        let request = {
+            let pending = self.state.pending.lock().await;
+            pending
+                .get(request_span_id)
+                .map(|request| (request.command_topic.clone(), request.payload.clone()))
+        };
+        let Some((topic, payload)) = request else {
+            return;
+        };
+        if let Err(error) = self.client.publish(topic, QoS::AtLeastOnce, false, payload).await {
+            tracing::debug!(error = %error, "MQTT publish deferred until reconnect");
+        }
+    }
+
+    async fn close(&self) -> Result<(), TransportError> {
+        if self.state.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.state.ready.send_replace(false);
+        let requests = {
+            let mut pending = self.state.pending.lock().await;
+            pending.drain().map(|(_, request)| request).collect::<Vec<_>>()
+        };
+        for request in requests {
+            let _ = request
+                .result
+                .send(Err(TransportError::new("AgentVault MQTT transport is closed")));
+        }
+        let _ = self.client.disconnect().await;
+        if let Some(task) = self.task.lock().expect("MQTT task mutex poisoned").take() {
+            task.abort();
+        }
+        Ok(())
+    }
+}
+
+impl MqttRuntimeState {
+    async fn run(state: Arc<Self>, client: AsyncClient, mut event_loop: rumqttc::EventLoop, result_filter: String) {
+        while !state.closed.load(Ordering::Acquire) {
             match event_loop.poll().await {
                 Ok(Event::Incoming(Incoming::ConnAck(_))) => {
-                    client
-                        .subscribe(&result_filter, QoS::AtLeastOnce)
-                        .await
-                        .map_err(|error| TransportError::new(format!("subscribe MQTT result: {error}")))?;
+                    state.ready.send_replace(false);
+                    if let Err(error) = client.subscribe(&result_filter, QoS::AtLeastOnce).await {
+                        tracing::warn!(error = %error, "failed to restore MQTT result subscription");
+                    }
                 }
-                Ok(Event::Incoming(Incoming::SubAck(ack))) if !published => {
+                Ok(Event::Incoming(Incoming::SubAck(ack))) => {
                     if !subscription_granted(&ack) {
-                        return Err(TransportError::new(
-                            "AgentVault MQTT result subscription was rejected or downgraded",
-                        ));
+                        state
+                            .fail_all(TransportError::new(
+                                "AgentVault MQTT result subscription was rejected or downgraded",
+                            ))
+                            .await;
+                        continue;
                     }
-                    client
-                        .publish(&command_topic, QoS::AtLeastOnce, false, payload.clone())
-                        .await
-                        .map_err(|error| TransportError::new(format!("publish MQTT command: {error}")))?;
-                    published = true;
+                    state.ready.send_replace(true);
+                    let requests = {
+                        let pending = state.pending.lock().await;
+                        pending
+                            .values()
+                            .map(|request| (request.command_topic.clone(), request.payload.clone()))
+                            .collect::<Vec<_>>()
+                    };
+                    for (topic, payload) in requests {
+                        let _ = client.publish(topic, QoS::AtLeastOnce, false, payload).await;
+                    }
                 }
-                Ok(Event::Incoming(Incoming::Publish(message))) if message.topic == result_topic => {
-                    if message.payload.len() > self.max_response_bytes {
-                        return Err(TransportError::response_too_large(
-                            "AgentVault MQTT response is too large",
-                        ));
-                    }
-                    let envelope: ResponseEnvelope = serde_json::from_slice(&message.payload)
-                        .map_err(|_| TransportError::new("invalid AgentVault MQTT response"))?;
-                    if envelope.version != 1
-                        || !response_type_matches(&envelope.message_type, envelope.status, operation.response_type)
-                        || envelope.request_span_id != request_span_id
-                        || !(100..=599).contains(&envelope.status)
-                    {
-                        return Err(TransportError::new("mismatched AgentVault MQTT response"));
-                    }
-                    let body = URL_SAFE_NO_PAD
-                        .decode(envelope.body)
-                        .map_err(|_| TransportError::new("invalid AgentVault MQTT response body"))?;
-                    if body.len() > self.max_response_bytes {
-                        return Err(TransportError::response_too_large(
-                            "AgentVault MQTT response is too large",
-                        ));
-                    }
-                    return Ok(TransportResponse {
-                        status: envelope.status,
-                        headers: envelope.headers,
-                        body,
-                    });
+                Ok(Event::Incoming(Incoming::Publish(message))) => {
+                    state.handle_response(message).await;
                 }
                 Ok(_) => {}
-                Err(error) => return Err(TransportError::new(format!("AgentVault MQTT connection: {error}"))),
+                Err(error) => {
+                    state.ready.send_replace(false);
+                    tracing::warn!(error = %error, "MQTT connection interrupted; waiting for reconnect");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
             }
+        }
+    }
+
+    async fn handle_response(&self, message: Publish) {
+        if message.qos != QoS::AtLeastOnce || message.retain || message.payload.len() > self.max_response_bytes {
+            return;
+        }
+        let Ok(envelope) = serde_json::from_slice::<ResponseEnvelope>(&message.payload) else {
+            return;
+        };
+        let expected_topic = format!("{}/{}", self.result_prefix, envelope.request_span_id);
+        let mut pending = self.pending.lock().await;
+        let Some(request) = pending.get(&envelope.request_span_id) else {
+            return;
+        };
+        if message.topic != expected_topic
+            || envelope.version != 1
+            || !(100..=599).contains(&envelope.status)
+            || !response_type_matches(&envelope.message_type, envelope.status, request.expected_type)
+        {
+            return;
+        }
+        let Ok(body) = URL_SAFE_NO_PAD.decode(&envelope.body) else {
+            return;
+        };
+        if body.len() > self.max_response_bytes || URL_SAFE_NO_PAD.encode(&body) != envelope.body {
+            return;
+        }
+        let Some(request) = pending.remove(&envelope.request_span_id) else {
+            return;
+        };
+        drop(pending);
+        let _ = request.result.send(Ok(TransportResponse {
+            status: envelope.status,
+            headers: envelope.headers,
+            body,
+        }));
+    }
+
+    async fn fail_all(&self, error: TransportError) {
+        self.ready.send_replace(false);
+        let requests = {
+            let mut pending = self.pending.lock().await;
+            pending.drain().map(|(_, request)| request).collect::<Vec<_>>()
+        };
+        for request in requests {
+            let _ = request.result.send(Err(error.clone()));
         }
     }
 }
@@ -275,9 +448,15 @@ fn mqtt_operation(request: &TransportRequest) -> Result<MqttOperation, Transport
 
 impl VaultTransport for MqttVaultTransport {
     async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
-        timeout(self.request_timeout, self.execute(&request))
-            .await
-            .map_err(|_| TransportError::timeout("AgentVault MQTT request timed out"))?
+        self.execute(&request).await
+    }
+
+    async fn close(&self) -> Result<(), TransportError> {
+        if let Some(runtime) = self.runtime.get() {
+            runtime.close().await
+        } else {
+            Ok(())
+        }
     }
 }
 

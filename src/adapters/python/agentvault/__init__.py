@@ -46,6 +46,9 @@ from .model import (
 from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware, settled_payment
 from .payer import HttpxPayerMiddleware, PayerMiddleware
 from .protocol import MppAdapter, PaymentProtocol, PaymentProtocolFactory, ProtocolRegistry, X402Adapter
-from .transport import APIError, GrpcVaultTransport, MqttVaultTransport, VaultTransport, VaultTransportFactory
+from .transport import (
+    APIError, AsyncVaultTransport, GrpcVaultTransport, MqttVaultTransport,
+    VaultTransport, VaultTransportFactory,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -58,8 +58,8 @@ public final class PayerMiddleware {
 
     public PayerConfig config() { return config; }
 
-    public SpringInterceptorPayerMiddleware spring() {
-        return new SpringInterceptorPayerMiddleware(this);
+    public SpringRestPayerMiddleware spring() {
+        return new SpringRestPayerMiddleware(this);
     }
 
     public JdkHttpPayerMiddleware jdkHttp() {

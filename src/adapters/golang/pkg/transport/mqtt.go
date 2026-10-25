@@ -2,6 +2,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -27,6 +30,23 @@ const (
 
 type MqttVaultTransport struct {
 	config config.MqttConfig
+	prefix string
+	client mqtt.Client
+
+	mu        sync.Mutex
+	pending   map[string]*mqttPendingRequest
+	started   bool
+	ready     bool
+	closed    bool
+	closeOnce sync.Once
+}
+
+type mqttPendingRequest struct {
+	expectedType string
+	commandTopic string
+	payload      []byte
+	result       chan TransportResult
+	cancel       context.CancelFunc
 }
 
 func (transport *MqttVaultTransport) String() string {
@@ -43,12 +63,38 @@ func NewMqttVaultTransport(settings config.MqttConfig) (*MqttVaultTransport, err
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	return &MqttVaultTransport{config: settings}, nil
+	transport := &MqttVaultTransport{
+		config:  settings,
+		prefix:  fmt.Sprintf("agentvault/v1/clients/%s", settings.VaultClientID),
+		pending: make(map[string]*mqttPendingRequest),
+	}
+	connectionSuffix, err := randomHex(6)
+	if err != nil {
+		return nil, err
+	}
+	transport.client = mqtt.NewClient(transport.clientOptions(settings.ConnectionPrefix + "-" + connectionSuffix))
+	return transport, nil
 }
 
-// Close is idempotent because MQTT connections are request-scoped and closed
-// by Do before it returns.
-func (transport *MqttVaultTransport) Close() error { return nil }
+// Close is idempotent and fails every outstanding future. It never closes a
+// broker connection owned by another transport instance.
+func (transport *MqttVaultTransport) Close() error {
+	if transport == nil {
+		return nil
+	}
+	transport.closeOnce.Do(func() {
+		transport.mu.Lock()
+		transport.closed = true
+		transport.ready = false
+		client := transport.client
+		transport.mu.Unlock()
+		if client != nil && client.IsConnected() {
+			client.Disconnect(250)
+		}
+		transport.failAll(errors.New("AgentVault MQTT transport is closed"))
+	})
+	return nil
+}
 
 type mqttWireRequest struct {
 	Method  string            `json:"method"`
@@ -74,93 +120,35 @@ type mqttResponseEnvelope struct {
 }
 
 func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRequest) (TransportResponse, error) {
+	result := <-transport.DoAsync(ctx, request)
+	return result.Response, result.Err
+}
+
+// DoAsync submits a QoS 1 request and returns immediately. A reconnect never
+// creates a new payment attempt: after the result subscription is restored,
+// the exact same serialized envelope is republished and the server's
+// requestSpanId/payload digest cache coalesces duplicates.
+func (transport *MqttVaultTransport) DoAsync(ctx context.Context, request TransportRequest) <-chan TransportResult {
+	result := make(chan TransportResult, 1)
 	if transport == nil {
-		return TransportResponse{}, errors.New("AgentVault MQTT transport is not configured")
+		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT transport is not configured")})
+		return result
 	}
 	operation, err := mqttOperationFor(request)
 	if err != nil {
-		return TransportResponse{}, err
+		completeTransportResult(result, TransportResult{Err: err})
+		return result
 	}
 	traceContext, err := newProducerTraceContext(request.Headers)
 	if err != nil {
-		return TransportResponse{}, err
+		completeTransportResult(result, TransportResult{Err: err})
+		return result
 	}
 	requestSpanID := traceContext.spanID
 	slog.Info("publishing an AgentVault MQTT command with W3C Trace Context",
 		"event.name", "agentvault.sdk.transport.mqtt.produced",
 		"trace.id", traceContext.traceID, "span.id", traceContext.spanID,
 		"parent.id", traceContext.parentSpanID)
-	connectionID := transport.config.ConnectionPrefix + "-" + requestSpanID[:12]
-	scheme := "tcp"
-	if transport.config.TLS {
-		scheme = "ssl"
-	}
-	broker := (&url.URL{
-		Scheme: scheme,
-		Host:   net.JoinHostPort(transport.config.Host, fmt.Sprint(transport.config.Port)),
-	}).String()
-	options := mqtt.NewClientOptions().
-		AddBroker(broker).
-		SetClientID(connectionID).
-		SetUsername(transport.config.Username).
-		SetPassword(transport.config.Password).
-		SetCleanSession(true).
-		SetAutoReconnect(false).
-		SetConnectTimeout(transport.config.RequestTimeout).
-		SetWriteTimeout(transport.config.RequestTimeout).
-		SetKeepAlive(15 * time.Second)
-	if transport.config.TLS {
-		options.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})
-	}
-	client := mqtt.NewClient(options)
-	connect := client.Connect()
-	if !connect.WaitTimeout(transport.config.RequestTimeout) {
-		return TransportResponse{}, errors.New("AgentVault MQTT connect timed out")
-	}
-	if err := connect.Error(); err != nil {
-		return TransportResponse{}, fmt.Errorf("AgentVault MQTT connect: %w", err)
-	}
-	defer client.Disconnect(100)
-
-	resultTopic := fmt.Sprintf("agentvault/v1/clients/%s/results/%s", transport.config.VaultClientID, requestSpanID)
-	resultFilter := fmt.Sprintf("agentvault/v1/clients/%s/results/+", transport.config.VaultClientID)
-	commandTopic := fmt.Sprintf("agentvault/v1/clients/%s/commands/%s", transport.config.VaultClientID, operation.command)
-	results := make(chan mqttResponseEnvelope, 1)
-	errorsChannel := make(chan error, 1)
-	subscribe := client.Subscribe(resultFilter, 1, func(_ mqtt.Client, message mqtt.Message) {
-		if message.Topic() != resultTopic {
-			return
-		}
-		if len(message.Payload()) > transport.config.MaxResponseBytes {
-			select {
-			case errorsChannel <- errors.New("AgentVault MQTT response is too large"):
-			default:
-			}
-			return
-		}
-		var response mqttResponseEnvelope
-		if err := json.Unmarshal(message.Payload(), &response); err != nil {
-			select {
-			case errorsChannel <- errors.New("invalid AgentVault MQTT response"):
-			default:
-			}
-			return
-		}
-		select {
-		case results <- response:
-		default:
-		}
-	})
-	if !subscribe.WaitTimeout(transport.config.RequestTimeout) {
-		return TransportResponse{}, errors.New("AgentVault MQTT subscribe timed out")
-	}
-	if err := subscribe.Error(); err != nil {
-		return TransportResponse{}, fmt.Errorf("subscribe AgentVault MQTT result: %w", err)
-	}
-	grants, ok := subscribe.(*mqtt.SubscribeToken)
-	if !ok || !mqttSubscriptionGranted(grants.Result(), resultFilter) {
-		return TransportResponse{}, errors.New("AgentVault MQTT result subscription was rejected or downgraded")
-	}
 	envelope := mqttRequestEnvelope{
 		Type:          operation.messageType,
 		Version:       1,
@@ -174,35 +162,202 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
-		return TransportResponse{}, fmt.Errorf("encode AgentVault MQTT request: %w", err)
+		completeTransportResult(result, TransportResult{Err: fmt.Errorf("encode AgentVault MQTT request: %w", err)})
+		return result
 	}
-	publish := client.Publish(commandTopic, 1, false, payload)
-	if !publish.WaitTimeout(transport.config.RequestTimeout) {
-		return TransportResponse{}, errors.New("AgentVault MQTT publish timed out")
+	if len(payload) > transport.config.MaxResponseBytes {
+		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT request exceeds configured limit")})
+		return result
 	}
-	if err := publish.Error(); err != nil {
-		return TransportResponse{}, fmt.Errorf("publish AgentVault MQTT command: %w", err)
+	requestContext, cancel := context.WithTimeout(ctx, transport.config.RequestTimeout)
+	waiting := &mqttPendingRequest{
+		expectedType: operation.responseType,
+		commandTopic: fmt.Sprintf("%s/commands/%s", transport.prefix, operation.command),
+		payload:      append([]byte(nil), payload...),
+		result:       result,
+		cancel:       cancel,
 	}
+	transport.mu.Lock()
+	if transport.closed {
+		transport.mu.Unlock()
+		cancel()
+		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT transport is closed")})
+		return result
+	}
+	if len(transport.pending) >= 256 {
+		transport.mu.Unlock()
+		cancel()
+		completeTransportResult(result, TransportResult{Err: errors.New("too many pending MQTT payment requests")})
+		return result
+	}
+	if _, exists := transport.pending[requestSpanID]; exists {
+		transport.mu.Unlock()
+		cancel()
+		completeTransportResult(result, TransportResult{Err: errors.New("MQTT requestSpanId collision")})
+		return result
+	}
+	transport.pending[requestSpanID] = waiting
+	ready := transport.ready
+	transport.startLocked()
+	transport.mu.Unlock()
+	if ready {
+		transport.publishPending(requestSpanID)
+	}
+	go func() {
+		<-requestContext.Done()
+		if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			transport.complete(requestSpanID, TransportResult{Err: errors.New("AgentVault MQTT request timed out")})
+		} else {
+			transport.complete(requestSpanID, TransportResult{Err: requestContext.Err()})
+		}
+	}()
+	return result
+}
 
-	timer := time.NewTimer(transport.config.RequestTimeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return TransportResponse{}, ctx.Err()
-	case <-timer.C:
-		return TransportResponse{}, errors.New("AgentVault MQTT request timed out")
-	case err := <-errorsChannel:
-		return TransportResponse{}, err
-	case response := <-results:
-		if !mqttResponseTypeMatches(response.Type, response.Status, operation.responseType) || response.Version != 1 || response.RequestSpanID != requestSpanID || response.Status < 100 || response.Status > 599 {
-			return TransportResponse{}, errors.New("mismatched AgentVault MQTT response")
-		}
-		body, err := base64.RawURLEncoding.DecodeString(response.Body)
-		if err != nil || len(body) > transport.config.MaxResponseBytes {
-			return TransportResponse{}, errors.New("invalid AgentVault MQTT response body")
-		}
-		return TransportResponse{Status: response.Status, Headers: response.Headers, Body: body}, nil
+func (transport *MqttVaultTransport) clientOptions(connectionID string) *mqtt.ClientOptions {
+	scheme := "tcp"
+	if transport.config.TLS {
+		scheme = "ssl"
 	}
+	broker := (&url.URL{Scheme: scheme, Host: net.JoinHostPort(transport.config.Host, fmt.Sprint(transport.config.Port))}).String()
+	options := mqtt.NewClientOptions().
+		AddBroker(broker).
+		SetClientID(connectionID).
+		SetUsername(transport.config.Username).
+		SetPassword(transport.config.Password).
+		SetCleanSession(true).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(time.Second).
+		SetResumeSubs(false).
+		SetOrderMatters(false).
+		SetConnectTimeout(transport.config.RequestTimeout).
+		SetWriteTimeout(transport.config.RequestTimeout).
+		SetKeepAlive(15 * time.Second)
+	options.SetOnConnectHandler(transport.onConnect)
+	options.SetConnectionLostHandler(func(_ mqtt.Client, _ error) { transport.markDisconnected() })
+	options.SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) { transport.markDisconnected() })
+	if transport.config.TLS {
+		options.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
+	return options
+}
+
+func (transport *MqttVaultTransport) startLocked() {
+	if transport.started {
+		return
+	}
+	transport.started = true
+	transport.client.Connect()
+}
+
+func (transport *MqttVaultTransport) onConnect(client mqtt.Client) {
+	transport.markDisconnected()
+	filter := transport.prefix + "/results/+"
+	token := client.Subscribe(filter, 1, transport.onMessage)
+	go func() {
+		if !token.WaitTimeout(transport.config.RequestTimeout) || token.Error() != nil {
+			transport.failAll(errors.New("AgentVault MQTT result subscription failed"))
+			return
+		}
+		grants, ok := token.(*mqtt.SubscribeToken)
+		if !ok || !mqttSubscriptionGranted(grants.Result(), filter) {
+			transport.failAll(errors.New("AgentVault MQTT result subscription was rejected or downgraded"))
+			return
+		}
+		transport.mu.Lock()
+		if transport.closed {
+			transport.mu.Unlock()
+			return
+		}
+		transport.ready = true
+		ids := make([]string, 0, len(transport.pending))
+		for id := range transport.pending {
+			ids = append(ids, id)
+		}
+		transport.mu.Unlock()
+		for _, id := range ids {
+			transport.publishPending(id)
+		}
+	}()
+}
+
+func (transport *MqttVaultTransport) markDisconnected() {
+	transport.mu.Lock()
+	transport.ready = false
+	transport.mu.Unlock()
+}
+
+func (transport *MqttVaultTransport) publishPending(requestSpanID string) {
+	transport.mu.Lock()
+	waiting := transport.pending[requestSpanID]
+	ready := transport.ready && !transport.closed
+	client := transport.client
+	transport.mu.Unlock()
+	if waiting == nil || !ready || client == nil {
+		return
+	}
+	// Paho owns the QoS 1 PUBACK retry. If the connection drops before the
+	// result arrives, onConnect republishes this exact payload after restoring
+	// the result subscription. Any duplicate is intentionally handled by Vault.
+	client.Publish(waiting.commandTopic, 1, false, waiting.payload)
+}
+
+func (transport *MqttVaultTransport) onMessage(_ mqtt.Client, message mqtt.Message) {
+	if len(message.Payload()) > transport.config.MaxResponseBytes {
+		return
+	}
+	var response mqttResponseEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(message.Payload()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil || decoder.Decode(new(any)) != io.EOF {
+		return
+	}
+	transport.mu.Lock()
+	waiting := transport.pending[response.RequestSpanID]
+	transport.mu.Unlock()
+	if waiting == nil || message.Topic() != transport.prefix+"/results/"+response.RequestSpanID ||
+		response.Version != 1 || response.Status < 100 || response.Status > 599 ||
+		!mqttResponseTypeMatches(response.Type, response.Status, waiting.expectedType) {
+		return
+	}
+	body, err := base64.RawURLEncoding.DecodeString(response.Body)
+	if err != nil || len(body) > transport.config.MaxResponseBytes || base64.RawURLEncoding.EncodeToString(body) != response.Body {
+		return
+	}
+	transport.complete(response.RequestSpanID, TransportResult{Response: TransportResponse{
+		Status: response.Status, Headers: response.Headers, Body: body,
+	}})
+}
+
+func (transport *MqttVaultTransport) complete(requestSpanID string, result TransportResult) {
+	transport.mu.Lock()
+	waiting := transport.pending[requestSpanID]
+	if waiting != nil {
+		delete(transport.pending, requestSpanID)
+	}
+	transport.mu.Unlock()
+	if waiting == nil {
+		return
+	}
+	waiting.cancel()
+	completeTransportResult(waiting.result, result)
+}
+
+func (transport *MqttVaultTransport) failAll(err error) {
+	transport.mu.Lock()
+	pending := transport.pending
+	transport.pending = make(map[string]*mqttPendingRequest)
+	transport.mu.Unlock()
+	for _, waiting := range pending {
+		waiting.cancel()
+		completeTransportResult(waiting.result, TransportResult{Err: err})
+	}
+}
+
+func completeTransportResult(result chan TransportResult, value TransportResult) {
+	result <- value
+	close(result)
 }
 
 func mqttSubscriptionGranted(results map[string]byte, expectedTopic string) bool {

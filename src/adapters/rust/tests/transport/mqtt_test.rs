@@ -26,6 +26,8 @@ fn rejects_cleartext_remote_broker_and_redacts_password() {
         max_response_bytes: 2 * 1024 * 1024,
     })
     .expect("loopback transport");
+    let cloned = transport.clone();
+    assert!(std::sync::Arc::ptr_eq(&transport.runtime, &cloned.runtime));
     assert!(!format!("{transport:?}").contains("super-secret"));
     let context = producer_trace_context(&std::collections::BTreeMap::new());
     assert_eq!(context.trace_id.len(), 32);

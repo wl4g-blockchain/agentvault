@@ -1,3 +1,5 @@
+import base64
+import json
 import unittest
 from unittest.mock import Mock
 
@@ -34,12 +36,35 @@ class MqttTransportTest(unittest.TestCase):
 
     def test_request_lazily_connects_transport(self):
         transport = MqttVaultTransport(self._config())
-        transport.connect = Mock(side_effect=RuntimeError("lazy-connect"))
+        transport._start = Mock(side_effect=RuntimeError("lazy-connect"))
 
         with self.assertRaisesRegex(RuntimeError, "lazy-connect"):
             transport.request("POST", "/api/v1/payee/challenges", {"runId": "run-1"})
 
-        transport.connect.assert_called_once_with()
+        transport._start.assert_called_once_with()
+
+    def test_async_request_is_completed_by_response_callback(self):
+        transport = MqttVaultTransport(self._config())
+        transport._start = Mock()
+        transport._publish_pending = Mock()
+
+        future = transport.request_async(
+            "POST", "/api/v1/payee/challenges", {"runId": "run-1"})
+
+        self.assertFalse(future.done())
+        request_span_id = next(iter(transport._pending))
+        body = base64.urlsafe_b64encode(json.dumps({"ok": True}).encode()).rstrip(b"=").decode()
+        transport._complete(request_span_id, {
+            "type": "payment.challenge_created",
+            "version": 1,
+            "requestSpanId": request_span_id,
+            "status": 200,
+            "headers": {},
+            "body": body,
+        })
+
+        self.assertEqual(future.result(timeout=0.1), {"ok": True})
+        transport.close()
 
     def test_connect_is_idempotent_after_subscription(self):
         transport = MqttVaultTransport(self._config())

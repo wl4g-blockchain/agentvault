@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from common.deploy.base import FullFlowEvidence
+from deploy.deployer.base import FullFlowEvidence
 
 
 def verify_evidence(evidence: FullFlowEvidence, database_evidence: str) -> str:

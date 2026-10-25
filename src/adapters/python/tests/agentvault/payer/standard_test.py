@@ -133,7 +133,7 @@ class StandardPayerMiddlewareTest(unittest.TestCase):
 
     def test_x402_and_mpp_mcp_calls_use_metadata_and_report_native_receipts(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
 
         async def execute(protocol: str) -> None:

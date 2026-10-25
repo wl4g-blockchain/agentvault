@@ -1,15 +1,12 @@
-"""Read the canonical AgentVault console-resource fixture without PyYAML.
-
-Each YAML document is deliberately encoded as JSON (JSON is a YAML subset),
-so the E2E runner can retain its standard-library-only dependency boundary.
-"""
+"""Read and render the canonical AgentVault console-resource YAML fixture."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+import yaml
 
 
 COLLECTION_BY_KIND = {
@@ -27,24 +24,29 @@ _MARKETPULSE_OFFER = "offer-realtime-news"
 
 def _resource_documents(path: Path) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
-    bodies = [body.strip() for body in path.read_text(encoding="utf-8").split("\n---\n")]
-    for index, body in enumerate(bodies, start=1):
-        body = body.removeprefix("---\n").strip()
-        if not body:
-            continue
-        document = json.loads(body)
-        if set(document) != {"consoleVersion", "kind", "metadata", "data"}:
-            raise ValueError(f"resource document {index} has an invalid envelope")
-        if document["consoleVersion"] != "core.agentvault.io/v1":
-            raise ValueError(f"resource document {index} has an unsupported consoleVersion")
-        kind = document["kind"]
-        if kind not in COLLECTION_BY_KIND:
-            raise ValueError(f"resource document {index} has an unsupported kind: {kind}")
-        metadata = document["metadata"]
-        data = document["data"]
-        if set(metadata) != {"name", "status"} or not isinstance(data, dict):
-            raise ValueError(f"resource document {index} has invalid metadata or data")
-        documents.append(document)
+    try:
+        parsed_documents = yaml.safe_load_all(path.read_text(encoding="utf-8"))
+        for index, document in enumerate(parsed_documents, start=1):
+            if document is None:
+                continue
+            if not isinstance(document, dict):
+                raise ValueError(f"resource document {index} must be a YAML mapping")
+            if set(document) != {"consoleVersion", "kind", "metadata", "data"}:
+                raise ValueError(f"resource document {index} has an invalid envelope")
+            if document["consoleVersion"] != "core.agentvault.io/v1":
+                raise ValueError(f"resource document {index} has an unsupported consoleVersion")
+            kind = document["kind"]
+            if kind not in COLLECTION_BY_KIND:
+                raise ValueError(f"resource document {index} has an unsupported kind: {kind}")
+            metadata = document["metadata"]
+            data = document["data"]
+            if not isinstance(metadata, dict) or set(metadata) != {"name", "status"}:
+                raise ValueError(f"resource document {index} has invalid metadata")
+            if not isinstance(data, dict):
+                raise ValueError(f"resource document {index} has invalid data")
+            documents.append(document)
+    except yaml.YAMLError as error:
+        raise ValueError(f"invalid resource YAML: {error}") from error
     if not documents:
         raise ValueError("resource fixture is empty")
     return documents
@@ -90,10 +92,13 @@ def render_agentvault_resources(path: Path, marketpulse_origin: str) -> str:
             offer_count += 1
     if policy_count == 0 or offer_count != 1:
         raise ValueError("canonical fixture must contain Policies and exactly one MarketPulse Offer")
-    return "\n".join(
-        f"---\n{json.dumps(document, separators=(',', ':'), ensure_ascii=False)}"
-        for document in documents
-    ) + "\n"
+    return yaml.safe_dump_all(
+        documents,
+        allow_unicode=True,
+        default_flow_style=False,
+        explicit_start=True,
+        sort_keys=False,
+    )
 
 
 def load_agentvault_resources(path: Path) -> dict[str, list[dict[str, Any]]]:

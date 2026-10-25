@@ -1,11 +1,8 @@
-mod cli;
-mod component;
-mod payment_runtime;
-mod runtime;
+mod agentvault;
+mod console;
 
-pub use cli::run as run_cli;
-pub use component::{RuntimeComponent, RuntimeResource, ServerSupervisor, Shutdown};
-pub use runtime::AgentVaultServer;
+pub use agentvault::{AgentVaultServer, RuntimeComponent, RuntimeResource, ServerSupervisor, Shutdown};
+pub use console::run as run_cli;
 
 #[cfg(test)]
 #[path = "../../tests/cmd/mod_test.rs"]

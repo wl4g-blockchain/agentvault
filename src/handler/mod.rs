@@ -1,66 +1,69 @@
 //! Transport-independent application handlers.
 
-mod approval_handler;
-mod balance_handler;
-mod client_handler;
-mod common;
+mod approval;
+mod balance;
+mod evm;
 mod evm_receipt;
-mod evm_rpc;
-mod http_json_transport;
-pub mod job;
-mod offer_handler;
+mod offer;
 mod outbound_evidence;
-mod outbound_signing_handler;
-mod payment_handler;
-mod policy_handler;
-mod resource_import;
-mod scenario_handler;
-mod settlement_handler;
-mod wallet_handler;
-mod x402_facilitator;
-mod x402_wire;
+mod outbound_signing;
+mod outbox;
+mod payment;
+mod payment_validation;
+mod provider;
+mod reconciliation;
+mod resource;
+mod scenario;
+mod settlement;
+mod wallet;
+mod x402;
 
+pub(crate) use crate::model::scenario::UNRESTRICTED_PRINCIPAL;
+pub use crate::model::ImportReport;
+pub use crate::model::{
+    AccessContext, ApprovalDecisionResult, ApprovalExpirationRun, AuthorizePayment, ConfirmedEvmTransfer,
+    ConfirmedSettlement, ConfirmedTransfer, CreateEncryptedWallet, EncryptedWalletPrivateKey,
+    EvmAuthorizationObservation, EvmAuthorizationQuery, EvmReceiptObservation, EvmTransferQuery, IncomingVerification,
+    IssuePaymentChallenge, PaymentEventDelivery, PaymentEventDispatchRun, ReceiptObservation, ReconciliationEvidence,
+    ReconciliationRun, RecordOutboundPaymentResponse, RecordedOutboundEvidence, SettleIncomingPayment,
+    SettledIncomingPayment, SettlementOperation, SettlementProviderRequest, SettlementProviderResult,
+    SignAuthorizedPayment, SignedOutboundPayment, SubmitApprovalDecision, TransferQuery, VerifyIncomingPayment,
+    WalletBalanceSnapshot, WalletBalanceSyncRun, WalletImportSession,
+};
 pub use crate::protocol::ProtocolRegistry;
-pub use approval_handler::{
-    ApprovalDecisionResult, ApprovalGrantTokenService, ApprovalHandler, ApprovalPrincipalAuthorizer,
-    JwtApprovalGrantTokenService, StoredApprovalPrincipalAuthorizer, SubmitApprovalDecision,
+pub use approval::{
+    ApprovalExpirationJob, ApprovalGrantTokenService, ApprovalHandler, ApprovalPrincipalAuthorizer,
+    JwtApprovalGrantTokenService, StoredApprovalPrincipalAuthorizer,
 };
-pub use balance_handler::{
-    EvmRpcBalanceSource, SolanaRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSnapshot, WalletBalanceSource,
-    WalletBalanceSync, WalletBalanceSyncRun, WalletBalanceSynchronizer,
+pub use balance::{
+    EvmRpcBalanceSource, SolanaRpcBalanceSource, WalletBalanceRegistry, WalletBalanceSource, WalletBalanceSync,
+    WalletBalanceSyncJob, WalletBalanceSynchronizer,
 };
-pub use client_handler::ClientHandler;
 pub use evm_receipt::{
-    ConfirmedEvmTransfer, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery,
-    EvmAuthorizationSource, EvmEvidenceSource, EvmReceiptObservation, EvmReceiptRegistry, EvmReceiptSource,
-    EvmRpcReceiptConfig, EvmRpcReceiptSource, EvmTransferQuery, ReceiptObservation, ReceiptRegistry, ReceiptSource,
-    SolanaRpcReceiptConfig, SolanaRpcReceiptSource, TransferQuery,
+    EvmAuthorizationSource, EvmEvidenceSource, EvmReceiptRegistry, EvmReceiptSource, EvmRpcReceiptConfig,
+    EvmRpcReceiptSource, ReceiptRegistry, ReceiptSource, SolanaRpcReceiptConfig, SolanaRpcReceiptSource,
 };
-pub use offer_handler::OfferHandler;
-pub(crate) use outbound_evidence::OutboundEvidenceObservation;
-pub use outbound_evidence::{
-    OutboundEvidenceDependencies, OutboundEvidenceHandler, RecordOutboundPaymentResponse, RecordedOutboundEvidence,
+pub use offer::OfferHandler;
+pub use outbound_evidence::{OutboundEvidenceDependencies, OutboundEvidenceHandler};
+pub use outbound_signing::{OutboundSigningDependencies, OutboundSigningHandler};
+pub use outbox::{PaymentEventDispatcher, PaymentEventDispatcherConfig, PaymentEventSink};
+pub use payment::PaymentHandler;
+pub use reconciliation::{
+    PaymentEvidenceRouter, ProviderReconciliationRequest, ReconciliationConfig, ReconciliationEvidenceSource,
+    ReconciliationJob, UnixClock, VerifyOnlyProviderEvidence,
 };
-pub use outbound_signing_handler::{
-    OutboundSigningDependencies, OutboundSigningHandler, SignAuthorizedPayment, SignedOutboundPayment,
-};
-pub use payment_handler::{AuthorizePayment, PaymentHandler};
-pub use policy_handler::{PolicyDecision, PolicyEngine, PolicyEvaluation, WalletBudget};
 #[cfg(test)]
-pub(crate) use resource_import::encode_test_resource_documents;
-pub use resource_import::{import_from_paths, ImportReport};
-pub(crate) use scenario_handler::UNRESTRICTED_PRINCIPAL;
-pub use scenario_handler::{AccessContext, ScenarioHandler};
+pub(crate) use resource::encode_test_resource_documents;
+pub use resource::{create_wallets_from_paths, import_from_paths};
+pub use scenario::{ClientHandler, ScenarioHandler};
 
-pub(crate) use settlement_handler::{provider_verification_ref, ReconciliationProviderObservation};
-pub use settlement_handler::{
-    ExternalSettlementProvider, HttpSettlementProvider, IncomingVerification, IssuePaymentChallenge,
-    SettleIncomingPayment, SettledIncomingPayment, SettlementDependencies, SettlementHandler, SettlementOperation,
-    SettlementProviderConfig, SettlementProviderRegistry, SettlementProviderRequest, SettlementProviderResult,
-    VerifyIncomingPayment,
+pub(crate) use settlement::provider_verification_ref;
+pub use settlement::{
+    ExternalSettlementProvider, HttpSettlementProvider, SettlementDependencies, SettlementHandler,
+    SettlementProviderConfig, SettlementProviderRegistry,
 };
-pub use wallet_handler::{CreateEncryptedWallet, EncryptedWalletPrivateKey, WalletHandler, WalletImportSession};
-pub use x402_facilitator::X402FacilitatorProvider;
+pub use wallet::WalletHandler;
+pub use x402::X402FacilitatorProvider;
 
 #[cfg(test)]
 #[path = "../../tests/handler/mod_test.rs"]

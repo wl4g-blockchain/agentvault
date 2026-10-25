@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from common.context import VerificationContext
-from common.deploy import create_deployer
+from deploy.deployer import create_deployer
 
 
 def verify(context: VerificationContext) -> dict[str, str]:

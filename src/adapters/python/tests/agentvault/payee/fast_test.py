@@ -269,7 +269,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_x402_and_mpp_mcp_payee_flows_verify_settle_and_preserve_bearer(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         for protocol in ("x402", "mpp"):
             with self.subTest(protocol=protocol):
@@ -405,7 +405,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_mpp_invalid_mcp_credential_returns_verification_error(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         contract = fixture["protocols"]["mpp"]
         transport = _McpPayeeTransport("mpp", contract)
@@ -455,7 +455,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_paid_mcp_business_failure_is_preserved_for_delivery_retry(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         contract = fixture["protocols"]["x402"]
 

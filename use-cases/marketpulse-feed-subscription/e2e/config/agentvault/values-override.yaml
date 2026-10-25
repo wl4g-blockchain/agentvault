@@ -1,0 +1,252 @@
+agentvault:
+  backend:
+    fullnameOverride: agentvault
+    replicaCount: 1
+    image:
+      repository: localhost/agentvault-e2e
+      tag: local
+      pullPolicy: IfNotPresent
+    resourceImport:
+      enabled: true
+      configMap: agentvault-e2e-resources
+      key: resources.yaml
+    route:
+      enabled: false
+    env:
+      AGENTVAULT__SERVER__ENABLED: "true"
+      AGENTVAULT__SERVER__HOST: "0.0.0.0"
+      AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
+      AGENTVAULT__MGMT__HOST: "0.0.0.0"
+      AGENTVAULT__LOGGING__MODE: "JSON"
+      AGENTVAULT__STORAGE__PROVIDER: "postgres"
+      AGENTVAULT__CACHE__PROVIDER: "memory"
+      AGENTVAULT__AGENTVAULT__PAYER__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYER__X402__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYEE__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__PAYEE__X402__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED: "true"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__HOST: "0.0.0.0"
+      AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__ENABLED: "true"
+    extraContainers:
+      - name: loopback-bridge
+        image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+        imagePullPolicy: IfNotPresent
+        args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: [ALL] }
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits: { cpu: 100m, memory: 64Mi }
+        volumeMounts:
+          - { name: loopback-bridge-config, mountPath: /etc/envoy, readOnly: true }
+    extraVolumes:
+      - name: loopback-bridge-config
+        configMap: { name: agentvault-loopback-bridge }
+  frontend:
+    enabled: false
+    route:
+      enabled: false
+  agentvault-config: |
+    server:
+      enabled: true
+      service_name: agentvault
+      host: 0.0.0.0
+      port: 8080
+      context_path: /api/v1
+      authguard:
+        enabled: false
+        direct_context_hmac_key:
+          file: ""
+          env: AGENTVAULT__SERVER__AUTHGUARD__DIRECT_CONTEXT_HMAC_KEY
+        scope_resolver:
+          enabled: true
+          target: http://agentvault-authguard:8081
+          timeout: 2s
+      shutdown_timeout: 15s
+      request:
+        max_body_bytes: 262144
+        timeout: 15s
+    mgmt:
+      enabled: true
+      host: 0.0.0.0
+      port: 9091
+      context_path: /
+      health:
+        liveness_path: /healthz
+        readiness_path: /readyz
+        probe_timeout: 1s
+      metrics:
+        enabled: true
+        path: /metrics
+      otel:
+        enabled: true
+        endpoint: http://127.0.0.1:4317
+        protocol: grpc
+        timeout: 5s
+        sample_rate: 1.0
+    logging:
+      mode: JSON
+      level: info
+    storage:
+      provider: postgres
+      sqlite:
+        database_file: /var/lib/agentvault/agentvault.sqlite3
+        max_connections: 1
+        busy_timeout: 5s
+      postgres:
+        url:
+          file: ""
+          env: HELPER_SECRET_STORAGE_POSTGRES_URL
+        max_connections: 16
+        connect_timeout: 10s
+    cache:
+      provider: memory
+      memory:
+        max_entries: 10000
+        max_value_bytes: 1048576
+        default_ttl: 5m
+      redis:
+        mode: standalone
+        urls:
+          - file: ""
+            env: HELPER_SECRET_CACHE_REDIS_URL
+        key_prefix: agentvault
+        max_value_bytes: 1048576
+        connect_timeout: 3s
+        operation_timeout: 2s
+        default_ttl: 5m
+        retry_attempts: 5
+        min_retry_wait: 100ms
+        max_retry_wait: 2s
+    agentvault:
+      payer:
+        enabled: true
+        wallet_selection:
+          strategy: least_spent
+        x402:
+          enabled: true
+          max_challenge_ttl: 5m
+          assets:
+            - network: eip155:31337
+              contract: "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+              symbol: USDC
+              decimals: 6
+        mpp:
+          enabled: false
+          max_challenge_ttl: 5m
+          assets: []
+      payee:
+        enabled: true
+        x402:
+          enabled: true
+          max_challenge_ttl: 5m
+          assets:
+            - network: eip155:31337
+              contract: "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+              symbol: USDC
+              decimals: 6
+          facilitator:
+            id: x402-e2e
+            base_url: http://127.0.0.1:8085/
+            verify_path: verify
+            settle_path: settle
+            timeout: 15s
+            max_response_bytes: 262144
+            allow_insecure_loopback: true
+            secret_headers: {}
+        mpp:
+          enabled: false
+          max_challenge_ttl: 5m
+          realm: agentvault
+          challenge_secret:
+            file: ""
+            env: AGENTVAULT__AGENTVAULT__PAYEE__MPP__CHALLENGE_SECRET
+          assets: []
+          provider:
+            id: mpp-primary
+            base_url: https://provider.example/mpp/
+            verify_path: verify
+            settle_path: settle
+            timeout: 10s
+            max_response_bytes: 262144
+            allow_insecure_loopback: false
+            secret_headers: {}
+      chains:
+        "eip155:31337":
+          family: evm
+          rpc:
+            endpoint: http://127.0.0.1:8545
+            timeout: 10s
+            max_response_bytes: 262144
+            allow_insecure_loopback: true
+            secret_headers: {}
+          minimum_native_balance: "1"
+          confirmation_depth: 1
+      key_management:
+        active_key_id: wallet-kek-v1
+        keys:
+          wallet-kek-v1:
+            file: ""
+            env: HELPER_SECRET_WALLET_KEK_V1
+      recovery_encryption:
+        active_key_id: recovery-v1
+        keys:
+          recovery-v1:
+            file: ""
+            env: HELPER_SECRET_RECOVERY_KEY_V1
+      approval:
+        request_ttl: 15m
+        grant_ttl: 5m
+        expiry_interval: 2s
+        expiry_batch_size: 100
+        jwt:
+          issuer: agentvault-e2e
+          audience: agentvault:approval-grant
+          active_key_id: approval-hs256-v1
+          signing_keys:
+            approval-hs256-v1:
+              file: ""
+              env: HELPER_SECRET_APPROVAL_JWT_KEY_V1
+      reconciliation:
+        enabled: true
+        interval: 2s
+        lease_ttl: 10s
+        batch_size: 100
+        initial_backoff: 1s
+        max_backoff: 10s
+      wallet_balance_sync:
+        enabled: true
+        interval: 2s
+        batch_size: 1000
+      transport:
+        grpc:
+          enabled: true
+          host: 0.0.0.0
+          port: 50051
+          max_message_bytes: 2097152
+          request_timeout: 15s
+        local:
+          enabled: false
+          socket_path: /run/agentvault/agentvault.sock
+          max_connections: 64
+          request_timeout: 5s
+        mqtt:
+          enabled: true
+          host: 127.0.0.1
+          port: 1883
+          client_id: agentvault-e2e
+          consumer_group: agentvault-e2e
+          topic_prefix: agentvault/v1/clients
+          qos: 1
+          tls: false
+          username: agentvault-vault
+          password:
+            file: ""
+            env: HELPER_SECRET_MQTT_PASSWORD
+          request_timeout: 15s
+          reconnect_delay: 1s
+
+authguard:
+  enabled: false

@@ -100,27 +100,36 @@ x402 Profile 的 `payment-expires-at`；审批轮询始终复用这个绝对值�
 ```text
 marketpulse-feed-subscription/e2e/
 ├── deploy/
+│   ├── deployer/          # Docker/Kubernetes 生命周期与范围化清理
+│   ├── namespaces.yaml    # 集群级 E2E Namespace 清单
+│   ├── agentvault-helm-shared/
+│   ├── mock-payee-marketpulse-config/
+│   ├── mock-payer-quantstream-config/
 │   ├── anvil/  solana/  facilitator/
 │   ├── mock-payee-marketpulse-{golang,rust,python,java,typescript}-service/
 │   │   └── {main/Application,server,route/feed,handler/feed,storage/feed}
-│   ├── mock-payer-quantstream-ingest-ui/src/
-│   ├── mock-payer-quantstream-ingest-service-golang/
+│   ├── mock-payer-quantstream-ui/src/
+│   ├── mock-payer-quantstream-service-golang/
 │   │   ├── main.go
 │   │   └── pkg/{route,handler,job,agent}/
-│   ├── mock-payer-quantstream-ingest-service-rust/
+│   ├── mock-payer-quantstream-service-rust/
 │   │   └── src/{lib.rs,main.rs,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-python/
+│   ├── mock-payer-quantstream-service-python/
 │   │   └── app/{main.py,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-java/
+│   ├── mock-payer-quantstream-service-java/
 │   │   └── src/io/agentvault/e2e/{Application.java,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-typescript/
+│   ├── mock-payer-quantstream-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # 与源码相对路径一致的单元测试
-├── common/contract/       # 声明式资源与 MQTT 契约
+├── common/                # 仅含 Python 的案例上下文与公共工具
+├── config/                # AgentVault 运行与初始化配置
+│   ├── agentvault/
+│   │   ├── values.yaml    # 唯一的 Helm/Kubernetes values 来源
+│   │   └── init.import.yaml # 规范化 Console 初始化导入资源
 ├── verifier/              # 结构、业务与资金证据断言
 ├── reports/               # 分层验收报告
 ├── docker-compose.yaml
-└── runner.py              # 仅依赖 Python 标准库的编排器
+└── runner.py              # 依赖统一声明于 requirements.txt 的分层编排器
 ```
 
 五语言后端刻意维持一致的组合方式：极简 `main/Application`、仅含运维接口的
@@ -136,6 +145,7 @@ MCP Service 注册这两个外部 Tool 并接入对应语言的 Payer Middleware
 
 ```bash
 cd use-cases/marketpulse-feed-subscription/e2e
+python3 -m pip install --requirement requirements.txt
 
 python3 runner.py --list
 python3 runner.py -s structure

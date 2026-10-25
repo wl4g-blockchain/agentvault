@@ -112,8 +112,9 @@ src/
 ├── cmd/          # CLI、服务组合根、生命周期
 ├── config/       # 强类型 YAML 与校验
 ├── controller/   # HTTP、gRPC、Unix Socket、MQTT、Management
-├── handler/      # 应用服务、签名、结算、恢复任务
-├── model/        # 协议无关领域模型
+├── handler/      # 扁平的应用服务、端口实现、签名、结算、恢复任务
+├── model/        # DTO、命令、结果与可复用值对象
+│   └── domain/   # 与 SQL 表或权威持久化聚合对应的实体
 ├── protocol/     # x402、MPP adapter
 ├── storage/      # Port、SQL base、SQLite/PostgreSQL adapter
 ├── utils/        # 密钥材料、密码学、错误等公共能力
@@ -121,10 +122,12 @@ src/
 └── main.rs
 ```
 
-Go、Rust、Python、TypeScript（以及保持同矩阵的 Java）测试统一放在组件的
-`tests/` 下，目录镜像源码相对路径，命名为 `<module>_test.*`（Java 使用
-`<Module>Test.java`）。源码目录不再混入测试文件；结构门禁同时拒绝缺失测试和
-孤儿测试。
+Go、Rust、Python、TypeScript 测试统一放在组件的 `tests/` 下；Java 按其组件
+约定放在 `test/` 下。测试目录镜像源码相对路径，命名为 `<module>_test.*`
+（Java 使用 `<Module>Test.java`）。源码目录不再混入测试文件；结构门禁同时拒绝
+缺失测试和孤儿测试。服务端 `model/domain/<domain>.rs` 只定义权威持久化实体，
+`model/<domain>.rs` 只在实体无法直接复用时定义 DTO/命令/结果和值对象；
+`handler/<domain>.rs` 不定义可跨边界复用的业务模型。
 
 ## 5. 持久化与一致性
 
@@ -247,7 +250,7 @@ Challenge、Verify、Settle，并由 Axum、Gin、FastAPI/ASGI、Express、Sprin
 
 五种 Payer 配置只包含 `scenario_id` 与超时、审批轮询、重试等客户端行为参数；不得出现 Wallet、Policy、金额、资产、网络、收款人或商户 Origin 配置。SDK 授权 wire 只发送操作上下文和捕获的原始 Challenge，并校验返回 Intent 中由 AgentVault 选择的 Policy/Wallet 与签名凭据绑定完整。
 
-SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外公开 API 描述目录。Dashboard 位于 `web/`，只使用同源 Cookie/上下文，不保存 Bearer Token。一级菜单按业务职责组织为 Payer 交易、Payee 交易、审批、余额与 Ledger、Client 身份归属、Scenario 治理、Wallet 管理和运行状态。所有可见列表默认按 10 条分页；守恒指标需要完整 Ledger 时在后台以有界批次读取，不能把当前页误当完整事实。Client 页面只读展示可信身份绑定及其 Scenario 关系，身份变更仍走受控 `console import`；Scenario 不保存外部应用引用，其 `id` 就是唯一稳定配置身份。Scenario 创建会在一个服务端事务中写入 Scenario、初始 Policy 与勾选的多个 Wallet membership；Wallet 通过单列、限高、可滚动的多选下拉选择，任一 Wallet 无效则整体回滚。独立 Wallet 页面允许创建本地 EOA，但私钥先在浏览器中使用临时 RSA 公钥加密，明文不会进入 React 状态、URL、日志和 JSON 请求；仅服务端 WalletHandler 在消费会话后短暂解密，再交给既有 KEK 入库流程。Policy、Wallet 等目录数据保持在各自内聚的治理流程中。
+SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外公开 API 描述目录。Dashboard 位于 `web/`，只使用同源 Cookie/上下文，不保存 Bearer Token。一级菜单按业务职责组织为 Payer 交易、Payee 交易、审批、余额与 Ledger、Client 身份归属、Scenario 治理、Wallet 管理和运行状态。所有可见列表默认按 10 条分页；守恒指标需要完整 Ledger 时在后台以有界批次读取，不能把当前页误当完整事实。Client 页面只读展示可信身份绑定及其 Scenario 关系，身份变更仍走受控 `console import`；Scenario 不保存外部应用引用，其 `id` 就是唯一稳定配置身份。Scenario 创建会在一个服务端事务中写入 Scenario、初始 Policy 与勾选的多个 Wallet membership；Wallet 通过单列、限高、可滚动的多选下拉选择，任一 Wallet 无效则整体回滚。独立 Wallet 页面允许创建本地 EOA，但私钥先在浏览器中使用临时 RSA 公钥加密，明文不会进入 React 状态、URL、日志和 JSON 请求；仅服务端 WalletHandler 在消费会话后短暂解密，再交给既有 KEK 入库流程。`agentvault console` 与 Dashboard 共用同一领域/存储端口：目录创建使用规范资源导入，启停和审批使用既有状态机，支付、审批、Ledger 与 Event 历史只读。Wallet 命令面固定为 `create/list/get`，后两者只序列化公开 metadata；不存在查看、导出、修改、轮换、停用或删除 EOA 私钥的 console/UI 路径，密钥创建后只能由运行时 signer 经 custody port 使用。Policy、Wallet 等目录数据保持在各自内聚的治理流程中。
 
 ## 11. 部署与真实 E2E
 

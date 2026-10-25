@@ -67,7 +67,7 @@ test('ExpressPayeeMiddleware rejects duplicated payment credentials before Vault
 
 test('ExpressPayeeMiddleware closes x402 and MPP MCP verify/settle flows', async () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as {
     protocols: Record<string, {
@@ -191,7 +191,7 @@ test('ExpressPayeeMiddleware closes x402 and MPP MCP verify/settle flows', async
 
 test('ExpressPayeeMiddleware maps rejected MPP MCP credentials to -32043', async () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as {
     protocols: Record<string, {
@@ -252,7 +252,7 @@ test('ExpressPayeeMiddleware maps rejected MPP MCP credentials to -32043', async
 
 test('ExpressPayeeMiddleware preserves a paid MCP business failure for delivery retry', async () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as {
     protocols: Record<string, {

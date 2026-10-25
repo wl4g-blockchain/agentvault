@@ -1239,7 +1239,7 @@ impl crate::handler::WalletBalanceSource for LiveTempoBalanceSource {
 
 struct LiveTempoClock(i64);
 
-impl crate::handler::job::UnixClock for LiveTempoClock {
+impl crate::handler::UnixClock for LiveTempoClock {
     fn now(&self) -> crate::Result<i64> {
         Ok(self.0)
     }
@@ -1284,10 +1284,10 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     use crate::{
         apm::AgentVaultMetrics,
         handler::{
-            job::{PaymentEvidenceRouter, ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob},
             EvmEvidenceSource, EvmReceiptRegistry, EvmRpcReceiptConfig, EvmRpcReceiptSource,
             ExternalSettlementProvider, IssuePaymentChallenge, OutboundEvidenceDependencies, OutboundEvidenceHandler,
-            OutboundSigningDependencies, OutboundSigningHandler, PaymentHandler, RecordOutboundPaymentResponse,
+            OutboundSigningDependencies, OutboundSigningHandler, PaymentEvidenceRouter, PaymentHandler,
+            ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob, RecordOutboundPaymentResponse,
             ScenarioHandler, SettleIncomingPayment, SettlementDependencies, SettlementHandler,
             SettlementProviderRegistry, SignAuthorizedPayment, VerifyIncomingPayment,
         },

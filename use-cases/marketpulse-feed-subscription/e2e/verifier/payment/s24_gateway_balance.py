@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from common.deploy.base import FullFlowEvidence
+from deploy.deployer.base import FullFlowEvidence
 from common.payer_identity import PAYER_IDENTITIES, payer_identity
 
 

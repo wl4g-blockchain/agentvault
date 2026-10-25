@@ -26,74 +26,19 @@ use solana_transaction_status_client_types::{
 use x402_chain_solana::chain::SolanaChainReference;
 use x402_types::chain::ChainId;
 
-use crate::{model::Amount, Error, Result};
+use crate::{
+    model::{
+        Amount, ConfirmedEvmTransfer, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery,
+        EvmReceiptObservation, EvmTransferQuery, ReceiptObservation, TransferQuery,
+    },
+    Error, Result,
+};
 
-use super::evm_rpc::FixedEvmRpcClient;
+use super::evm::FixedEvmRpcClient;
 
 const ERC20_TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const MAX_AUTHORIZATION_LOG_RANGE: u64 = 2_000;
 const MAX_AUTHORIZATION_RECOVERY_BLOCKS: u64 = 65_536;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TransferQuery {
-    pub network: String,
-    pub transaction: String,
-    pub token_contract: String,
-    pub payer: String,
-    pub recipient: String,
-    pub amount: Amount,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EvmAuthorizationQuery {
-    pub network: String,
-    pub token_contract: String,
-    pub payer: String,
-    pub nonce: String,
-    pub recipient: String,
-    pub amount: Amount,
-    /// Durable, operator-RPC-derived lower bound captured before `/settle`.
-    pub from_block: u64,
-}
-
-pub type EvmTransferQuery = TransferQuery;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfirmedTransfer {
-    pub authority: String,
-    pub transaction: String,
-    pub effect_ref: String,
-    pub confirmations: u64,
-    pub minimum_confirmations: u64,
-    pub effective_at: i64,
-}
-
-pub type ConfirmedEvmTransfer = ConfirmedTransfer;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReceiptObservation {
-    Confirmed(ConfirmedTransfer),
-    Pending,
-    Mismatch { reason: String },
-}
-
-pub use ReceiptObservation as EvmReceiptObservation;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EvmAuthorizationObservation {
-    Confirmed(ConfirmedTransfer),
-    /// An exact authorization event exists, but its transfer is not yet final.
-    Pending,
-    /// The complete bounded interval through this canonical block contains no
-    /// matching authorization. `observed_at` is that block's timestamp.
-    NoEffect {
-        observed_block: u64,
-        observed_at: i64,
-    },
-    Mismatch {
-        reason: String,
-    },
-}
 
 #[async_trait]
 pub trait ReceiptSource: Send + Sync {

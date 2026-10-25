@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from common.context import VerificationContext
-from common.deploy import create_deployer
-from common.deploy.kubernetes import KubernetesE2ECleaner
 from common.project import DEPLOY_ROOT, REPORT_ROOT
 from common.report import ReportBook
 from common.sdk_matrix import SDK_SCOPES
+from deploy.deployer import create_deployer
+from deploy.deployer.kubernetes import KubernetesE2ECleaner
 
 
 LOGGER = logging.getLogger("agentvault.e2e.runner")

@@ -105,7 +105,7 @@ func TestStandardPayerMiddlewareRetriesPaidRequest(t *testing.T) {
 }
 
 func TestStandardPayerMiddlewareCompletesOfficialMCPFlows(t *testing.T) {
-	fixtureBody, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payment_protocol_mcp.json"))
+	fixtureBody, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "payment_protocol_mcp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

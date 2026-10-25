@@ -592,7 +592,7 @@ impl LiveSolanaClock {
     }
 }
 
-impl crate::handler::job::UnixClock for LiveSolanaClock {
+impl crate::handler::UnixClock for LiveSolanaClock {
     fn now(&self) -> crate::Result<i64> {
         Ok(self.0.load(std::sync::atomic::Ordering::SeqCst))
     }
@@ -957,9 +957,9 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     use crate::{
         apm::AgentVaultMetrics,
         handler::{
-            job::{PaymentEvidenceRouter, ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob},
             IssuePaymentChallenge, OutboundEvidenceDependencies, OutboundEvidenceHandler, OutboundSigningDependencies,
-            OutboundSigningHandler, PaymentHandler, ReceiptRegistry, ReceiptSource, RecordOutboundPaymentResponse,
+            OutboundSigningHandler, PaymentEvidenceRouter, PaymentHandler, ReceiptRegistry, ReceiptSource,
+            ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob, RecordOutboundPaymentResponse,
             ScenarioHandler, SettleIncomingPayment, SettlementDependencies, SettlementHandler,
             SettlementProviderConfig, SettlementProviderRegistry, SignAuthorizedPayment, SolanaRpcBalanceSource,
             SolanaRpcReceiptConfig, SolanaRpcReceiptSource, VerifyIncomingPayment, X402FacilitatorProvider,

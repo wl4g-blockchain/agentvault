@@ -44,6 +44,20 @@ type Transport interface {
 	Do(context.Context, TransportRequest) (TransportResponse, error)
 }
 
+// TransportResult is delivered by an AsyncTransport without blocking the
+// caller that submitted the request.
+type TransportResult struct {
+	Response TransportResponse
+	Err      error
+}
+
+// AsyncTransport is implemented by transports whose native request lifecycle
+// is callback/future based. The result channel is buffered and receives
+// exactly one value before it is closed.
+type AsyncTransport interface {
+	DoAsync(context.Context, TransportRequest) <-chan TransportResult
+}
+
 var ErrRunConflict = errors.New("agentvault run conflict")
 
 type APIError struct {

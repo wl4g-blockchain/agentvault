@@ -22,6 +22,8 @@ interface WireResponse {
 
 interface PendingRequest {
   expectedType: WireResponse['type'];
+  commandTopic: string;
+  payload: Buffer;
   resolve: (value: WireResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -32,6 +34,8 @@ export class MqttVaultTransport implements VaultTransport {
   private connectPromise: Promise<void> | undefined;
   private readonly prefix: string;
   private readonly pending = new Map<string, PendingRequest>();
+  private ready = false;
+  private closed = false;
 
   constructor(public readonly config: MqttConfig) {
     this.prefix = `agentvault/v1/clients/${config.vaultClientId}`;
@@ -42,9 +46,11 @@ export class MqttVaultTransport implements VaultTransport {
   }
 
   async connect(): Promise<void> {
-    if (this.client?.connected) return;
+    if (this.closed) throw new Error('MQTT transport closed');
+    if (this.ready) return;
     if (this.connectPromise) return this.connectPromise;
-    this.connectPromise = this.open();
+    if (!this.client) this.open();
+    this.connectPromise = this.waitUntilReady();
     try {
       await this.connectPromise;
     } finally {
@@ -52,7 +58,7 @@ export class MqttVaultTransport implements VaultTransport {
     }
   }
 
-  private async open(): Promise<void> {
+  private open(): void {
     const address = isIP(this.config.host) === 6 ? `[${this.config.host}]` : this.config.host;
     const broker = `${this.config.tls ? 'mqtts' : 'mqtt'}://${address}:${this.config.port}`;
     const client = mqtt.connect(broker, {
@@ -61,40 +67,48 @@ export class MqttVaultTransport implements VaultTransport {
       password: this.config.password,
       protocolVersion: 4,
       clean: true,
-      reconnectPeriod: 0,
+      reconnectPeriod: 1000,
       connectTimeout: this.config.timeoutMs,
     });
     this.client = client;
     client.on('message', (topic, payload) => this.onMessage(topic, payload));
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('MQTT connect timed out')), this.config.timeoutMs);
-        client.once('error', (error) => {
-          clearTimeout(timer);
-          reject(new Error(`MQTT connection failed: ${error.name}`));
-        });
-        client.once('connect', () => {
-          client.subscribe(
-            `${this.prefix}/results/+`,
-            { qos: 1 },
-            (error, granted) => {
-              clearTimeout(timer);
-              if (error) reject(new Error(`MQTT subscribe failed: ${error.name}`));
-              else if (!subscriptionGranted(granted, 1)) {
-                reject(new Error('AgentVault MQTT subscriptions were rejected or downgraded'));
-              } else resolve();
-            },
-          );
-        });
-      });
-    } catch (error) {
-      this.client = undefined;
-      await new Promise<void>((resolve) => client.end(true, {}, () => resolve()));
-      throw error;
+    client.on('error', () => {
+      // mqtt.js reconnects automatically. Pending requests retain their exact
+      // envelope and remain bounded by their own timeout.
+    });
+    client.on('close', () => { this.ready = false; });
+    client.on('offline', () => { this.ready = false; });
+    client.on('reconnect', () => { this.ready = false; });
+    client.on('connect', () => {
+      this.ready = false;
+      client.subscribe(
+        `${this.prefix}/results/+`,
+        { qos: 1 },
+        (error, granted) => {
+          if (error || !subscriptionGranted(granted, 1)) {
+            this.ready = false;
+            return;
+          }
+          this.ready = true;
+          for (const requestSpanId of this.pending.keys()) this.publishPending(requestSpanId);
+        },
+      );
+    });
+  }
+
+  private async waitUntilReady(): Promise<void> {
+    const deadline = Date.now() + this.config.timeoutMs;
+    while (!this.ready) {
+      if (this.closed) throw new Error('MQTT transport closed');
+      if (Date.now() >= deadline) throw new Error('MQTT connect/subscribe timed out');
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, this.config.timeoutMs)));
     }
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.ready = false;
     const client = this.client;
     this.client = undefined;
     if (client) await new Promise<void>((resolve) => client.end(false, {}, () => resolve()));
@@ -144,22 +158,16 @@ export class MqttVaultTransport implements VaultTransport {
         this.pending.delete(requestSpanId);
         reject(new Error('AgentVault MQTT request timed out'));
       }, this.config.timeoutMs);
-      this.pending.set(requestSpanId, { expectedType: operation.responseType, resolve, reject, timer });
+      this.pending.set(requestSpanId, {
+        expectedType: operation.responseType,
+        commandTopic: `${this.prefix}/commands/${operation.command}`,
+        payload,
+        resolve,
+        reject,
+        timer,
+      });
     });
-    client.publish(
-      `${this.prefix}/commands/${operation.command}`,
-      payload,
-      { qos: 1, retain: false },
-      (error) => {
-        if (!error) return;
-        const waiting = this.pending.get(requestSpanId);
-        if (waiting) {
-          clearTimeout(waiting.timer);
-          this.pending.delete(requestSpanId);
-          waiting.reject(new Error(`MQTT publish failed: ${error.name}`));
-        }
-      },
-    );
+    this.publishPending(requestSpanId);
     const response = await result;
     const decoded = Buffer.from(response.body, 'base64url');
     if (decoded.length > this.config.maxResponseBytes || decoded.toString('base64url') !== response.body) {
@@ -180,6 +188,16 @@ export class MqttVaultTransport implements VaultTransport {
       );
     }
     return value as T;
+  }
+
+  private publishPending(requestSpanId: string): void {
+    const client = this.client;
+    const waiting = this.pending.get(requestSpanId);
+    if (!client || !this.ready || !waiting) return;
+    client.publish(waiting.commandTopic, waiting.payload, { qos: 1, retain: false }, () => {
+      // A callback error is transient while mqtt.js reconnects. The exact
+      // envelope is replayed after the next successful QoS 1 subscription.
+    });
   }
 
   private operation(method: 'GET' | 'POST', path: string): {

@@ -8,7 +8,7 @@ import { X402Adapter } from '../../../src/agentvault/protocol/x402.js';
 
 test('shared protocol HTTP fixture covers both transports, protocols, and roles', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_http.json', import.meta.url), 'utf8',
+    new URL('../../../../tests/payment_protocol_http.json', import.meta.url), 'utf8',
   )) as {
     schema: string;
     protocols: Record<string, { evidence_header: string }>;
@@ -59,7 +59,7 @@ test('shared protocol HTTP fixture covers both transports, protocols, and roles'
 
 test('shared protocol MCP fixture uses native provider models', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url), 'utf8',
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url), 'utf8',
   )) as {
     schema: string;
     protocols: Record<string, {

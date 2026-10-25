@@ -13,8 +13,9 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     model::{
-        canonicalize_payment_recipient, PaymentChallenge, PaymentCredential, PaymentDirection, PaymentEvent,
-        PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentStatus,
+        canonicalize_payment_recipient, OutboundEvidenceObservation, PaymentChallenge, PaymentCredential,
+        PaymentDirection, PaymentEvent, PaymentEventType, PaymentIntent, PaymentLedgerEntry, PaymentStatus,
+        RecordOutboundPaymentResponse, RecordedOutboundEvidence,
     },
     storage::{EventStorage, IdempotentWrite, OutboundEvidenceWrite, PaymentStorage},
     utils::secure_material::{SealedSensitiveMaterial, SensitiveMaterialProtector},
@@ -22,54 +23,17 @@ use crate::{
 };
 
 use super::{
-    common::{outbound_credential_context, validate_identifier},
+    payment_validation::{outbound_credential_context, validate_identifier},
     ProtocolRegistry, ReceiptObservation, ReceiptSource, ScenarioHandler, TransferQuery,
 };
 
 const MAX_MERCHANT_EVIDENCE_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Debug)]
-pub struct RecordOutboundPaymentResponse {
-    pub scenario_id: String,
-    pub run_id: String,
-    pub intent_id: String,
-    pub protocol: String,
-    pub header_name: String,
-    pub header_value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedOutboundEvidence {
-    pub intent: PaymentIntent,
-    pub accepted: bool,
-    pub replayed: bool,
-}
 
 struct ValidatedMerchantEvidence {
     network: String,
     transaction: String,
     payer: String,
     evidence_hash: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OutboundEvidenceObservation {
-    Confirmed {
-        authority: String,
-        transaction: String,
-        payer: String,
-        effect_ref: String,
-        confirmations: u64,
-        minimum_confirmations: u64,
-        effective_at: i64,
-    },
-    Pending,
-    Unknown {
-        reason: String,
-    },
-    Unavailable {
-        reason: String,
-    },
 }
 
 pub struct OutboundEvidenceDependencies {

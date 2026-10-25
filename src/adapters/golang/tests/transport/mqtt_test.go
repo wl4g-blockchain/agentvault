@@ -1,6 +1,7 @@
 package transport_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,5 +27,13 @@ func TestMqttVaultTransportValidatesBoundaryAndRedactsSecrets(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(instance), "secret") || strings.Contains(safe.String(), "secret") {
 		t.Fatal("MQTT configuration leaked a secret")
+	}
+	var async transport.AsyncTransport = instance
+	result := <-async.DoAsync(context.Background(), transport.TransportRequest{
+		Method: transport.MethodGet,
+		Path:   "/unsupported",
+	})
+	if result.Err == nil {
+		t.Fatal("asynchronous MQTT submission must fail unsupported operations")
 	}
 }

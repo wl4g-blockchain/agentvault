@@ -7,7 +7,7 @@ import { X402Adapter } from '../../../src/agentvault/protocol/x402.js';
 
 test('X402Adapter uses only native x402 challenge headers', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as { protocols: { x402: { challenge_response: { result: { structuredContent: unknown } } } } };
   const challenge: PaymentChallenge = {
@@ -60,7 +60,7 @@ test('X402Adapter ignores unrelated tool errors and compares MCP challenges stru
 
 test('X402Adapter preserves chain-specific v2 payloads and rejects crossovers', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/x402_v2_chain_payloads.json', import.meta.url),
+    new URL('../../../../tests/x402_v2_chain_payloads.json', import.meta.url),
     'utf8',
   )) as {
     cases: Record<string, { payment_payload: Record<string, unknown> }>;
