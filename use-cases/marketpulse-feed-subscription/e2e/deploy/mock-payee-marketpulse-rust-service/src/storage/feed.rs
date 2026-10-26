@@ -53,7 +53,7 @@ pub struct NewsItem {
 }
 
 #[derive(Clone)]
-pub struct FeedSQLiteStorage {
+pub struct FeedSqliteRepository {
     connection: Arc<Mutex<Connection>>,
 }
 
@@ -90,7 +90,7 @@ impl StoredSettlement {
     }
 }
 
-impl FeedSQLiteStorage {
+impl FeedSqliteRepository {
     /// Opens the durable feed store and initializes its fixed dataset.
     ///
     /// # Errors

@@ -1,4 +1,4 @@
--- AgentVault does not install implicit tenants, wallets, policies, offers, or
+-- AgentVault does not install implicit tenants, wallets, policies, prices, or
 -- credentials. Operators import those records with `agentvault console import`
 -- so ownership, encrypted key material, and limits are committed by
 -- the same application invariants used at runtime.

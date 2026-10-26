@@ -32,15 +32,15 @@ type GinPayeeRoute struct {
 	MCPTool      string
 }
 
-func NewMCPToolRoute(path, tool, scenarioID, offerID, resource, origin string) GinPayeeRoute {
-	return NewMCPToolRouteWithProtocol(path, tool, scenarioID, offerID, resource, origin, "x402")
+func NewMCPToolRoute(path, tool, scenarioID, priceID, resource, origin string) GinPayeeRoute {
+	return NewMCPToolRouteWithProtocol(path, tool, scenarioID, priceID, resource, origin, "x402")
 }
 
 func NewMCPToolRouteWithProtocol(
-	path, tool, scenarioID, offerID, resource, origin, protocolName string,
+	path, tool, scenarioID, priceID, resource, origin, protocolName string,
 ) GinPayeeRoute {
 	return GinPayeeRoute{
-		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, PriceID: offerID,
+		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, PriceID: priceID,
 		Resource: resource, Origin: origin, Protocol: protocolName, MCPTool: tool,
 	}
 }

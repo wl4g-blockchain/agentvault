@@ -2,8 +2,8 @@
 use crate::{
     model::PaymentScenarioApprover,
     storage::{
-        postgres::{dynamic_postgres, BasePostgresRepository},
-        ApproverStorage, EntityComparison, EntityQuery, Page, PageRequest,
+        postgres::{dynamic_postgres, PostgresRepository},
+        EntityComparison, EntityQuery, IApproverRepository, Page, PageRequest,
     },
     Error, Result,
 };
@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use sqlx::postgres::PgRow;
 #[derive(Clone)]
 pub struct ApproverPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 #[async_trait]
-impl ApproverStorage for ApproverPostgresRepository {
+impl IApproverRepository for ApproverPostgresRepository {
     async fn upsert(&self, approver: &PaymentScenarioApprover) -> Result<PaymentScenarioApprover> {
         approver
             .validate()
@@ -55,7 +55,7 @@ impl ApproverStorage for ApproverPostgresRepository {
         .bind(auth_principal)
         .fetch_one(self.base.pool())
         .await
-        .map_err(|error| BasePostgresRepository::storage_error("authorize scenario approver", error))
+        .map_err(|error| PostgresRepository::storage_error("authorize scenario approver", error))
     }
     async fn set_enabled(
         &self,
@@ -88,12 +88,12 @@ impl ApproverStorage for ApproverPostgresRepository {
     }
 }
 impl ApproverPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
     pub(crate) fn decode_row(row: &PgRow) -> Result<PaymentScenarioApprover> {
         sqlx::FromRow::from_row(row)
-            .map_err(|error| BasePostgresRepository::storage_error("decode scenario approver", error))
+            .map_err(|error| PostgresRepository::storage_error("decode scenario approver", error))
     }
 }
 #[cfg(test)]

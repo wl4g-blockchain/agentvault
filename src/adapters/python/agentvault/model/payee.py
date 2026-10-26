@@ -51,7 +51,7 @@ class PaymentPrice:
         asset = value.get("asset")
         protocols = value.get("protocols")
         if not isinstance(asset, Mapping) or not isinstance(protocols, list):
-            raise ValueError("payment offer omitted asset or protocols")
+            raise ValueError("payment price omitted asset or protocols")
         return cls(
             id=str(value.get("id", "")),
             scenario_id=str(value.get("scenario_id", "")),
@@ -70,7 +70,7 @@ class PaymentPrice:
 class PayeeOperation:
     scenario_id: str
     run_id: str
-    offer_id: str
+    price_id: str
     resource: str
     origin: str
     protocol: str
@@ -80,7 +80,7 @@ class PayeeOperation:
     def __post_init__(self) -> None:
         for name, value in (
             ("scenario_id", self.scenario_id), ("run_id", self.run_id),
-            ("offer_id", self.offer_id),
+            ("price_id", self.price_id),
             ("resource", self.resource), ("origin", self.origin),
             ("protocol", self.protocol), ("request_hash", self.request_hash),
         ):
@@ -96,7 +96,7 @@ class PayeeOperation:
 @dataclass(frozen=True)
 class CreateChallengeRequest:
     context: OperationContext
-    offer_id: str
+    price_id: str
     resource: str
     origin: str
     protocol: str
@@ -104,7 +104,7 @@ class CreateChallengeRequest:
 
     def wire(self) -> dict[str, Any]:
         return {
-            **self.context.wire(), "offer_id": self.offer_id, "resource": self.resource,
+            **self.context.wire(), "price_id": self.price_id, "resource": self.resource,
             "origin": self.origin, "protocol": self.protocol, "request_hash": self.request_hash,
         }
 

@@ -41,6 +41,7 @@ type MCPPaymentRequired struct {
 type Adapter interface {
 	Name() string
 	CredentialHeaderNames() []string
+	MerchantEvidenceHeaderNames() []string
 	Credential(model.PaymentCredential) (model.HTTPCredential, error)
 	MerchantEvidence(map[string]string) (*MerchantEvidence, error)
 	PresentedCredential(map[string]string, int64) (any, error)
@@ -48,18 +49,11 @@ type Adapter interface {
 	Receipt(*model.SettledIncomingPayment) (HTTPResponse, error)
 }
 
-// EvidenceHeaderAdapter optionally declares protocol-owned HTTP settlement
-// headers. Keeping this as a capability interface preserves compatibility for
-// existing custom HTTP-only Adapter implementations.
-type EvidenceHeaderAdapter interface {
-	MerchantEvidenceHeaderNames() []string
-}
-
-// MCPAdapter is optional so existing custom HTTP-only providers remain wire
-// compatible. Built-in x402 and MPP providers implement this interface.
+// MCPAdapter provides native MCP wire mappings independently of Vault transport.
 type MCPAdapter interface {
 	Adapter
 	MCPRequestMetadataKey() string
+	MCPReceiptMetadataKey() string
 	MCPChallenge(any, int64) (*HTTPResponse, error)
 	MCPCredential(model.PaymentCredential) (MCPMetadata, error)
 	PresentedMCPCredential(any, int64) (any, error)
@@ -67,10 +61,6 @@ type MCPAdapter interface {
 	MCPPaymentRejected(*model.PaymentChallenge, string) (MCPPaymentRequired, error)
 	MCPReceipt(*model.PaymentChallenge, *model.SettledIncomingPayment) (MCPMetadata, error)
 	MCPMerchantEvidence(any, int64) (*MerchantEvidence, error)
-}
-
-type MCPReceiptKeyAdapter interface {
-	MCPReceiptMetadataKey() string
 }
 
 // A2AAdapter projects non-streaming A2A 0.3 JSON-RPC messages onto the same
@@ -270,11 +260,7 @@ func (registry *Registry) MerchantEvidenceHeaderNames() []string {
 		if err != nil {
 			continue
 		}
-		owner, ok := adapter.(EvidenceHeaderAdapter)
-		if !ok {
-			continue
-		}
-		for _, candidate := range owner.MerchantEvidenceHeaderNames() {
+		for _, candidate := range adapter.MerchantEvidenceHeaderNames() {
 			duplicate := false
 			for _, existing := range names {
 				if strings.EqualFold(existing, candidate) {
@@ -435,9 +421,7 @@ func (registry *Registry) MCPReceiptMetadataKeys() []string {
 	keys := make([]string, 0, len(registry.priority))
 	for _, name := range registry.priority {
 		if adapter, err := registry.MCP(name); err == nil {
-			if owner, ok := adapter.(MCPReceiptKeyAdapter); ok {
-				keys = append(keys, owner.MCPReceiptMetadataKey())
-			}
+			keys = append(keys, adapter.MCPReceiptMetadataKey())
 		}
 	}
 	return keys

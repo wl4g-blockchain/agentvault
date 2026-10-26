@@ -7,7 +7,7 @@ fn outbound_intent() -> PaymentIntent {
         run_id: "run-1".to_owned(),
         wallet_id: Some("wallet-1".to_owned()),
         policy_id: Some("policy-1".to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: PaymentDirection::Outbound,
         protocol: "x402".to_owned(),
         asset: AssetIdentity {
@@ -65,7 +65,7 @@ fn direction_requires_the_authoritative_binding() {
 
     let mut inbound = outbound_intent();
     inbound.direction = PaymentDirection::Inbound;
-    assert_eq!(inbound.validate(), Err("offer_id"));
-    inbound.offer_id = Some("offer-1".to_owned());
+    assert_eq!(inbound.validate(), Err("price_id"));
+    inbound.price_id = Some("price-1".to_owned());
     assert!(inbound.validate().is_ok());
 }

@@ -8,7 +8,7 @@ use crate::{
 
 #[test]
 fn shared_contract_validates_keys_and_caps_ttl() {
-    assert!(validate_component("offer.v1").is_ok());
+    assert!(validate_component("price.v1").is_ok());
     assert!(validate_component("").is_err());
     assert!(validate_component("unsafe:key").is_err());
     assert_eq!(
@@ -25,14 +25,14 @@ async fn factory_selects_and_initializes_the_default_memory_provider() {
     let cache = factory.create(&config).await.unwrap();
     assert_eq!(cache.provider(), CacheProvider::Memory);
     cache
-        .set("offer", "one", vec![1, 2], Duration::from_secs(1))
+        .set("price", "one", vec![1, 2], Duration::from_secs(1))
         .await
         .unwrap();
 
-    assert_eq!(cache.get("offer", "one").await.unwrap(), Some(vec![1, 2]));
-    assert!(cache.exists("offer", "one").await.unwrap());
-    cache.clear("offer").await.unwrap();
-    assert!(!cache.exists("offer", "one").await.unwrap());
+    assert_eq!(cache.get("price", "one").await.unwrap(), Some(vec![1, 2]));
+    assert!(cache.exists("price", "one").await.unwrap());
+    cache.clear("price").await.unwrap();
+    assert!(!cache.exists("price", "one").await.unwrap());
     cache.ping().await.unwrap();
     cache.close().await.unwrap();
     cache.close().await.unwrap();

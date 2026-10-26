@@ -41,7 +41,7 @@ fn fixture() -> (PaymentPolicy, PaymentChallenge) {
         },
         PaymentChallenge {
             scenario_id: "scenario".to_owned(),
-            offer_id: None,
+            price_id: None,
             resource: "https://merchant.example/tool".to_owned(),
             protocol: "x402".to_owned(),
             asset,

@@ -400,7 +400,7 @@ CREATE TABLE pay_intent (
     run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     wallet_id           TEXT REFERENCES pay_wallet(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     policy_id           TEXT REFERENCES pay_policy(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    offer_id            TEXT REFERENCES pay_price(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    price_id            TEXT REFERENCES pay_price(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     direction           TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
     protocol            TEXT NOT NULL CHECK (length(trim(protocol)) > 0),
     network             TEXT NOT NULL CHECK (length(trim(network)) > 0),
@@ -464,7 +464,7 @@ CREATE TABLE pay_intent (
         REFERENCES pay_policy(id, scenario_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     FOREIGN KEY (policy_id, wallet_id)
         REFERENCES pay_policy_wallet(policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    FOREIGN KEY (offer_id, scenario_id, policy_id, wallet_id)
+    FOREIGN KEY (price_id, scenario_id, policy_id, wallet_id)
         REFERENCES pay_price(id, scenario_id, policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     CHECK (
         length(settled_amount) < length(amount)
@@ -481,8 +481,8 @@ CREATE TABLE pay_intent (
     CHECK (
         wallet_id IS NOT NULL AND policy_id IS NOT NULL
         AND (
-            (direction = 'outbound' AND offer_id IS NULL)
-            OR (direction = 'inbound' AND offer_id IS NOT NULL)
+            (direction = 'outbound' AND price_id IS NULL)
+            OR (direction = 'inbound' AND price_id IS NOT NULL)
         )
     ),
     CHECK (

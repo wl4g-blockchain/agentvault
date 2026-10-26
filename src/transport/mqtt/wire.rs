@@ -33,7 +33,7 @@ impl CommandKind {
         match self {
             Self::Authorize => "authorize",
             Self::OutboundResponse => "outbound-response",
-            Self::ResolvePrice => "resolve-offer",
+            Self::ResolvePrice => "resolve-price",
             Self::CreateChallenge => "create-challenge",
             Self::VerifyPayment => "verify-payment",
             Self::SettlePayment => "settle-payment",
@@ -392,7 +392,7 @@ impl MqttWireCodec {
                 CommandTopic::OutboundResponse as fn(String) -> CommandTopic,
             ),
             (
-                RESOLVE_OFFER_SUFFIX,
+                RESOLVE_PRICE_SUFFIX,
                 CommandTopic::ResolvePrice as fn(String) -> CommandTopic,
             ),
             (

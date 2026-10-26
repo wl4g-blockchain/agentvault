@@ -14,7 +14,7 @@ import {
 test('ExpressPayeeMiddleware exposes raw-body and protection handlers', () => {
   const transport: VaultTransport = { async request<T>(): Promise<T> { throw new Error('not called'); } };
   const middleware = new PayeeMiddleware(transport).express([
-    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'offer-1',
+    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'price-1',
       'mcp://marketpulse/realtime', 'https://marketpulse.test'),
   ]);
   assert.equal(middleware.handlers().length, 2);
@@ -23,7 +23,7 @@ test('ExpressPayeeMiddleware exposes raw-body and protection handlers', () => {
 test('ExpressPayeeMiddleware bypasses a free tool on the shared MCP route', async () => {
   const transport: VaultTransport = { async request<T>(): Promise<T> { throw new Error('Vault must not be called'); } };
   const middleware = new PayeeMiddleware(transport).express([
-    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'offer-1',
+    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'price-1',
       'mcp://marketpulse/realtime', 'https://marketpulse.test'),
   ]);
   let passed = false;
@@ -38,7 +38,7 @@ test('ExpressPayeeMiddleware bypasses a free tool on the shared MCP route', asyn
 test('ExpressPayeeMiddleware rejects duplicated payment credentials before Vault', async () => {
   const transport: VaultTransport = { async request<T>(): Promise<T> { throw new Error('Vault must not be called'); } };
   const middleware = new PayeeMiddleware(transport).express([
-    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'offer-1',
+    mcpToolRoute('/mcp', 'marketpulse.realtime_news', 'scenario-1', 'price-1',
       'mcp://marketpulse/realtime', 'https://marketpulse.test'),
   ]);
   const request = {
@@ -87,7 +87,7 @@ test('ExpressPayeeMiddleware closes x402 and MPP MCP verify/settle flows', async
         '/mcp',
         'marketpulse.realtime',
         'scenario',
-        'offer',
+        'price',
         'mcp://marketpulse/realtime',
         'https://merchant.test',
         protocol,
@@ -205,7 +205,7 @@ test('ExpressPayeeMiddleware maps rejected MPP MCP credentials to -32043', async
   const app = express();
   const middleware = new PayeeMiddleware(transport, { protocols: ['mpp'] }).express([
     mcpToolRouteWithProtocol(
-      '/mcp', 'marketpulse.realtime', 'scenario', 'offer',
+      '/mcp', 'marketpulse.realtime', 'scenario', 'price',
       'mcp://marketpulse/realtime', 'https://merchant.test', 'mpp',
     ),
   ]);
@@ -267,7 +267,7 @@ test('ExpressPayeeMiddleware preserves a paid MCP business failure for delivery 
     { protocols: ['x402'] },
   ).express([
     mcpToolRoute(
-      '/mcp', 'marketpulse.realtime', 'scenario', 'offer',
+      '/mcp', 'marketpulse.realtime', 'scenario', 'price',
       'mcp://marketpulse/realtime', 'https://merchant.test',
     ),
   ]);
@@ -380,7 +380,7 @@ class McpPayeeTransport implements VaultTransport {
   private challengeBase(nonce: string) {
     return {
       scenario_id: 'scenario',
-      offer_id: 'offer',
+      price_id: 'price',
       resource: 'mcp://marketpulse/realtime',
       protocol: this.protocol,
       asset: this.asset(),
@@ -397,7 +397,7 @@ class McpPayeeTransport implements VaultTransport {
       id: 'intent-1',
       scenario_id: 'scenario',
       run_id: 'run-1',
-      offer_id: 'offer',
+      price_id: 'price',
       direction: 'inbound',
       protocol: this.protocol,
       asset: this.asset(),

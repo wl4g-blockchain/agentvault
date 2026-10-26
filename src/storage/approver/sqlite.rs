@@ -2,8 +2,8 @@
 use crate::{
     model::PaymentScenarioApprover,
     storage::{
-        sqlite::{dynamic_sqlite, BaseSqliteRepository},
-        ApproverStorage, EntityComparison, EntityQuery, Page, PageRequest,
+        sqlite::{dynamic_sqlite, SqliteRepository},
+        EntityComparison, EntityQuery, IApproverRepository, Page, PageRequest,
     },
     Error, Result,
 };
@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqliteRow;
 #[derive(Clone)]
 pub struct ApproverSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 #[async_trait]
-impl ApproverStorage for ApproverSqliteRepository {
+impl IApproverRepository for ApproverSqliteRepository {
     async fn upsert(&self, approver: &PaymentScenarioApprover) -> Result<PaymentScenarioApprover> {
         approver
             .validate()
@@ -55,7 +55,7 @@ impl ApproverStorage for ApproverSqliteRepository {
         .bind(auth_principal)
         .fetch_one(self.base.pool())
         .await
-        .map_err(|error| BaseSqliteRepository::storage_error("authorize scenario approver", error))?;
+        .map_err(|error| SqliteRepository::storage_error("authorize scenario approver", error))?;
         Ok(authorized == 1)
     }
     async fn set_enabled(
@@ -89,12 +89,11 @@ impl ApproverStorage for ApproverSqliteRepository {
     }
 }
 impl ApproverSqliteRepository {
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
     pub(crate) fn decode_row(row: &SqliteRow) -> Result<PaymentScenarioApprover> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BaseSqliteRepository::storage_error("decode scenario approver", error))
+        sqlx::FromRow::from_row(row).map_err(|error| SqliteRepository::storage_error("decode scenario approver", error))
     }
 }
 #[cfg(test)]

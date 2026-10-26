@@ -8,7 +8,7 @@ use crate::model::PaymentPolicyLimits;
 use crate::storage::policy::PolicyStorageRules;
 use crate::storage::Page;
 use crate::storage::PageRequest;
-use crate::storage::PolicyStorage;
+use crate::storage::IPolicyRepository;
 use crate::utils::storage::AmountEncoding as _;
 use crate::Error;
 use crate::Result;
@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use sqlx::Row as _;
 
 #[async_trait]
-impl PolicyStorage for $repository {
+impl IPolicyRepository for $repository {
     async fn insert(&self, policy: &PaymentPolicy) -> Result<PaymentPolicy> {
         PolicyStorageRules::validate_policy(policy)?;
         let policy = policy.clone();

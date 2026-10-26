@@ -1,8 +1,8 @@
 use crate::storage::postgres::tests::*;
 use crate::storage::wallet::postgres::PgWalletKeyRepository;
 use crate::storage::wallet::postgres::WalletPostgresRepository;
+use crate::storage::IWalletRepository as _;
 use crate::storage::WalletKeyStatus;
-use crate::storage::WalletStorage as _;
 use crate::utils::aead::UuidNonceCodec;
 use crate::utils::aead::WALLET_KEY_ENCRYPTION_SCHEME;
 use crate::Error;
@@ -15,7 +15,7 @@ async fn migrates_schema_and_signs_only_through_intent_bound_active_keys() {
         .fetch_one(storage.pool())
         .await
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 1);
 
     let repository = PgWalletKeyRepository::from_resolved_keys(
         storage.clone(),

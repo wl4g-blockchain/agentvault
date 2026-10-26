@@ -28,7 +28,7 @@ pub struct AxumPayeeRoute {
     pub method: Method,
     pub path: String,
     pub scenario_id: String,
-    pub offer_id: String,
+    pub price_id: String,
     pub resource: String,
     pub origin: String,
     pub protocol: String,
@@ -43,11 +43,11 @@ impl AxumPayeeRoute {
         path: impl Into<String>,
         tool: impl Into<String>,
         scenario_id: impl Into<String>,
-        offer_id: impl Into<String>,
+        price_id: impl Into<String>,
         resource: impl Into<String>,
         origin: impl Into<String>,
     ) -> Self {
-        Self::mcp_tool_with_protocol(path, tool, scenario_id, offer_id, resource, origin, "x402")
+        Self::mcp_tool_with_protocol(path, tool, scenario_id, price_id, resource, origin, "x402")
     }
 
     #[must_use]
@@ -55,7 +55,7 @@ impl AxumPayeeRoute {
         path: impl Into<String>,
         tool: impl Into<String>,
         scenario_id: impl Into<String>,
-        offer_id: impl Into<String>,
+        price_id: impl Into<String>,
         resource: impl Into<String>,
         origin: impl Into<String>,
         protocol: impl Into<String>,
@@ -64,7 +64,7 @@ impl AxumPayeeRoute {
             method: Method::POST,
             path: path.into(),
             scenario_id: scenario_id.into(),
-            offer_id: offer_id.into(),
+            price_id: price_id.into(),
             resource: resource.into(),
             origin: origin.into(),
             protocol: protocol.into(),
@@ -427,7 +427,7 @@ impl AxumRequest {
         Ok(PayeeOperation {
             scenario_id: route.scenario_id.clone(),
             run_id: run_id.to_owned(),
-            offer_id: route.offer_id.clone(),
+            price_id: route.price_id.clone(),
             resource: route.resource.clone(),
             origin: route.origin.clone(),
             protocol: route.protocol.clone(),

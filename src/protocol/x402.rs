@@ -348,7 +348,7 @@ impl PaymentProtocol for X402Adapter {
         let challenge_hash = X402Wire::challenge_hash(expected_resource, expires_at, wire, &nonce)?;
         let challenge = PaymentChallenge {
             scenario_id: scenario_id.to_owned(),
-            offer_id: None,
+            price_id: None,
             resource: expected_resource.to_owned(),
             protocol: X402_PROTOCOL.to_owned(),
             asset: integrity.asset,
@@ -509,35 +509,35 @@ impl PaymentProtocol for X402Adapter {
             .map_err(|field| Error::PaymentProtocol(format!("invalid x402 receipt field: {field}")))
     }
 
-    async fn build_challenge(&self, offer: &PaymentPrice, recipient: &str, now: i64) -> Result<PaymentChallenge> {
-        if !offer.supports_protocol(X402_PROTOCOL) {
+    async fn build_challenge(&self, price: &PaymentPrice, recipient: &str, now: i64) -> Result<PaymentChallenge> {
+        if !price.supports_protocol(X402_PROTOCOL) {
             return Err(Error::PaymentProtocol(
-                "offer cannot produce an x402 challenge".to_owned(),
+                "price cannot produce an x402 challenge".to_owned(),
             ));
         }
-        let recipient = canonicalize_payment_recipient(&offer.asset.network, recipient)
-            .map_err(|_| Error::PaymentProtocol("offer recipient is invalid for its network".to_owned()))?;
-        X402Wire::validate_resource(&offer.resource)?;
-        let contract = offer
+        let recipient = canonicalize_payment_recipient(&price.asset.network, recipient)
+            .map_err(|_| Error::PaymentProtocol("price recipient is invalid for its network".to_owned()))?;
+        X402Wire::validate_resource(&price.resource)?;
+        let contract = price
             .asset
             .token_contract
             .as_deref()
             .ok_or_else(|| Error::PaymentProtocol("x402 asset requires a token contract".to_owned()))?;
-        let registered = self.registered_asset(&offer.asset.network, contract)?;
-        if registered != offer.asset {
+        let registered = self.registered_asset(&price.asset.network, contract)?;
+        if registered != price.asset {
             return Err(Error::PaymentProtocol(
-                "offer asset is not the registered x402 asset".to_owned(),
+                "price asset is not the registered x402 asset".to_owned(),
             ));
         }
-        let requirement = if X402Evm::valid_network(&offer.asset.network) {
+        let requirement = if X402Evm::valid_network(&price.asset.network) {
             X402Requirement::Evm(EvmPaymentRequirements {
                 scheme: ExactScheme,
-                network: offer
+                network: price
                     .asset
                     .network
                     .parse()
                     .map_err(|_| Error::PaymentProtocol("x402 network is not a valid CAIP-2 ID".to_owned()))?,
-                amount: DecimalU256(U256::from(offer.amount.value())),
+                amount: DecimalU256(U256::from(price.amount.value())),
                 asset: contract
                     .parse::<ChecksummedAddress>()
                     .map_err(|_| Error::PaymentProtocol("x402 token contract is invalid".to_owned()))?,
@@ -553,13 +553,13 @@ impl PaymentProtocol for X402Adapter {
         } else {
             let runtime = self
                 .solana
-                .get(&offer.asset.network)
+                .get(&price.asset.network)
                 .ok_or_else(|| Error::PaymentProtocol("x402 Solana runtime is not configured".to_owned()))?;
-            let amount = u64::try_from(offer.amount.value())
+            let amount = u64::try_from(price.amount.value())
                 .map_err(|_| Error::PaymentProtocol("x402 Solana amount exceeds u64".to_owned()))?;
             X402Requirement::Solana(SolanaPaymentRequirements {
                 scheme: x402_chain_solana::v2_solana_exact::ExactScheme,
-                network: offer
+                network: price
                     .asset
                     .network
                     .parse()
@@ -587,21 +587,21 @@ impl PaymentProtocol for X402Adapter {
             x402_version: X402Version2,
             error: None,
             resource: Some(ResourceInfo {
-                url: offer.resource.clone(),
+                url: price.resource.clone(),
                 description: None,
                 mime_type: None,
             }),
             accepts: vec![raw],
         };
         let wire = serde_json::to_value(&required)?;
-        let (nonce, challenge_hash) = X402Wire::server_identity(&offer.resource, expires_at, &wire)?;
+        let (nonce, challenge_hash) = X402Wire::server_identity(&price.resource, expires_at, &wire)?;
         let challenge = PaymentChallenge {
-            scenario_id: offer.scenario_id.clone(),
-            offer_id: Some(offer.id.clone()),
-            resource: offer.resource.clone(),
+            scenario_id: price.scenario_id.clone(),
+            price_id: Some(price.id.clone()),
+            resource: price.resource.clone(),
             protocol: X402_PROTOCOL.to_owned(),
-            asset: offer.asset.clone(),
-            amount: offer.amount,
+            asset: price.asset.clone(),
+            amount: price.amount,
             recipient,
             nonce,
             challenge_hash,

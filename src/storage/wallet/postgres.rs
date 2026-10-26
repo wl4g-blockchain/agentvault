@@ -1,5 +1,5 @@
 use crate::{
-    storage::postgres::{dynamic_postgres as dynamic_query, BasePostgresRepository as BaseRepository},
+    storage::postgres::{dynamic_postgres as dynamic_query, PostgresRepository as BaseRepository},
     utils::storage::PostgresAmountCodec as AmountCodec,
 };
 use sqlx::{postgres::PgRow as DbRow, PgConnection as Connection};

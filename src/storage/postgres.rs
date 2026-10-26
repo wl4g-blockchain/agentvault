@@ -24,7 +24,7 @@ pub struct PostgresRepository {
 
 impl PostgresRepository {
     /// Constructs a lazy database pool. The factory invokes
-    /// [`crate::storage::IStorage::init`] after registration to establish the
+    /// [`crate::storage::IRepository::init`] after registration to establish the
     /// connection and execute the supplied schema plan.
     ///
     /// The URL is accepted as already-resolved sensitive material and is never
@@ -126,7 +126,7 @@ impl PostgresRepository {
     }
 }
 
-impl crate::storage::IGenericStorage for PostgresRepository {
+impl crate::storage::RepositorySql for PostgresRepository {
     type Database = sqlx::Postgres;
     fn push_entity_value(
         query: &mut sqlx::QueryBuilder<'static, Self::Database>,
@@ -163,7 +163,7 @@ impl crate::storage::IGenericStorage for PostgresRepository {
 impl fmt::Debug for PostgresRepository {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PostgresStorage")
+            .debug_struct("PostgresRepository")
             .field("pool", &"<redacted>")
             .field("connect_timeout", &self.connect_timeout)
             .finish()
@@ -290,46 +290,38 @@ impl PostgresRepository {
     }
 }
 
-/// Compatibility name for the dialect lifecycle provider. Domain operations are exposed by `StoragePorts`.
-pub type PostgresStorage = PostgresRepository;
-
 // Entity fields and values are resolved by the shared contract; SQLx owns binding.
 macro_rules! dynamic_postgres {
     (select, $entity:ty, $filters:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::select::<$entity>(
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::select::<$entity>(
             &$filters, false,
         )
     };
     (count, $entity:ty, $filters:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::select::<$entity>(
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::select::<$entity>(
             &$filters, true,
         )
     };
     (insert, $entity:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::insert($entity, false)
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::insert($entity, false)
     };
     (insert_or_ignore, $entity:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::insert($entity, true)
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::insert($entity, true)
     };
     (update, $entity:ty, $changes:expr, $filters:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::update::<$entity>(
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::update::<$entity>(
             $changes, &$filters,
         )
     };
     (upsert, $entity:expr, $keys:expr, $updates:expr, $immutable:expr, $revision:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::upsert(
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::upsert(
             $entity, $keys, $updates, $immutable, $revision,
         )
     };
     (delete_by, $entity:ty, $filters:expr) => {
-        <crate::storage::postgres::PostgresRepository as crate::storage::IGenericStorage>::delete_by::<$entity>(
-            &$filters,
-        )
+        <crate::storage::postgres::PostgresRepository as crate::storage::RepositorySql>::delete_by::<$entity>(&$filters)
     };
 }
 pub(crate) use dynamic_postgres;
 
 crate::storage::entity_repository_queries!(PostgresRepository, PgRow, transaction, " FOR SHARE");
-
-/// Backward-compatible name for the generic repository.
-pub type BasePostgresRepository = PostgresRepository;

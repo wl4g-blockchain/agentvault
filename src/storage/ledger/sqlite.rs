@@ -3,8 +3,8 @@
 use crate::{
     model::PaymentLedgerEntry,
     storage::{
-        outbox::sqlite::OutboxSqliteRepository, sqlite::BaseSqliteRepository, IdempotentWrite, LedgerQuery,
-        LedgerStorage, LedgerWrite, Page,
+        outbox::sqlite::OutboxSqliteRepository, sqlite::SqliteRepository, ILedgerRepository, IdempotentWrite,
+        LedgerQuery, LedgerWrite, Page,
     },
     Error, Result,
 };
@@ -13,11 +13,11 @@ use sqlx::sqlite::SqliteRow;
 
 #[derive(Clone)]
 pub struct LedgerSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 
 #[async_trait]
-impl LedgerStorage for LedgerSqliteRepository {
+impl ILedgerRepository for LedgerSqliteRepository {
     async fn append(&self, entry: &PaymentLedgerEntry) -> Result<IdempotentWrite<PaymentLedgerEntry>> {
         let entry = entry.clone();
         self.base
@@ -83,7 +83,7 @@ impl LedgerSqliteRepository {
                     .bind(id)
                     .fetch_optional(&mut *connection)
                     .await
-                    .map_err(|e| BaseSqliteRepository::storage_error("check financial scope", e))?;
+                    .map_err(|e| SqliteRepository::storage_error("check financial scope", e))?;
                 if found.is_none() {
                     return Err(Error::conflict("ledger references an unavailable scope"));
                 }
@@ -91,7 +91,7 @@ impl LedgerSqliteRepository {
         }
         Ok(())
     }
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
 
@@ -112,7 +112,7 @@ impl LedgerSqliteRepository {
         .build()
         .fetch_optional(&mut *connection)
         .await
-        .map_err(|error| BaseSqliteRepository::storage_error("find ledger posting replay", error))?;
+        .map_err(|error| SqliteRepository::storage_error("find ledger posting replay", error))?;
         if let Some(row) = existing {
             let existing = Self::decode_row(&row)?;
             return if existing.same_fact_content_as(entry) {
@@ -132,7 +132,7 @@ impl LedgerSqliteRepository {
             .build()
             .fetch_optional(&mut *connection)
             .await
-            .map_err(|error| BaseSqliteRepository::storage_error("load ledger reversal original", error))?
+            .map_err(|error| SqliteRepository::storage_error("load ledger reversal original", error))?
             .ok_or_else(|| crate::Error::conflict("ledger reversal original does not exist"))?;
             let original = Self::decode_row(&row)?;
             entry
@@ -148,7 +148,7 @@ impl LedgerSqliteRepository {
     }
 
     pub(crate) fn decode_row(row: &SqliteRow) -> Result<PaymentLedgerEntry> {
-        sqlx::FromRow::from_row(row).map_err(|error| BaseSqliteRepository::storage_error("decode ledger entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| SqliteRepository::storage_error("decode ledger entity", error))
     }
 }
 

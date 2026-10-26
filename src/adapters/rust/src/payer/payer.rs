@@ -335,7 +335,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             let operation = OperationContext::new(self.config.scenario_id.clone(), context.run_id.clone())?;
             self.report_outbound_response(
                 &authorized.intent.id,
-                &ReportOutboundResponseRequest::protocol(
+                &ReportOutboundResponseRequest::new(
                     operation,
                     adapter.name(),
                     evidence.header_name,

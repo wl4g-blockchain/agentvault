@@ -77,7 +77,7 @@ crate::storage::repository_entity! { "pay_intent", ReadOnly;
         #[serde(skip_serializing_if = "Option::is_none")]
         pub policy_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub offer_id: Option<String>,
+        pub price_id: Option<String>,
         pub direction: PaymentDirection,
         pub protocol: String,
         #[sqlx(flatten)]
@@ -143,7 +143,7 @@ impl PaymentIntent {
             && self.run_id == other.run_id
             && self.wallet_id == other.wallet_id
             && self.policy_id == other.policy_id
-            && self.offer_id == other.offer_id
+            && self.price_id == other.price_id
             && self.direction == other.direction
             && self.protocol == other.protocol
             && self.asset == other.asset
@@ -186,13 +186,13 @@ impl PaymentIntent {
         match self.direction {
             PaymentDirection::Inbound
                 if self
-                    .offer_id
+                    .price_id
                     .as_deref()
-                    .is_none_or(|offer_id| offer_id.trim().is_empty()) =>
+                    .is_none_or(|price_id| price_id.trim().is_empty()) =>
             {
-                return Err("offer_id");
+                return Err("price_id");
             }
-            PaymentDirection::Outbound if self.offer_id.is_some() => return Err("offer_id"),
+            PaymentDirection::Outbound if self.price_id.is_some() => return Err("price_id"),
             _ => {}
         }
         if self.protocol.trim().is_empty() {

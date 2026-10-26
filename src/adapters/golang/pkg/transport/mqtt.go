@@ -395,7 +395,7 @@ func (operation mqttOperation) forRequest(request TransportRequest) (mqttOperati
 		}, nil
 	}
 	payeeOperations := map[string]mqttOperation{
-		"/api/v1/offers/resolve":   {command: "resolve-offer", messageType: "payment.resolve_offer", responseType: "payment.offer_resolved"},
+		"/api/v1/prices/resolve":   {command: "resolve-price", messageType: "payment.resolve_price", responseType: "payment.price_resolved"},
 		"/api/v1/payee/challenges": {command: "create-challenge", messageType: "payment.create_challenge", responseType: "payment.challenge_created"},
 		"/api/v1/payee/verify":     {command: "verify-payment", messageType: "payment.verify", responseType: "payment.verification_result"},
 		"/api/v1/payee/settle":     {command: "settle-payment", messageType: "payment.settle", responseType: "payment.settlement_result"},

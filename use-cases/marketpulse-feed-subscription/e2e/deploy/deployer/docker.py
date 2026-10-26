@@ -179,7 +179,7 @@ def _parse_cast_uint(output: str) -> int:
 
 
 def _clean_compose_stdout(output: str) -> str:
-    """Remove the compatibility provider banner without hiding command output."""
+    """Remove the external Compose provider banner without hiding command output."""
     lines = ANSI_ESCAPE_PATTERN.sub("", output).replace("\r", "").splitlines()
     return "\n".join(line for line in lines if not line.strip().startswith(COMPOSE_PROVIDER_PREFIX)).strip()
 

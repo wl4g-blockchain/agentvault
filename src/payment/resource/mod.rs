@@ -35,17 +35,17 @@ use crate::model::PaymentClient;
 use crate::model::PaymentPolicy;
 use crate::model::PaymentPrice;
 use crate::model::PaymentScenario;
-use crate::storage::ApproverStorage;
-use crate::storage::ClientStorage;
-use crate::storage::PolicyStorage;
-use crate::storage::PriceStorage;
-use crate::storage::ScenarioStorage;
+use crate::storage::IApproverRepository;
+use crate::storage::IClientRepository;
+use crate::storage::IPolicyRepository;
+use crate::storage::IPriceRepository;
+use crate::storage::IScenarioRepository;
+use crate::storage::IWalletRepository;
 use crate::storage::StorageFactory;
 use crate::storage::StoragePorts;
 use crate::storage::WalletCreationConfig;
 use crate::storage::WalletCustody;
 use crate::storage::WalletKeyManager;
-use crate::storage::WalletStorage;
 use crate::utils::crypto;
 use crate::utils::secret::SecretReader;
 use crate::Error;
@@ -58,12 +58,12 @@ const MAX_RESOURCE_FILES: usize = 1_000;
 const MAX_IMPORT_DEPTH: usize = 8;
 
 pub(crate) struct ImportPorts {
-    clients: Arc<dyn ClientStorage>,
-    scenarios: Arc<dyn ScenarioStorage>,
-    policies: Arc<dyn PolicyStorage>,
-    offers: Arc<dyn PriceStorage>,
-    approvers: Arc<dyn ApproverStorage>,
-    wallets: Arc<dyn WalletStorage>,
+    clients: Arc<dyn IClientRepository>,
+    scenarios: Arc<dyn IScenarioRepository>,
+    policies: Arc<dyn IPolicyRepository>,
+    prices: Arc<dyn IPriceRepository>,
+    approvers: Arc<dyn IApproverRepository>,
+    wallets: Arc<dyn IWalletRepository>,
     local_keys: Arc<dyn WalletKeyManager>,
 }
 

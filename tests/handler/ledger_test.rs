@@ -17,7 +17,7 @@ async fn confirmed_financial_facts_replay_once_and_cannot_change_amount() {
         wallet_id: fixture.wallet.id,
         entry_type: LedgerEntryType::Deposit,
         direction: PaymentDirection::Inbound,
-        asset: fixture.offer.asset,
+        asset: fixture.price.asset,
         amount: Amount::new(7),
         posting_key: "handler-deposit".into(),
         tx_hash: None,

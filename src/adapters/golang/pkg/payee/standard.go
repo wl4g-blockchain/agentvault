@@ -30,15 +30,15 @@ type StandardPayeeRoute struct {
 	A2ATaskStore a2asrv.TaskStore
 }
 
-func NewStandardMCPToolRoute(path, tool, scenarioID, offerID, resource, origin string) StandardPayeeRoute {
-	return NewStandardMCPToolRouteWithProtocol(path, tool, scenarioID, offerID, resource, origin, "x402")
+func NewStandardMCPToolRoute(path, tool, scenarioID, priceID, resource, origin string) StandardPayeeRoute {
+	return NewStandardMCPToolRouteWithProtocol(path, tool, scenarioID, priceID, resource, origin, "x402")
 }
 
 func NewStandardMCPToolRouteWithProtocol(
-	path, tool, scenarioID, offerID, resource, origin, protocolName string,
+	path, tool, scenarioID, priceID, resource, origin, protocolName string,
 ) StandardPayeeRoute {
 	return StandardPayeeRoute{
-		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, PriceID: offerID,
+		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, PriceID: priceID,
 		Resource: resource, Origin: origin, Protocol: protocolName, MCPTool: tool,
 	}
 }
@@ -168,21 +168,12 @@ type StdHttpMiddleware struct {
 	maxBodyBytes int64
 }
 
-// StandardPayeeMiddleware is the compatibility name retained for existing
-// integrations. New code should use StdHttpMiddleware.
-type StandardPayeeMiddleware = StdHttpMiddleware
-
 func NewStdHttpMiddleware(core *PayeeMiddleware, routes ...StandardPayeeRoute) *StdHttpMiddleware {
 	indexed := make(map[string]StandardPayeeRoute, len(routes))
 	for _, route := range routes {
 		indexed[route.Method+" "+route.Path] = route
 	}
 	return &StdHttpMiddleware{PayeeMiddleware: core, routes: indexed, maxBodyBytes: 1024 * 1024}
-}
-
-// NewStandardPayeeMiddleware retains the historical constructor name.
-func NewStandardPayeeMiddleware(core *PayeeMiddleware, routes ...StandardPayeeRoute) *StdHttpMiddleware {
-	return NewStdHttpMiddleware(core, routes...)
 }
 
 var _ interface {

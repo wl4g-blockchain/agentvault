@@ -30,7 +30,7 @@ export const capabilities: ApiCapabilities = {
   balanceLookup: true,
   pendingApprovalRead: true,
   approvalDecision: true,
-  offerResolution: true,
+  priceResolution: true,
   managementRead: true,
   managementMutation: true,
   paymentListing: true,
@@ -229,6 +229,3 @@ export const managementApi = {
     return { liveness, readiness, observedAt: Date.now() }
   },
 }
-
-/** Compatibility name for existing dashboard integrations. */
-export const offerApi = priceApi

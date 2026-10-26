@@ -11,7 +11,7 @@ use crate::{
     cmd::{RuntimeComponent, Shutdown},
     config::MqttTransportConfig,
     payment::{PaymentApi, PaymentEventDispatcher},
-    storage::{ClientStorage, OutboxStorage, ScenarioStorage},
+    storage::{IClientRepository, IOutboxRepository, IScenarioRepository},
     transport::mqtt::{
         CommandReceiver, MqttOutboxPublisher, MqttPaymentEventSink, MqttSettings, MAX_IN_FLIGHT, MAX_SECRET_BYTES,
     },
@@ -27,9 +27,9 @@ use tokio::task::JoinSet;
 /// an indirect secret reference and is redacted from `Debug` output.
 pub struct MqttController {
     pub(super) settings: MqttSettings,
-    pub(super) clients: Arc<dyn ClientStorage>,
-    pub(super) scenarios: Arc<dyn ScenarioStorage>,
-    pub(super) outbox: Arc<dyn OutboxStorage>,
+    pub(super) clients: Arc<dyn IClientRepository>,
+    pub(super) scenarios: Arc<dyn IScenarioRepository>,
+    pub(super) outbox: Arc<dyn IOutboxRepository>,
     receiver: CommandReceiver,
 }
 
@@ -43,9 +43,9 @@ impl MqttController {
     pub fn new(
         config: MqttTransportConfig,
         api: Arc<PaymentApi>,
-        clients: Arc<dyn ClientStorage>,
-        scenarios: Arc<dyn ScenarioStorage>,
-        outbox: Arc<dyn OutboxStorage>,
+        clients: Arc<dyn IClientRepository>,
+        scenarios: Arc<dyn IScenarioRepository>,
+        outbox: Arc<dyn IOutboxRepository>,
         cache: Arc<dyn ICache>,
     ) -> crate::Result<Self> {
         MqttSettings::validate_config(&config)?;

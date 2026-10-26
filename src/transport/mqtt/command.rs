@@ -16,8 +16,8 @@ pub(crate) struct CommandWork {
 pub(crate) struct CommandDependencies {
     pub(crate) client: AsyncClient,
     pub(crate) api: Arc<PaymentApi>,
-    pub(crate) clients: Arc<dyn ClientStorage>,
-    pub(crate) scenarios: Arc<dyn ScenarioStorage>,
+    pub(crate) clients: Arc<dyn IClientRepository>,
+    pub(crate) scenarios: Arc<dyn IScenarioRepository>,
     pub(crate) responses: Arc<ResponseCache>,
     pub(crate) timeout: Duration,
 }
@@ -43,7 +43,7 @@ impl CommandDependencies {
         let response = match work.kind {
             CommandKind::Authorize => CommandDependencies::process_authorize_command(&work, &dependencies).await,
             CommandKind::OutboundResponse => CommandDependencies::process_outbound_response(&work, &dependencies).await,
-            CommandKind::ResolvePrice => CommandDependencies::process_resolve_offer(&work, &dependencies).await,
+            CommandKind::ResolvePrice => CommandDependencies::process_resolve_price(&work, &dependencies).await,
             CommandKind::CreateChallenge => CommandDependencies::process_create_challenge(&work, &dependencies).await,
             CommandKind::VerifyPayment => CommandDependencies::process_verify_payment(&work, &dependencies).await,
             CommandKind::SettlePayment => CommandDependencies::process_settle_payment(&work, &dependencies).await,
@@ -134,14 +134,14 @@ impl CommandDependencies {
         }
     }
 
-    pub(crate) async fn process_resolve_offer(
+    pub(crate) async fn process_resolve_price(
         work: &CommandWork,
         dependencies: &CommandDependencies,
     ) -> ResponseEnvelope {
         let request = match MqttWireCodec::parse_payee_command::<ResolvePriceRequest>(
             &work.payload,
-            "payment.resolve_offer",
-            "/api/v1/offers/resolve",
+            "payment.resolve_price",
+            "/api/v1/prices/resolve",
         ) {
             Ok(request) => request,
             Err(error) => return MqttWireCodec::error_response(&work.request_span_id, 400, "INVALID_REQUEST", error),
@@ -149,14 +149,14 @@ impl CommandDependencies {
         let result = async {
             let principal =
                 CommandDependencies::principal_for_topic_client(dependencies.clients.as_ref(), &work.client_id).await?;
-            dependencies.api.resolve_offer(&principal, &request).await
+            dependencies.api.resolve_price(&principal, &request).await
         };
         CommandDependencies::timed_payment_response(
             dependencies.timeout,
             result,
-            "payment.offer_resolved",
+            "payment.price_resolved",
             &work.request_span_id,
-            "offer resolution timed out",
+            "price resolution timed out",
         )
         .await
     }
@@ -270,7 +270,7 @@ impl CommandDependencies {
     }
 
     pub(crate) async fn principal_for_topic_client(
-        clients: &dyn ClientStorage,
+        clients: &dyn IClientRepository,
         client_id: &str,
     ) -> crate::Result<String> {
         let client = clients
@@ -322,7 +322,7 @@ impl CommandDependencies {
 
     pub(crate) async fn authorize_for_topic_client(
         api: &PaymentApi,
-        clients: &dyn ClientStorage,
+        clients: &dyn IClientRepository,
         client_id: &str,
         request: &AuthorizePaymentRequest,
     ) -> crate::Result<crate::model::payment_api::AuthorizePaymentResponse> {
@@ -340,7 +340,7 @@ impl CommandDependencies {
 
     pub(crate) async fn report_outbound_response_for_topic_client(
         api: &PaymentApi,
-        clients: &dyn ClientStorage,
+        clients: &dyn IClientRepository,
         client_id: &str,
         command: &OutboundResponseCommand,
     ) -> crate::Result<crate::model::payment_api::ReportOutboundResponseResponse> {
@@ -363,8 +363,8 @@ impl CommandDependencies {
 
     pub(crate) async fn decide_for_topic_client(
         api: &PaymentApi,
-        clients: &dyn ClientStorage,
-        scenarios: &dyn ScenarioStorage,
+        clients: &dyn IClientRepository,
+        scenarios: &dyn IScenarioRepository,
         client_id: &str,
         approver_principal: Option<&str>,
         command: &ApprovalDecisionCommand,
@@ -399,8 +399,8 @@ mod tests;
 /// application component continues to enforce durable `run_id` idempotency.
 pub(crate) struct CommandReceiver {
     api: Arc<PaymentApi>,
-    clients: Arc<dyn ClientStorage>,
-    scenarios: Arc<dyn ScenarioStorage>,
+    clients: Arc<dyn IClientRepository>,
+    scenarios: Arc<dyn IScenarioRepository>,
     limiter: ConcurrencyLimiter,
     responses: Arc<ResponseCache>,
     topic_prefix: String,
@@ -409,8 +409,8 @@ pub(crate) struct CommandReceiver {
 impl CommandReceiver {
     pub(crate) fn new(
         api: Arc<PaymentApi>,
-        clients: Arc<dyn ClientStorage>,
-        scenarios: Arc<dyn ScenarioStorage>,
+        clients: Arc<dyn IClientRepository>,
+        scenarios: Arc<dyn IScenarioRepository>,
         cache: Arc<dyn ICache>,
         topic_prefix: String,
         timeout: Duration,

@@ -4,7 +4,7 @@ fn operation() -> PayeeOperation {
     PayeeOperation {
         scenario_id: "scenario".to_owned(),
         run_id: "run".to_owned(),
-        offer_id: "offer".to_owned(),
+        price_id: "price".to_owned(),
         resource: "mcp://marketpulse/realtime".to_owned(),
         origin: "https://marketpulse.test".to_owned(),
         protocol: "x402".to_owned(),

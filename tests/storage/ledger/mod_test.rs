@@ -13,7 +13,7 @@ impl RepositoryFixture {
             wallet_id: self.wallet.id.clone(),
             entry_type: LedgerEntryType::Deposit,
             direction: PaymentDirection::Inbound,
-            asset: self.offer.asset,
+            asset: self.price.asset,
             amount: Amount::new(7),
             posting_key: format!("deposit-{}", self.wallet.id),
             tx_hash: None,

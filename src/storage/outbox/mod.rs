@@ -103,7 +103,7 @@ pub struct OutboxLeaseRequest {
 /// `FOR UPDATE SKIP LOCKED`; `SQLite` implementations use a short write
 /// transaction and conditional lease update.
 #[async_trait]
-pub trait OutboxStorage: Send + Sync {
+pub trait IOutboxRepository: Send + Sync {
     /// Claims only rows in `request.class`. A worker must never lease, mutate,
     /// or consume another delivery family's rows.
     async fn claim(&self, request: &OutboxLeaseRequest) -> Result<Vec<OutboxMessage>>;

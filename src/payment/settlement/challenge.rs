@@ -2,12 +2,12 @@ use super::*;
 use crate::payment::validation::PaymentValidation;
 
 impl SettlementCoordinator {
-    /// Issues and durably records a challenge from server-owned offer fields.
+    /// Issues and durably records a challenge from server-owned price fields.
     ///
     /// # Errors
     ///
     /// Returns an error for unauthorized scenarios, invalid bindings, missing
-    /// offers/wallets, unsupported protocols, or persistence failures.
+    /// prices/wallets, unsupported protocols, or persistence failures.
     pub async fn issue_challenge(
         &self,
         principal: &str,
@@ -27,12 +27,12 @@ impl SettlementCoordinator {
         }
         let PreparedInboundChallenge {
             access,
-            offer,
+            price,
             policy,
             wallet,
             challenge,
         } = self.prepare_inbound_challenge(access, command, now).await?;
-        let intent = SettlementFacts::build_inbound_intent(command, &offer, &wallet.wallet, &challenge, now)?;
+        let intent = SettlementFacts::build_inbound_intent(command, &price, &wallet.wallet, &challenge, now)?;
         let event = PaymentEvent {
             id: Uuid::new_v4().to_string(),
             intent_id: intent.id.clone(),
@@ -50,7 +50,7 @@ impl SettlementCoordinator {
             principal: access.principal.clone(),
             client: access.client,
             scenario: access.scenario,
-            offer: offer.clone(),
+            price: price.clone(),
             policy,
             wallet: wallet.clone(),
             origin: command.origin.clone(),
@@ -85,52 +85,52 @@ impl SettlementCoordinator {
         command: &IssuePaymentChallenge,
         now: i64,
     ) -> Result<PreparedInboundChallenge> {
-        let offer = self
-            .offers
-            .get(&command.offer_id)
+        let price = self
+            .prices
+            .get(&command.price_id)
             .await?
-            .filter(|offer| {
-                offer.enabled
-                    && offer.scenario_id == command.scenario_id
-                    && offer.resource == command.resource
-                    && offer.supports_protocol(&command.protocol)
+            .filter(|price| {
+                price.enabled
+                    && price.scenario_id == command.scenario_id
+                    && price.resource == command.resource
+                    && price.supports_protocol(&command.protocol)
             })
-            .ok_or_else(|| Error::NotFound("payment offer".to_owned()))?;
-        if PaymentValidation::canonical_http_origin(&offer.resource)? != command.origin {
+            .ok_or_else(|| Error::NotFound("payment price".to_owned()))?;
+        if PaymentValidation::canonical_http_origin(&price.resource)? != command.origin {
             return Err(Error::InvalidRequest(
-                "protected resource origin does not match the offer".to_owned(),
+                "protected resource origin does not match the price".to_owned(),
             ));
         }
         let policy = self
             .policies
-            .get(&offer.policy_id)
+            .get(&price.policy_id)
             .await?
             .filter(|policy| {
                 policy.enabled
                     && policy.scenario_id == command.scenario_id
                     && policy.allows_direction(PaymentDirection::Inbound)
-                    && policy.allows_wallet(&offer.wallet_id)
+                    && policy.allows_wallet(&price.wallet_id)
             })
-            .ok_or_else(|| Error::PolicyDenied("offer has no enabled inbound policy-wallet binding".to_owned()))?;
+            .ok_or_else(|| Error::PolicyDenied("price has no enabled inbound policy-wallet binding".to_owned()))?;
         let wallet = self
             .wallets
-            .get_payment_wallet(&offer.wallet_id)
+            .get_payment_wallet(&price.wallet_id)
             .await?
             .filter(|wallet| wallet.enabled)
-            .ok_or_else(|| Error::NotFound("offer recipient wallet".to_owned()))?
-            .canonicalized_for_payment_network(&offer.asset.network)
-            .map_err(|field| Error::Storage(format!("invalid offer recipient wallet {field}")))?;
+            .ok_or_else(|| Error::NotFound("price recipient wallet".to_owned()))?
+            .canonicalized_for_payment_network(&price.asset.network)
+            .map_err(|field| Error::Storage(format!("invalid price recipient wallet {field}")))?;
         let challenge = self
             .protocols
             .get(&command.protocol)?
-            .build_challenge(&offer, &wallet.wallet.address, now)
+            .build_challenge(&price, &wallet.wallet.address, now)
             .await?;
-        SettlementFacts::validate_payee_challenge(&challenge, &offer, &wallet.wallet, now)?;
-        self.ensure_inbound_capacity(command, &offer, &policy, &challenge, now)
+        SettlementFacts::validate_payee_challenge(&challenge, &price, &wallet.wallet, now)?;
+        self.ensure_inbound_capacity(command, &price, &policy, &challenge, now)
             .await?;
         Ok(PreparedInboundChallenge {
             access,
-            offer,
+            price,
             policy,
             wallet,
             challenge,
@@ -140,7 +140,7 @@ impl SettlementCoordinator {
     pub(super) async fn ensure_inbound_capacity(
         &self,
         command: &IssuePaymentChallenge,
-        offer: &PaymentPrice,
+        price: &PaymentPrice,
         policy: &PaymentPolicy,
         challenge: &PaymentChallenge,
         now: i64,
@@ -149,9 +149,9 @@ impl SettlementCoordinator {
             .payments
             .budget_snapshot(
                 &command.scenario_id,
-                &offer.wallet_id,
+                &price.wallet_id,
                 PaymentDirection::Inbound,
-                &offer.asset.budget_unit(),
+                &price.asset.budget_unit(),
                 PaymentValidation::utc_day_start(now),
                 now,
             )
@@ -161,7 +161,7 @@ impl SettlementCoordinator {
             PolicyEvaluation {
                 direction: PaymentDirection::Inbound,
                 challenge,
-                wallet_id: &offer.wallet_id,
+                wallet_id: &price.wallet_id,
                 origin: &command.origin,
                 scenario_usage: budget.scenario_spent_and_reserved,
                 wallet_budget: WalletBudget {

@@ -307,15 +307,3 @@ class HttpxPayerMiddleware:
         )
         message = f"{name} {rendered}" if rendered else name
         _LOG.info(message, extra={"event_name": name, **fields})
-
-
-
-
-
-
-
-
-
-
-# Compatibility export; implementation belongs to the middleware.
-_event = HttpxPayerMiddleware._event

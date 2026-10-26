@@ -1,12 +1,12 @@
 use crate::{
     config::SqliteStorageConfig,
-    storage::{sqlite::SqliteStorage, IStorage, WalletCreationConfig},
+    storage::{sqlite::SqliteRepository, IRepository, WalletCreationConfig},
 };
 
 #[tokio::test]
 async fn invalid_wallet_limits_do_not_leave_a_partial_wallet() {
     let directory = tempfile::tempdir().unwrap();
-    let database = SqliteStorage::connect(&SqliteStorageConfig {
+    let database = SqliteRepository::connect(&SqliteStorageConfig {
         database_file: directory.path().join("wallet.sqlite").display().to_string(),
         ..SqliteStorageConfig::default()
     })

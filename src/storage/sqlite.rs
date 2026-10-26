@@ -22,7 +22,7 @@ pub struct SqliteRepository {
 
 impl SqliteRepository {
     /// Constructs a lazy durable `SQLite` provider without opening a
-    /// connection. [`crate::storage::IStorage::init`] owns connection and
+    /// connection. [`crate::storage::IRepository::init`] owns connection and
     /// migration work.
     ///
     /// # Errors
@@ -172,7 +172,7 @@ impl SqliteRepository {
     }
 }
 
-impl crate::storage::IGenericStorage for SqliteRepository {
+impl crate::storage::RepositorySql for SqliteRepository {
     type Database = sqlx::Sqlite;
     fn push_entity_value(
         query: &mut sqlx::QueryBuilder<'static, Self::Database>,
@@ -276,44 +276,34 @@ impl SqliteRepository {
     }
 }
 
-/// Compatibility name for the dialect lifecycle provider. Domain operations are exposed by `StoragePorts`.
-pub type SqliteStorage = SqliteRepository;
-
 // Entity fields and values are resolved by the shared contract; SQLx owns binding.
 macro_rules! dynamic_sqlite {
     (select, $entity:ty, $filters:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::select::<$entity>(
-            &$filters, false,
-        )
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::select::<$entity>(&$filters, false)
     };
     (count, $entity:ty, $filters:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::select::<$entity>(
-            &$filters, true,
-        )
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::select::<$entity>(&$filters, true)
     };
     (insert, $entity:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::insert($entity, false)
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::insert($entity, false)
     };
     (insert_or_ignore, $entity:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::insert($entity, true)
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::insert($entity, true)
     };
     (update, $entity:ty, $changes:expr, $filters:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::update::<$entity>(
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::update::<$entity>(
             $changes, &$filters,
         )
     };
     (upsert, $entity:expr, $keys:expr, $updates:expr, $immutable:expr, $revision:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::upsert(
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::upsert(
             $entity, $keys, $updates, $immutable, $revision,
         )
     };
     (delete_by, $entity:ty, $filters:expr) => {
-        <crate::storage::sqlite::SqliteRepository as crate::storage::IGenericStorage>::delete_by::<$entity>(&$filters)
+        <crate::storage::sqlite::SqliteRepository as crate::storage::RepositorySql>::delete_by::<$entity>(&$filters)
     };
 }
 pub(crate) use dynamic_sqlite;
 
 crate::storage::entity_repository_queries!(SqliteRepository, SqliteRow, immediate, "");
-
-/// Backward-compatible name for the generic repository.
-pub type BaseSqliteRepository = SqliteRepository;

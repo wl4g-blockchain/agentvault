@@ -11,7 +11,7 @@ use crate::{
 pub struct PayeeOperation {
     pub scenario_id: String,
     pub run_id: String,
-    pub offer_id: String,
+    pub price_id: String,
     pub resource: String,
     pub origin: String,
     pub protocol: String,
@@ -24,7 +24,7 @@ impl PayeeOperation {
         for (name, value) in [
             ("scenario_id", self.scenario_id.as_str()),
             ("run_id", self.run_id.as_str()),
-            ("offer_id", self.offer_id.as_str()),
+            ("price_id", self.price_id.as_str()),
             ("resource", self.resource.as_str()),
             ("origin", self.origin.as_str()),
             ("protocol", self.protocol.as_str()),
@@ -64,7 +64,7 @@ pub struct PaymentPrice {
 pub struct CreateChallengeRequest {
     #[serde(flatten)]
     pub context: OperationContext,
-    pub offer_id: String,
+    pub price_id: String,
     pub resource: String,
     pub origin: String,
     pub protocol: String,

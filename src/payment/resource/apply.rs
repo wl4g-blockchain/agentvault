@@ -10,7 +10,7 @@ impl ResourceImporter {
             clients: storage.clients,
             scenarios: storage.scenarios,
             policies: storage.policies,
-            offers: storage.offers,
+            prices: storage.prices,
             approvers: storage.approvers,
             wallets: storage.wallets,
             local_keys,
@@ -30,7 +30,7 @@ impl ResourceImporter {
         ResourceImporter::import_wallets(ports, batch.wallets, imported_at, &mut report).await?;
         ResourceImporter::import_scenarios(ports, batch.scenarios, imported_at, &mut report).await?;
         ResourceImporter::import_policies(ports, batch.policies, imported_at, &mut report).await?;
-        ResourceImporter::import_offers(ports, batch.offers, imported_at, &mut report).await?;
+        ResourceImporter::import_prices(ports, batch.prices, imported_at, &mut report).await?;
         ResourceImporter::import_approvers(ports, batch.approvers, imported_at, &mut report).await?;
         Ok(report)
     }
@@ -110,7 +110,7 @@ impl ResourceImporter {
         Ok(())
     }
 
-    pub(crate) async fn import_offers(
+    pub(crate) async fn import_prices(
         ports: &ImportPorts,
         specs: Vec<PriceSpec>,
         imported_at: i64,
@@ -120,12 +120,12 @@ impl ResourceImporter {
             let desired = spec.into_domain(imported_at);
             desired
                 .validate()
-                .map_err(|field| Error::InvalidRequest(format!("invalid imported offer {field}")))?;
-            match ports.offers.get(&desired.id).await? {
-                Some(existing) if ResourceImporter::same_offer(&existing, &desired) => report.reused(),
-                Some(_) => return Err(ResourceImporter::drift("offer", &desired.id)),
+                .map_err(|field| Error::InvalidRequest(format!("invalid imported price {field}")))?;
+            match ports.prices.get(&desired.id).await? {
+                Some(existing) if ResourceImporter::same_price(&existing, &desired) => report.reused(),
+                Some(_) => return Err(ResourceImporter::drift("price", &desired.id)),
                 None => {
-                    ports.offers.insert(&desired).await?;
+                    ports.prices.insert(&desired).await?;
                     report.created();
                 }
             }

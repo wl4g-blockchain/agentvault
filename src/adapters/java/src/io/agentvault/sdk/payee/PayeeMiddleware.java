@@ -190,7 +190,7 @@ public final class PayeeMiddleware {
         body.put("scenario_id", request.scenarioId());
         body.put("resource", request.resource());
         if (request.protocol() != null) body.put("protocol", request.protocol());
-        return transport.post("/api/v1/offers/resolve", body, PaymentPrice.class);
+        return transport.post("/api/v1/prices/resolve", body, PaymentPrice.class);
     }
 
     public PaymentReceipt getReceipt(String scenarioId, String intentId) {
@@ -211,7 +211,7 @@ public final class PayeeMiddleware {
     private static void validateChallengeBinding(
             PayeeOperation operation, PaymentChallenge challenge) {
         if (!operation.scenarioId().equals(challenge.scenarioId())
-                || !operation.offerId().equals(challenge.offerId())
+                || !operation.priceId().equals(challenge.priceId())
                 || !operation.resource().equals(challenge.resource())
                 || !operation.protocol().equals(challenge.protocol())
                 || challenge.asset() == null
@@ -238,7 +238,7 @@ public final class PayeeMiddleware {
         if (intent == null
                 || intent.direction() != Base.PaymentDirection.INBOUND
                 || !operation.scenarioId().equals(intent.scenarioId())
-                || !operation.offerId().equals(intent.offerId())
+                || !operation.priceId().equals(intent.priceId())
                 || !operation.resource().equals(intent.resource())
                 || !operation.protocol().equals(intent.protocol())
                 || !challenge.challengeHash().equals(intent.challengeHash())
@@ -262,7 +262,7 @@ public final class PayeeMiddleware {
                 || !verified.id().equals(payment.intent().id())
                 || payment.intent().direction() != Base.PaymentDirection.INBOUND
                 || !verified.scenarioId().equals(payment.intent().scenarioId())
-                || !java.util.Objects.equals(verified.offerId(), payment.intent().offerId())
+                || !java.util.Objects.equals(verified.priceId(), payment.intent().priceId())
                 || !verified.resource().equals(payment.intent().resource())
                 || !verified.protocol().equals(payment.intent().protocol())
                 || !java.util.Objects.equals(

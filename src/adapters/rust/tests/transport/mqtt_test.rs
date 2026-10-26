@@ -81,10 +81,10 @@ fn routes_outbound_evidence_to_its_distinct_command_contract() {
 fn routes_every_payee_phase_without_changing_the_middleware_api() {
     for (path, command, request_type, response_type) in [
         (
-            paths::RESOLVE_OFFER,
-            "resolve-offer",
-            "payment.resolve_offer",
-            "payment.offer_resolved",
+            paths::RESOLVE_PRICE,
+            "resolve-price",
+            "payment.resolve_price",
+            "payment.price_resolved",
         ),
         (
             paths::CREATE_CHALLENGE,

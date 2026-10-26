@@ -1,7 +1,8 @@
 use crate::{
     config::SqliteStorageConfig,
     storage::{
-        payment::sqlite::PaymentSqliteRepository, sqlite::SqliteRepository, PaymentStorage, ReconciliationLeaseRequest,
+        payment::sqlite::PaymentSqliteRepository, sqlite::SqliteRepository, IIntentRepository,
+        ReconciliationLeaseRequest,
     },
 };
 #[tokio::test]

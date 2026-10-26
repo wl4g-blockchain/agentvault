@@ -67,7 +67,7 @@ final class PaymentProtocolTest {
         ObjectNode payload = JSON.createObjectNode()
                 .put("www_authenticate", nativeChallenge.toWwwAuthenticate());
         PaymentChallenge challenge = new PaymentChallenge(
-                "scenario", "offer", "https://merchant.example/tool", "mpp",
+                "scenario", "price", "https://merchant.example/tool", "mpp",
                 new AssetIdentity("eip155:42431", "USDC", null, 6), "1000",
                 "0x1111111111111111111111111111111111111111", "nonce", "challenge",
                 2_000_000_000L, payload);
@@ -77,7 +77,7 @@ final class PaymentProtocolTest {
 
         SettledIncomingPayment payment = JSON.readValue("""
                 {"intent":{"id":"intent","scenario_id":"scenario","run_id":"run","wallet_id":"wallet",
-                 "policy_id":"policy","offer_id":"offer","direction":"inbound","protocol":"mpp",
+                 "policy_id":"policy","price_id":"price","direction":"inbound","protocol":"mpp",
                  "asset":{"network":"eip155:42431","asset":"USDC","decimals":6},
                  "recipient":"0x1111111111111111111111111111111111111111","amount":"1000",
                  "settled_amount":"1000","resource":"https://merchant.example/tool",

@@ -138,12 +138,12 @@ struct MockState {
 }
 
 #[derive(Default)]
-struct MockStorage {
+struct MockRepository {
     state: Mutex<MockState>,
 }
 
 #[async_trait]
-impl PaymentStorage for MockStorage {
+impl IIntentRepository for MockRepository {
     async fn find_run(&self, _scenario_id: &str, _run_id: &str) -> Result<Option<AuthorizationRecord>> {
         Ok(None)
     }
@@ -331,7 +331,7 @@ pub(crate) fn intent(status: PaymentStatus) -> PaymentIntent {
         run_id: "run-1".to_owned(),
         wallet_id: Some("wallet-1".to_owned()),
         policy_id: Some("policy-1".to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: PaymentDirection::Outbound,
         protocol: "x402".to_owned(),
         asset: AssetIdentity {
@@ -369,7 +369,7 @@ fn config(worker_id: &str) -> ReconciliationConfig {
     }
 }
 
-fn job<E>(storage: Arc<MockStorage>, evidence: Arc<E>, clock: Arc<FixedClock>, worker_id: &str) -> PaymentReconciler
+fn job<E>(storage: Arc<MockRepository>, evidence: Arc<E>, clock: Arc<FixedClock>, worker_id: &str) -> PaymentReconciler
 where
     E: ReconciliationEvidenceSource + 'static,
 {
@@ -378,7 +378,7 @@ where
 
 #[tokio::test]
 async fn confirmed_evidence_atomically_settles_and_posts_once() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     storage.state.lock().unwrap().intent = Some(intent(PaymentStatus::PendingSettlement));
     let evidence = Arc::new(MockEvidence {
         outcomes: Mutex::new(VecDeque::from([Ok(ReconciliationEvidence::Confirmed(Box::new(
@@ -426,7 +426,7 @@ async fn confirmed_evidence_atomically_settles_and_posts_once() {
 
 #[tokio::test]
 async fn trusted_chain_evidence_recovers_after_local_commit_failure_and_restart() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     {
         let mut state = storage.state.lock().unwrap();
         let mut payment = intent(PaymentStatus::PendingSettlement);
@@ -516,7 +516,7 @@ fn confirmed_evidence_cannot_exceed_bounded_future_clock_skew() {
 
 #[tokio::test]
 async fn submitted_verify_recovery_advances_to_pending_settlement() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     storage.state.lock().unwrap().intent = Some(intent(PaymentStatus::Submitted));
     let evidence = Arc::new(MockEvidence {
         outcomes: Mutex::new(VecDeque::from([Ok(ReconciliationEvidence::Verified {
@@ -540,10 +540,10 @@ async fn submitted_verify_recovery_advances_to_pending_settlement() {
 
 #[tokio::test]
 async fn expired_inbound_challenge_releases_reserved_capacity() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     let mut challenge = intent(PaymentStatus::Created);
     challenge.direction = PaymentDirection::Inbound;
-    challenge.offer_id = Some("offer-1".to_owned());
+    challenge.price_id = Some("price-1".to_owned());
     challenge.expires_at = Some(99);
     storage.state.lock().unwrap().intent = Some(challenge);
     let evidence = Arc::new(MockEvidence {
@@ -566,7 +566,7 @@ async fn expired_inbound_challenge_releases_reserved_capacity() {
 
 #[tokio::test]
 async fn proven_expired_inbound_authorization_releases_reserved_capacity() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     let mut payment = intent(PaymentStatus::PendingSettlement);
     payment.direction = PaymentDirection::Inbound;
     payment.expires_at = Some(99);
@@ -594,7 +594,7 @@ async fn proven_expired_inbound_authorization_releases_reserved_capacity() {
 
 #[tokio::test]
 async fn unknown_and_pending_evidence_use_persistent_bounded_backoff() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     storage.state.lock().unwrap().intent = Some(intent(PaymentStatus::Unknown));
     let evidence = Arc::new(MockEvidence {
         outcomes: Mutex::new(VecDeque::from([
@@ -619,7 +619,7 @@ async fn unknown_and_pending_evidence_use_persistent_bounded_backoff() {
 
 #[tokio::test]
 async fn provider_error_is_retried_without_settlement_or_reservation_release() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     storage.state.lock().unwrap().intent = Some(intent(PaymentStatus::PendingSettlement));
     let evidence = Arc::new(MockEvidence {
         outcomes: Mutex::new(VecDeque::from([Err(Error::Settlement("provider timeout".to_owned()))])),
@@ -641,7 +641,7 @@ async fn provider_error_is_retried_without_settlement_or_reservation_release() {
 
 #[tokio::test]
 async fn durable_lease_and_due_time_prevent_duplicate_claims() {
-    let storage = Arc::new(MockStorage::default());
+    let storage = Arc::new(MockRepository::default());
     storage.state.lock().unwrap().intent = Some(intent(PaymentStatus::PendingSettlement));
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());

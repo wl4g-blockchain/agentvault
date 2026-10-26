@@ -1,7 +1,4 @@
-use crate::{
-    storage::{SchemaMigration, StorageSchema},
-    Error, Result,
-};
+use crate::{storage::StorageSchema, Error, Result};
 
 pub(crate) struct PaymentStorageSchema;
 impl PaymentStorageSchema {
@@ -24,17 +21,13 @@ impl PaymentStorageSchema {
     ];
     pub(crate) fn postgres() -> Result<StorageSchema> {
         Ok(StorageSchema {
-            version: 2,
+            version: 1,
             version_table: "pay_schema_version",
             tables: Self::TABLES,
             ddl: Self::body(include_str!("../../migrations/postgres/001_init.ddl.sql"), "BEGIN;")?,
             dml: include_str!("../../migrations/postgres/001_init.dml.sql"),
             advisory_lock: 0x41_56_50_41_59_44_42,
-            migrations: &[SchemaMigration {
-                from: 1,
-                to: 2,
-                sql: include_str!("../../migrations/postgres/002_price.ddl.sql"),
-            }],
+            migrations: &[],
         })
     }
     pub(crate) fn sqlite() -> Result<StorageSchema> {
@@ -44,11 +37,7 @@ impl PaymentStorageSchema {
                 "BEGIN IMMEDIATE;",
             )?,
             dml: include_str!("../../migrations/sqlite/001_init.dml.sql"),
-            migrations: &[SchemaMigration {
-                from: 1,
-                to: 2,
-                sql: include_str!("../../migrations/sqlite/002_price.ddl.sql"),
-            }],
+            migrations: &[],
             ..Self::postgres()?
         })
     }

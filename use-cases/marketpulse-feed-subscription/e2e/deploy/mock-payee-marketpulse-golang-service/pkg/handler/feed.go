@@ -13,11 +13,11 @@ import (
 )
 
 type FeedHandler struct {
-	storage               *storage.FeedSQLiteStorage
+	storage               *storage.FeedSqliteRepository
 	allowFailureInjection bool
 }
 
-func NewFeedHandler(database *storage.FeedSQLiteStorage, allowFailureInjection bool) *FeedHandler {
+func NewFeedHandler(database *storage.FeedSqliteRepository, allowFailureInjection bool) *FeedHandler {
 	return &FeedHandler{storage: database, allowFailureInjection: allowFailureInjection}
 }
 

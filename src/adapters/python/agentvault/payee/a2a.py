@@ -30,7 +30,7 @@ class A2APaymentCall:
 class A2APayeeMiddleware:
     """TaskStore integration around the same PayeeMiddleware settlement flow."""
 
-    _SCOPE = ("agentvault.payment.run_id", "agentvault.payment.scenario_id", "agentvault.payment.offer_id")
+    _SCOPE = ("agentvault.payment.run_id", "agentvault.payment.scenario_id", "agentvault.payment.price_id")
 
     def __init__(self, core) -> None:
         self.core = core
@@ -69,7 +69,7 @@ class A2APayeeMiddleware:
                         status=TaskStatus(state="submitted"), history=[params.message])
         task = task.model_copy(deep=True)
         metadata = dict(task.metadata or {})
-        for key, value in zip(self._SCOPE, (operation.run_id, operation.scenario_id, operation.offer_id)):
+        for key, value in zip(self._SCOPE, (operation.run_id, operation.scenario_id, operation.price_id)):
             if (key in metadata and metadata[key] != value) or (key not in metadata and credential is not None):
                 raise ValueError("A2A task is not bound to this payment scope")
             metadata[key] = value

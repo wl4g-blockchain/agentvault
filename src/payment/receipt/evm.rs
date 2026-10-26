@@ -92,8 +92,8 @@ impl EvmRpcReceiptSource {
 }
 
 #[async_trait]
-impl EvmReceiptSource for EvmRpcReceiptSource {
-    async fn lookup(&self, query: &EvmTransferQuery) -> Result<EvmReceiptObservation> {
+impl ReceiptSource for EvmRpcReceiptSource {
+    async fn lookup(&self, query: &TransferQuery) -> Result<ReceiptObservation> {
         EvmRpcReceiptSource::validate_query(query, &self.network)?;
         let observed_chain = self.rpc.request("eth_chainId", json!([])).await?;
         let observed_chain = observed_chain
@@ -107,7 +107,7 @@ impl EvmReceiptSource for EvmRpcReceiptSource {
         }
 
         let Some(receipt) = self.load_receipt(&query.transaction).await? else {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         };
         if !receipt.transaction_hash.eq_ignore_ascii_case(&query.transaction) {
             return Ok(EvmRpcReceiptSource::mismatch(
@@ -123,15 +123,15 @@ impl EvmReceiptSource for EvmRpcReceiptSource {
             return Ok(EvmRpcReceiptSource::mismatch("payment transaction is not successful"));
         }
         let Some(block_number_wire) = receipt.block_number.as_deref() else {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         };
         let Some(block_hash) = receipt.block_hash.as_deref() else {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         };
         let block_number = EvmRpcReceiptSource::parse_hex_u64(block_number_wire)?;
         let transfer = match EvmRpcReceiptSource::exact_transfer(&receipt, query)? {
             TransferMatch::Found(transfer) => transfer,
-            TransferMatch::Removed => return Ok(EvmReceiptObservation::Pending),
+            TransferMatch::Removed => return Ok(ReceiptObservation::Pending),
             TransferMatch::Missing => {
                 return Ok(EvmRpcReceiptSource::mismatch(
                     "receipt has no exact ERC-20 Transfer effect",
@@ -150,27 +150,27 @@ impl EvmReceiptSource for EvmRpcReceiptSource {
             .ok_or_else(|| Error::Settlement("EVM RPC latest block number is missing".to_owned()))
             .and_then(EvmRpcReceiptSource::parse_hex_u64)?;
         if latest < block_number {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         }
         let confirmations = latest.saturating_sub(block_number).saturating_add(1);
         let Some(block) = self.canonical_block(block_number_wire).await? else {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         };
         if !block.hash.eq_ignore_ascii_case(block_hash)
             || EvmRpcReceiptSource::parse_hex_u64(&block.number)? != block_number
             || !transfer.block_hash.eq_ignore_ascii_case(block_hash)
             || EvmRpcReceiptSource::parse_hex_u64(&transfer.block_number)? != block_number
         {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         }
         if confirmations < self.minimum_confirmations {
-            return Ok(EvmReceiptObservation::Pending);
+            return Ok(ReceiptObservation::Pending);
         }
         let timestamp = EvmRpcReceiptSource::parse_hex_u64(&block.timestamp)?;
         let effective_at = i64::try_from(timestamp)
             .map_err(|_| Error::Settlement("EVM block timestamp exceeds the supported range".to_owned()))?;
         let log_index = EvmRpcReceiptSource::parse_hex_u64(&transfer.log_index)?;
-        Ok(EvmReceiptObservation::Confirmed(ConfirmedEvmTransfer {
+        Ok(ReceiptObservation::Confirmed(ConfirmedTransfer {
             authority: self.authority.clone(),
             transaction: query.transaction.clone(),
             effect_ref: format!("log:{log_index}"),
@@ -250,7 +250,7 @@ impl EvmAuthorizationSource for EvmRpcReceiptSource {
                 })
             }
         };
-        let transfer = EvmTransferQuery {
+        let transfer = TransferQuery {
             network: query.network.clone(),
             transaction: transaction.clone(),
             token_contract: query.token_contract.clone(),
@@ -260,9 +260,9 @@ impl EvmAuthorizationSource for EvmRpcReceiptSource {
         };
         let observation = self.lookup(&transfer).await?;
         let evidence = match observation {
-            EvmReceiptObservation::Confirmed(evidence) => evidence,
-            EvmReceiptObservation::Pending => return Ok(EvmAuthorizationObservation::Pending),
-            EvmReceiptObservation::Mismatch { reason } => return Ok(EvmAuthorizationObservation::Mismatch { reason }),
+            ReceiptObservation::Confirmed(evidence) => evidence,
+            ReceiptObservation::Pending => return Ok(EvmAuthorizationObservation::Pending),
+            ReceiptObservation::Mismatch { reason } => return Ok(EvmAuthorizationObservation::Mismatch { reason }),
         };
         let receipt = self
             .load_receipt(&transaction)
@@ -324,7 +324,7 @@ pub(super) enum TransferMatch {
 }
 
 impl EvmRpcReceiptSource {
-    pub(super) fn exact_transfer(receipt: &RpcReceipt, query: &EvmTransferQuery) -> Result<TransferMatch> {
+    pub(super) fn exact_transfer(receipt: &RpcReceipt, query: &TransferQuery) -> Result<TransferMatch> {
         let mut matched = Vec::new();
         let mut removed_match = false;
         for log in &receipt.logs {
@@ -451,7 +451,7 @@ impl EvmRpcReceiptSource {
         Ok(payer.eq_ignore_ascii_case(&query.payer) && log.topics[2].eq_ignore_ascii_case(&query.nonce))
     }
 
-    pub(super) fn validate_query(query: &EvmTransferQuery, expected_network: &str) -> Result<()> {
+    pub(super) fn validate_query(query: &TransferQuery, expected_network: &str) -> Result<()> {
         if query.network != expected_network
             || !EvmRpcReceiptSource::valid_hash(&query.transaction)
             || !EvmRpcReceiptSource::valid_address(&query.token_contract)
@@ -598,8 +598,8 @@ impl EvmRpcReceiptSource {
             .ok_or_else(|| Error::Settlement("EVM hex quantity is invalid".to_owned()))
     }
 
-    pub(super) fn mismatch(reason: &str) -> EvmReceiptObservation {
-        EvmReceiptObservation::Mismatch {
+    pub(super) fn mismatch(reason: &str) -> ReceiptObservation {
+        ReceiptObservation::Mismatch {
             reason: reason.to_owned(),
         }
     }

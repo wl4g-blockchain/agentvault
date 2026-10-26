@@ -320,7 +320,7 @@ func (m *PayerMiddleware) Report(ctx context.Context, operation model.PayerReque
 	_, err = m.reportOutboundResponse(ctx, payment.Intent.ID, model.ReportOutboundResponseRequest{
 		OperationContext: operationContext,
 		Protocol:         adapter.Name(),
-		Evidence: &model.ProtocolEvidence{
+		Evidence: model.ProtocolEvidence{
 			HeaderName: evidence.HeaderName, HeaderValue: evidence.HeaderValue,
 		},
 	})

@@ -13,7 +13,7 @@ use crate::model::PaymentStatus;
 use crate::model::ReservationStatus;
 use crate::protocol::ProtocolSigningRequest;
 use crate::storage::payment::postgres::PaymentPostgresRepository;
-use crate::storage::postgres::PostgresStorage;
+use crate::storage::postgres::PostgresRepository;
 use crate::storage::wallet::postgres::PgWalletKeyRepository;
 use crate::storage::wallet::postgres::WalletPostgresRepository;
 use crate::storage::AuthorizationAction;
@@ -23,13 +23,13 @@ use crate::storage::AuthorizationWrite;
 use crate::storage::ChallengeIssuanceGuard;
 use crate::storage::ChallengeWrite;
 use crate::storage::EncryptedWalletKeyVersion;
+use crate::storage::IIntentRepository as _;
+use crate::storage::IWalletRepository as _;
 use crate::storage::IdempotentWrite;
 use crate::storage::IntentBoundPaymentSignatureRequest;
-use crate::storage::PaymentStorage as _;
 use crate::storage::PaymentWallet;
 use crate::storage::WalletPaymentSignature;
 use crate::storage::WalletPaymentSigner as _;
-use crate::storage::WalletStorage as _;
 use crate::Error;
 use k256::ecdsa::RecoveryId;
 use k256::ecdsa::Signature;
@@ -43,7 +43,7 @@ const TEST_URL_ENV: &str = "AGENTVAULT_TEST_POSTGRES_URL";
 
 #[test]
 fn rejects_jdbc_urls_before_creating_a_pool() {
-    let result = PostgresStorage::from_config(
+    let result = PostgresRepository::from_config(
         "jdbc:postgresql://127.0.0.1:5432/agentvault",
         8,
         Duration::from_secs(10),
@@ -56,9 +56,9 @@ fn rejects_jdbc_urls_before_creating_a_pool() {
     ));
 }
 
-pub(crate) async fn storage() -> PostgresStorage {
+pub(crate) async fn storage() -> PostgresRepository {
     let url = std::env::var(TEST_URL_ENV).expect("set AGENTVAULT_TEST_POSTGRES_URL to a dedicated test database");
-    PostgresStorage::connect(&url, 8, Duration::from_secs(10))
+    PostgresRepository::connect(&url, 8, Duration::from_secs(10))
         .await
         .expect("connect dedicated PostgreSQL test database")
 }
@@ -73,22 +73,22 @@ pub(crate) fn unique_key(prefix: &str) -> [u8; 32] {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn record_expiring_inbound_challenge(
-    storage: &PostgresStorage,
+    storage: &PostgresRepository,
     client: &PaymentClient,
     scenario: &PaymentScenario,
     policy: &PaymentPolicy,
-    offer: &PaymentPrice,
+    price: &PaymentPrice,
     wallet: &PaymentWallet,
     created_at: i64,
     expires_at: i64,
 ) -> PaymentIntent {
     let challenge = PaymentChallenge {
         scenario_id: scenario.id.clone(),
-        offer_id: Some(offer.id.clone()),
-        resource: offer.resource.clone(),
+        price_id: Some(price.id.clone()),
+        resource: price.resource.clone(),
         protocol: "x402".to_owned(),
-        asset: offer.asset.clone(),
-        amount: offer.amount,
+        asset: price.asset.clone(),
+        amount: price.amount,
         recipient: wallet.wallet.address.clone(),
         nonce: unique("pg-expiring-nonce"),
         challenge_hash: unique("pg-expiring-challenge"),
@@ -101,7 +101,7 @@ pub(crate) async fn record_expiring_inbound_challenge(
         run_id: unique("pg-expiring-run"),
         wallet_id: Some(wallet.wallet.id.clone()),
         policy_id: Some(policy.id.clone()),
-        offer_id: Some(offer.id.clone()),
+        price_id: Some(price.id.clone()),
         direction: PaymentDirection::Inbound,
         protocol: challenge.protocol.clone(),
         asset: challenge.asset.clone(),
@@ -136,7 +136,7 @@ pub(crate) async fn record_expiring_inbound_challenge(
         principal: client.auth_principal.clone(),
         client: client.clone(),
         scenario: scenario.clone(),
-        offer: offer.clone(),
+        price: price.clone(),
         policy: policy.clone(),
         wallet: wallet.clone(),
         origin: "https://feed.example".to_owned(),
@@ -211,7 +211,7 @@ pub(crate) async fn sign_fixture(
 }
 
 pub(crate) async fn reserve_authoritatively(
-    storage: &PostgresStorage,
+    storage: &PostgresRepository,
     client: &PaymentClient,
     scenario: &PaymentScenario,
     policy: &PaymentPolicy,
@@ -261,7 +261,7 @@ pub(crate) async fn reserve_authoritatively(
 pub(crate) fn signing_challenge(intent: &PaymentIntent) -> PaymentChallenge {
     PaymentChallenge {
         scenario_id: intent.scenario_id.clone(),
-        offer_id: None,
+        price_id: None,
         resource: intent.resource.clone(),
         protocol: intent.protocol.clone(),
         asset: intent.asset.clone(),
@@ -298,7 +298,7 @@ pub(crate) fn intent(
         run_id: run_id.to_owned(),
         wallet_id: Some(wallet_id.to_owned()),
         policy_id: Some(policy_id.to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: PaymentDirection::Outbound,
         protocol: "x402".to_owned(),
         asset: asset.clone(),
@@ -326,7 +326,7 @@ pub(crate) fn intent(
 async fn entity_macros_preserve_values_and_reject_unsafe_mutations() {
     let database = storage().await;
     crate::storage::schema_tests::entity_crud_contract!(
-        &database, PostgresStorage,
+        &database, PostgresRepository,
         "CREATE TABLE IF NOT EXISTS repository_macro_contract (id TEXT PRIMARY KEY, label TEXT NOT NULL, enabled BOOLEAN NOT NULL, count BIGINT NOT NULL, optional_text TEXT, payload JSONB NOT NULL, amount pay_uint128 NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)"
     );
 }
@@ -335,9 +335,9 @@ async fn entity_macros_preserve_values_and_reject_unsafe_mutations() {
 #[ignore = "requires a dedicated PostgreSQL test database"]
 async fn base_accepts_unrelated_schema_and_rolls_back_cancelled_work() {
     let url = std::env::var(TEST_URL_ENV).unwrap();
-    let database = PostgresStorage::from_config(&url, 2, Duration::from_secs(5)).unwrap();
+    let database = PostgresRepository::from_config(&url, 2, Duration::from_secs(5)).unwrap();
     crate::storage::schema_tests::independent_catalog_contract!(
-        database, PostgresStorage, transaction,
+        database, PostgresRepository, transaction,
         "CREATE TABLE repository_catalog_version (version INTEGER NOT NULL); INSERT INTO repository_catalog_version VALUES (7); CREATE TABLE repository_catalog_book (id TEXT PRIMARY KEY, title TEXT NOT NULL, copies BIGINT NOT NULL, available BOOLEAN NOT NULL, borrowed_at BIGINT)"
     );
 }

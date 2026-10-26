@@ -44,11 +44,11 @@ fn permits_explicit_loopback_development_provider() {
 }
 
 #[test]
-fn accepts_x402_provider_result_names() {
+fn accepts_the_generic_provider_result_contract() {
     let result: SettlementProviderResult = serde_json::from_value(json!({
-        "isValid": true,
-        "success": true,
-        "transactionHash": "0xabc",
+        "valid": true,
+        "settled": true,
+        "transaction": "0xabc",
         "settlementRef": "provider-1"
     }))
     .unwrap();

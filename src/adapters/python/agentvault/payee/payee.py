@@ -123,7 +123,7 @@ class PayeeMiddleware:
 
     def challenge(self, operation: PayeeOperation) -> PaymentChallenge:
         challenge = self._create_challenge(CreateChallengeRequest(
-            operation.challenge_context(), operation.offer_id, operation.resource,
+            operation.challenge_context(), operation.price_id, operation.resource,
             operation.origin, operation.protocol, operation.request_hash))
         PayeeMiddleware._validate_challenge_binding(operation, challenge)
         return challenge
@@ -154,8 +154,8 @@ class PayeeMiddleware:
                intent_id=payment.intent.id)
         return ProtectionOutcome.authorized(payment, challenge)
 
-    def resolve_offer(self, request: ResolvePriceRequest) -> PaymentPrice:
-        value = self._transport.request("POST", "/api/v1/offers/resolve", request.wire())
+    def resolve_price(self, request: ResolvePriceRequest) -> PaymentPrice:
+        value = self._transport.request("POST", "/api/v1/prices/resolve", request.wire())
         return PaymentPrice.from_wire(value)
 
     def _create_challenge(self, request: CreateChallengeRequest) -> PaymentChallenge:
@@ -183,7 +183,7 @@ class PayeeMiddleware:
     def _validate_challenge_binding(operation: PayeeOperation, challenge: PaymentChallenge) -> None:
         if (
             challenge.scenario_id != operation.scenario_id
-            or challenge.offer_id != operation.offer_id
+            or challenge.price_id != operation.price_id
             or challenge.resource != operation.resource
             or challenge.protocol != operation.protocol
             or not challenge.asset.network
@@ -204,7 +204,7 @@ class PayeeMiddleware:
         if (
             intent.direction is not PaymentDirection.INBOUND
             or intent.scenario_id != operation.scenario_id
-            or intent.offer_id != operation.offer_id
+            or intent.price_id != operation.price_id
             or intent.resource != operation.resource
             or intent.protocol != operation.protocol
             or intent.challenge_hash != challenge.challenge_hash
@@ -229,7 +229,7 @@ class PayeeMiddleware:
             intent.id != verified.id
             or intent.direction is not PaymentDirection.INBOUND
             or intent.scenario_id != verified.scenario_id
-            or intent.offer_id != verified.offer_id
+            or intent.price_id != verified.price_id
             or intent.resource != verified.resource
             or intent.protocol != verified.protocol
             or intent.challenge_hash != verified.challenge_hash
@@ -258,15 +258,3 @@ class PayeeMiddleware:
         )
         message = f"{name} {rendered}" if rendered else name
         _LOG.info(message, extra={"event_name": name, **fields})
-
-
-
-
-
-
-
-
-
-
-# Compatibility export; implementation belongs to the middleware.
-_event = PayeeMiddleware._event

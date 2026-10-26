@@ -5,7 +5,7 @@ fn payee_command_binds_wire_type_path_and_run_id() {
     let body = json!({
         "scenario_id": "scenario-marketpulse",
         "run_id": "delivery-42",
-        "offer_id": "offer-realtime-news",
+        "price_id": "price-realtime-news",
         "resource": "mcp://marketpulse/realtime_news",
         "origin": "http://127.0.0.1:8181",
         "protocol": "x402",

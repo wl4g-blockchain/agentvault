@@ -3,9 +3,9 @@ use crate::{
     model::Amount, model::ApprovalDecision, model::ApprovalDecisionKind, model::ApprovalDecisionResult,
     model::ApprovalRequest, model::ApprovalStatus, model::PaymentEvent, model::PaymentEventType, model::PaymentIntent,
     model::PaymentStatus, model::ReservationStatus, model::SubmitApprovalDecision, storage::ApprovalConsumption,
-    storage::ApprovalIntentTransition, storage::ApprovalReservationGuard, storage::ApprovalStorage,
-    storage::ApprovalWrite, storage::ApproverStorage, storage::OutboxMessage, storage::OutboxStatus,
-    storage::PaymentStorage, Error, Result,
+    storage::ApprovalIntentTransition, storage::ApprovalReservationGuard, storage::ApprovalWrite,
+    storage::IApprovalRepository, storage::IApproverRepository, storage::IIntentRepository, storage::OutboxMessage,
+    storage::OutboxStatus, Error, Result,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -21,12 +21,12 @@ pub trait ApprovalPrincipalAuthorizer: Send + Sync {
 /// payment ownership. No transport credential implicitly grants approval
 /// rights, and disabled Client/Scenario rows fail closed inside the store.
 pub struct StoredApprovalPrincipalAuthorizer {
-    approvers: Arc<dyn ApproverStorage>,
+    approvers: Arc<dyn IApproverRepository>,
 }
 
 impl StoredApprovalPrincipalAuthorizer {
     #[must_use]
-    pub fn new(approvers: Arc<dyn ApproverStorage>) -> Self {
+    pub fn new(approvers: Arc<dyn IApproverRepository>) -> Self {
         Self { approvers }
     }
 }
@@ -49,8 +49,8 @@ impl ApprovalPrincipalAuthorizer for StoredApprovalPrincipalAuthorizer {
 }
 
 pub struct ApprovalWorkflow {
-    approvals: Arc<dyn ApprovalStorage>,
-    payments: Arc<dyn PaymentStorage>,
+    approvals: Arc<dyn IApprovalRepository>,
+    payments: Arc<dyn IIntentRepository>,
     authorizer: Arc<dyn ApprovalPrincipalAuthorizer>,
     grant_tokens: Arc<dyn ApprovalGrantTokenService>,
     grant_ttl_seconds: i64,
@@ -63,8 +63,8 @@ impl ApprovalWorkflow {
     ///
     /// Returns an error when the grant TTL is not positive.
     pub fn new(
-        approvals: Arc<dyn ApprovalStorage>,
-        payments: Arc<dyn PaymentStorage>,
+        approvals: Arc<dyn IApprovalRepository>,
+        payments: Arc<dyn IIntentRepository>,
         authorizer: Arc<dyn ApprovalPrincipalAuthorizer>,
         grant_tokens: Arc<dyn ApprovalGrantTokenService>,
         grant_ttl_seconds: i64,

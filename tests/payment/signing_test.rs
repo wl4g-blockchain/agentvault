@@ -41,14 +41,14 @@ struct CapturedCommit {
     outbox: Vec<OutboxMessage>,
 }
 
-struct MockStorage {
+struct MockRepository {
     principal: String,
     state: Mutex<OutboundSigningRead>,
     commits: AtomicUsize,
     captured: Mutex<Option<CapturedCommit>>,
 }
 
-impl MockStorage {
+impl MockRepository {
     fn new(read: OutboundSigningRead) -> Self {
         Self {
             principal: "client-principal".to_owned(),
@@ -60,7 +60,7 @@ impl MockStorage {
 }
 
 #[async_trait]
-impl SigningStorage for MockStorage {
+impl ISigningRepository for MockRepository {
     async fn load_for_principal(
         &self,
         expected_principal: Option<&str>,
@@ -221,7 +221,7 @@ impl PaymentProtocol for MockProtocol {
         Err(Error::PaymentProtocol("unused".to_owned()))
     }
 
-    async fn build_challenge(&self, _offer: &PaymentPrice, _recipient: &str, _now: i64) -> Result<PaymentChallenge> {
+    async fn build_challenge(&self, _price: &PaymentPrice, _recipient: &str, _now: i64) -> Result<PaymentChallenge> {
         Err(Error::PaymentProtocol("unused".to_owned()))
     }
 
@@ -269,7 +269,7 @@ fn asset() -> AssetIdentity {
 fn signing_identity(asset: &AssetIdentity) -> OutboundSigningIdentity {
     let challenge = PaymentChallenge {
         scenario_id: "scenario-1".to_owned(),
-        offer_id: None,
+        price_id: None,
         resource: "https://merchant.example/mcp/realtime".to_owned(),
         protocol: "mock-pay".to_owned(),
         asset: asset.clone(),
@@ -303,7 +303,7 @@ fn signing_identity(asset: &AssetIdentity) -> OutboundSigningIdentity {
             run_id: "run-1".to_owned(),
             wallet_id: Some("wallet-1".to_owned()),
             policy_id: Some("policy-1".to_owned()),
-            offer_id: None,
+            price_id: None,
             direction: PaymentDirection::Outbound,
             protocol: "mock-pay".to_owned(),
             asset: asset.clone(),
@@ -403,8 +403,8 @@ fn handler(
     authorization: OutboundSigningAuthorization,
     asset_balance: Amount,
     native_balance: Amount,
-) -> (OutboundSigner, Arc<MockStorage>, Arc<MockBalances>, Arc<MockSigner>) {
-    let storage = Arc::new(MockStorage::new(OutboundSigningRead::Authorized(Box::new(
+) -> (OutboundSigner, Arc<MockRepository>, Arc<MockBalances>, Arc<MockSigner>) {
+    let storage = Arc::new(MockRepository::new(OutboundSigningRead::Authorized(Box::new(
         authorization,
     ))));
     let balances = Arc::new(MockBalances {
@@ -419,7 +419,12 @@ fn handler(
         calls: AtomicUsize::new(0),
     });
     let protocol: Arc<dyn PaymentProtocol> = Arc::new(MockProtocol);
-    let protocols = Arc::new(ProtocolRegistry::new([protocol]).unwrap());
+    let protocols = Arc::new(
+        crate::protocol::PaymentProtocolFactory::new()
+            .register(protocol)
+            .build()
+            .unwrap(),
+    );
     let protector: Arc<dyn SensitiveMaterialProtector> =
         Arc::new(Aes256GcmMaterialProtector::new("recovery-v1", [("recovery-v1".to_owned(), [3_u8; 32])]).unwrap());
     let handler = OutboundSigner::new(OutboundSigningDependencies {

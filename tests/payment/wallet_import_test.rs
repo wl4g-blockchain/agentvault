@@ -281,12 +281,12 @@ fn plaintext_and_old_ecdh_envelopes_are_rejected() {
 async fn browser_public_key_encryption_reaches_kek_encrypted_sql() {
     use crate::{
         config::{SecretRefConfig, SqliteStorageConfig, WalletKeyRingConfig},
-        storage::{sqlite::SqliteStorage, IStorage as _},
+        storage::{sqlite::SqliteRepository, IRepository as _},
     };
 
     let directory = tempfile::TempDir::new().unwrap();
     let storage = Arc::new(
-        SqliteStorage::connect(&SqliteStorageConfig {
+        SqliteRepository::connect(&SqliteStorageConfig {
             database_file: directory.path().join("wallet-import.sqlite3").display().to_string(),
             ..SqliteStorageConfig::default()
         })
@@ -337,7 +337,7 @@ async fn browser_public_key_encryption_reaches_kek_encrypted_sql() {
         wallet.address,
         crate::utils::crypto::WalletCrypto::address(&[11_u8; 32]).unwrap()
     );
-    let versions = crate::storage::IStorage::ports(storage.clone())
+    let versions = crate::storage::IRepository::ports(storage.clone())
         .wallets
         .list_key_versions(&wallet.id)
         .await
@@ -354,7 +354,7 @@ async fn browser_public_key_encryption_reaches_kek_encrypted_sql() {
         Err(Error::NotFound(_))
     ));
     assert_eq!(
-        crate::storage::IStorage::ports(storage.clone())
+        crate::storage::IRepository::ports(storage.clone())
             .wallets
             .list_key_versions(&wallet.id)
             .await

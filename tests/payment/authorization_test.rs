@@ -7,7 +7,7 @@ fn command(network: &str, recipient: &str) -> AuthorizePayment {
         run_id: "run-1".to_owned(),
         challenge: PaymentChallenge {
             scenario_id: "scenario-1".to_owned(),
-            offer_id: None,
+            price_id: None,
             resource: "https://merchant.example/tool".to_owned(),
             protocol: "x402".to_owned(),
             asset: AssetIdentity {

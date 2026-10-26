@@ -1,8 +1,8 @@
 use crate::utils::evm_client::FixedEvmRpcClient;
 use crate::{
     model::{
-        Amount, ConfirmedEvmTransfer, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery,
-        EvmReceiptObservation, EvmTransferQuery, ReceiptObservation, TransferQuery,
+        Amount, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery, ReceiptObservation,
+        TransferQuery,
     },
     Error, Result,
 };
@@ -39,8 +39,6 @@ pub trait ReceiptSource: Send + Sync {
     async fn lookup(&self, query: &TransferQuery) -> Result<ReceiptObservation>;
 }
 
-pub use ReceiptSource as EvmReceiptSource;
-
 #[async_trait]
 pub trait EvmAuthorizationSource: Send + Sync {
     /// Returns the current canonical block after validating the configured
@@ -61,8 +59,6 @@ pub struct ReceiptRegistry {
     sources: BTreeMap<String, Arc<dyn ReceiptSource>>,
     authorizations: BTreeMap<String, Arc<dyn EvmAuthorizationSource>>,
 }
-
-pub type EvmReceiptRegistry = ReceiptRegistry;
 
 impl ReceiptRegistry {
     /// Builds an immutable network-to-source registry.

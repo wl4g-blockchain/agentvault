@@ -4,7 +4,7 @@ use super::*;
 fn x402_adapter_uses_only_native_x402_challenge_headers() {
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "https://merchant.example/tool",
         "protocol": "x402",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},

@@ -172,7 +172,7 @@ class PaymentIntent:
     run_id: str
     wallet_id: str | None
     policy_id: str | None
-    offer_id: str | None
+    price_id: str | None
     direction: PaymentDirection
     protocol: str
     asset: AssetIdentity
@@ -201,7 +201,7 @@ class PaymentIntent:
             run_id=_text(value.get("run_id")),
             wallet_id=_optional_text(value.get("wallet_id")),
             policy_id=_optional_text(value.get("policy_id")),
-            offer_id=_optional_text(value.get("offer_id")),
+            price_id=_optional_text(value.get("price_id")),
             direction=PaymentDirection(_text(value.get("direction"))),
             protocol=_text(value.get("protocol")),
             asset=AssetIdentity.from_wire(_mapping("intent.asset", value.get("asset"))),
@@ -227,7 +227,7 @@ class PaymentIntent:
 @dataclass(frozen=True)
 class PaymentChallenge:
     scenario_id: str
-    offer_id: str | None
+    price_id: str | None
     resource: str
     protocol: str
     asset: AssetIdentity
@@ -242,7 +242,7 @@ class PaymentChallenge:
     def from_wire(cls, value: Mapping[str, Any]) -> "PaymentChallenge":
         return cls(
             scenario_id=_text(value.get("scenario_id")),
-            offer_id=_optional_text(value.get("offer_id")),
+            price_id=_optional_text(value.get("price_id")),
             resource=_text(value.get("resource")),
             protocol=_text(value.get("protocol")),
             asset=AssetIdentity.from_wire(_mapping("challenge.asset", value.get("asset"))),

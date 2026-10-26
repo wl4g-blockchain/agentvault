@@ -13,7 +13,7 @@ pub(crate) struct ImportBatch {
     pub(crate) wallets: Vec<WalletSpec>,
     pub(crate) scenarios: Vec<ScenarioSpec>,
     pub(crate) policies: Vec<PolicySpec>,
-    pub(crate) offers: Vec<PriceSpec>,
+    pub(crate) prices: Vec<PriceSpec>,
     pub(crate) approvers: Vec<ApproverSpec>,
 }
 
@@ -23,7 +23,7 @@ impl ImportBatch {
             && self.clients.is_empty()
             && self.scenarios.is_empty()
             && self.policies.is_empty()
-            && self.offers.is_empty()
+            && self.prices.is_empty()
             && self.approvers.is_empty()
     }
 }
@@ -66,7 +66,6 @@ pub(crate) enum ResourceKind {
     Wallet,
     Scenario,
     Policy,
-    #[serde(alias = "Price")]
     Price,
     Approver,
 }

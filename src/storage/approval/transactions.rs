@@ -10,7 +10,7 @@ use crate::model::ReservationStatus;
 use crate::storage::approval::ApprovalStorageRules;
 use crate::storage::payment::ReservationMutation;
 use crate::storage::ApprovalConsumption;
-use crate::storage::ApprovalStorage;
+use crate::storage::IApprovalRepository;
 use crate::storage::ApprovalWrite;
 use crate::storage::IdempotentWrite;
 use crate::storage::Page;
@@ -23,7 +23,7 @@ use crate::Result;
 use async_trait::async_trait;
 
 #[async_trait]
-impl ApprovalStorage for $repository {
+impl IApprovalRepository for $repository {
     async fn request(
         &self,
         approval: &ApprovalRequest,

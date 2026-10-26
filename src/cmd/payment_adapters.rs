@@ -6,11 +6,11 @@ use crate::config::MppAssetConfig;
 use crate::config::SecretHeaderConfig;
 use crate::config::X402AssetConfig;
 use crate::payment::EvmAuthorizationSource;
-use crate::payment::EvmReceiptRegistry;
 use crate::payment::EvmRpcBalanceSource;
 use crate::payment::EvmRpcReceiptConfig;
 use crate::payment::EvmRpcReceiptSource;
 use crate::payment::ProtocolRegistry;
+use crate::payment::ReceiptRegistry;
 use crate::payment::ReceiptSource;
 use crate::payment::SettlementProviderConfig;
 use crate::payment::SettlementProviderRegistry;
@@ -43,7 +43,7 @@ pub(crate) struct PaymentAdapters {
     pub(crate) payee_protocols: Arc<ProtocolRegistry>,
     pub(crate) providers: Arc<SettlementProviderRegistry>,
     pub(crate) balances: Arc<dyn WalletBalanceSource>,
-    pub(crate) receipts: Arc<EvmReceiptRegistry>,
+    pub(crate) receipts: Arc<ReceiptRegistry>,
 }
 
 impl PaymentAdapters {
@@ -305,7 +305,7 @@ impl RuntimeAdapterFactory {
         WalletBalanceRegistry::new(sources)
     }
 
-    pub(crate) fn build_receipt_registry(config: &AppConfig) -> crate::Result<EvmReceiptRegistry> {
+    pub(crate) fn build_receipt_registry(config: &AppConfig) -> crate::Result<ReceiptRegistry> {
         let mut sources: Vec<(String, Arc<dyn ReceiptSource>)> = Vec::new();
         let mut authorizations: Vec<(String, Arc<dyn EvmAuthorizationSource>)> = Vec::new();
         let mut configured = std::collections::BTreeSet::new();
@@ -391,7 +391,7 @@ impl RuntimeAdapterFactory {
                 }
             }
         }
-        EvmReceiptRegistry::from_sources(sources, authorizations)
+        ReceiptRegistry::from_sources(sources, authorizations)
     }
 
     pub(crate) fn secret_headers(

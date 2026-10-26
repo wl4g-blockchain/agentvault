@@ -25,17 +25,17 @@ use crate::storage::scenario::sqlite::ScenarioSqliteRepository;
 use crate::storage::sqlite::tests::*;
 use crate::storage::wallet::sqlite::SqliteWalletKeyRepository;
 use crate::storage::wallet::sqlite::WalletSqliteRepository;
-use crate::storage::ApproverStorage as _;
+use crate::storage::IApproverRepository as _;
+use crate::storage::IIntentRepository as _;
+use crate::storage::ILedgerRepository as _;
+use crate::storage::IPolicyRepository as _;
+use crate::storage::IPriceRepository as _;
+use crate::storage::IWalletRepository as _;
 use crate::storage::IdempotentWrite;
-use crate::storage::LedgerStorage as _;
 use crate::storage::PaymentProgressWrite;
 use crate::storage::PaymentQuery;
-use crate::storage::PaymentStorage as _;
-use crate::storage::PolicyStorage as _;
-use crate::storage::PriceStorage as _;
 use crate::storage::ReconciliationLeaseRequest;
 use crate::storage::SettlementWrite;
-use crate::storage::WalletStorage as _;
 use crate::Error;
 use std::sync::Arc;
 use tokio::sync::Barrier;
@@ -64,7 +64,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         created_at: 1,
         updated_at: 1,
     };
-    crate::storage::ClientStorage::insert(&ClientSqliteRepository::new(storage.clone()), &client)
+    crate::storage::IClientRepository::insert(&ClientSqliteRepository::new(storage.clone()), &client)
         .await
         .unwrap();
     let scenario = PaymentScenario {
@@ -75,7 +75,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         created_at: 1,
         updated_at: 1,
     };
-    crate::storage::ScenarioStorage::register(&ScenarioSqliteRepository::new(storage.clone()), &scenario)
+    crate::storage::IScenarioRepository::register(&ScenarioSqliteRepository::new(storage.clone()), &scenario)
         .await
         .unwrap();
     let approver = PaymentScenarioApprover {
@@ -129,7 +129,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         created_at: 3,
         updated_at: 3,
     };
-    crate::storage::PolicyStorage::insert(&PolicySqliteRepository::new(storage.clone()), &policy)
+    crate::storage::IPolicyRepository::insert(&PolicySqliteRepository::new(storage.clone()), &policy)
         .await
         .unwrap();
     let mut duplicate_policy = policy.clone();
@@ -137,7 +137,8 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
     duplicate_policy.created_at += 1;
     duplicate_policy.updated_at += 1;
     assert!(matches!(
-        crate::storage::PolicyStorage::insert(&PolicySqliteRepository::new(storage.clone()), &duplicate_policy).await,
+        crate::storage::IPolicyRepository::insert(&PolicySqliteRepository::new(storage.clone()), &duplicate_policy)
+            .await,
         Err(Error::PaymentConflict(_))
     ));
     assert!(PolicySqliteRepository::new(storage.clone())
@@ -149,8 +150,8 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .await
         .unwrap());
 
-    let offer = PaymentPrice {
-        id: "offer-1".to_owned(),
+    let price = PaymentPrice {
+        id: "price-1".to_owned(),
         scenario_id: scenario.id.clone(),
         policy_id: policy.id.clone(),
         resource: "https://feed.example/paid".to_owned(),
@@ -162,23 +163,23 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         created_at: 4,
         updated_at: 4,
     };
-    crate::storage::PriceStorage::insert(&PriceSqliteRepository::new(storage.clone()), &offer)
+    crate::storage::IPriceRepository::insert(&PriceSqliteRepository::new(storage.clone()), &price)
         .await
         .unwrap();
-    let mut excessive_offer = offer.clone();
-    excessive_offer.id = "offer-excessive".to_owned();
-    excessive_offer.resource = "https://feed.example/excessive".to_owned();
-    excessive_offer.amount = Amount::new(101);
+    let mut excessive_price = price.clone();
+    excessive_price.id = "price-excessive".to_owned();
+    excessive_price.resource = "https://feed.example/excessive".to_owned();
+    excessive_price.amount = Amount::new(101);
     assert!(matches!(
-        crate::storage::PriceStorage::insert(&PriceSqliteRepository::new(storage.clone()), &excessive_offer).await,
+        crate::storage::IPriceRepository::insert(&PriceSqliteRepository::new(storage.clone()), &excessive_price).await,
         Err(Error::PaymentConflict(_))
     ));
     assert_eq!(
         PriceSqliteRepository::new(storage.clone())
-            .resolve_resource(&scenario.id, &offer.resource)
+            .resolve_resource(&scenario.id, &price.resource)
             .await
             .unwrap(),
-        Some(offer.clone())
+        Some(price.clone())
     );
     assert!(PriceSqliteRepository::new(storage.clone())
         .resolve_resource(&scenario.id, "https://feed.example/missing")
@@ -255,7 +256,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         1
     );
 
-    let page = crate::storage::PaymentStorage::list(
+    let page = crate::storage::IIntentRepository::list(
         &PaymentSqliteRepository::new(storage.clone()),
         &PaymentQuery {
             scenario_id: Some(scenario.id.clone()),
@@ -270,7 +271,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .await
         .unwrap();
     assert!(matches!(replay, IdempotentWrite::Replay(_)));
-    let challenge_event = crate::storage::EventStorage::find_for_intent_type(
+    let challenge_event = crate::storage::IEventRepository::find_for_intent_type(
         &EventSqliteRepository::new(storage.clone()),
         &current.id,
         PaymentEventType::ChallengeReceived,
@@ -322,7 +323,7 @@ async fn serializes_budget_reservations_and_posts_settlement_atomically() {
         .execute(storage.pool())
         .await
         .unwrap();
-    let submitted = crate::storage::PaymentStorage::get(&PaymentSqliteRepository::new(storage.clone()), &current.id)
+    let submitted = crate::storage::IIntentRepository::get(&PaymentSqliteRepository::new(storage.clone()), &current.id)
         .await
         .unwrap()
         .unwrap();

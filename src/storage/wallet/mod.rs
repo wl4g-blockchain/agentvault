@@ -131,7 +131,7 @@ impl WalletBalanceRecord {
 
 impl PaymentWallet {
     /// Validates and canonicalizes payment-facing wallet metadata loaded from
-    /// storage before it participates in policy or offer evaluation.
+    /// storage before it participates in policy or price evaluation.
     ///
     /// # Errors
     ///
@@ -142,7 +142,7 @@ impl PaymentWallet {
         Ok(self)
     }
 
-    /// Also validates the recipient address family required by the offer's
+    /// Also validates the recipient address family required by the price's
     /// payment network. In particular, external custody does not make an
     /// opaque address valid on an EIP-155 network.
     ///
@@ -294,7 +294,7 @@ pub trait IWalletRepository: Send + Sync {
 
     async fn get(&self, wallet_id: &str) -> Result<Option<Wallet>>;
 
-    /// Returns lifecycle metadata used by payment authorization and offer
+    /// Returns lifecycle metadata used by payment authorization and price
     /// resolution. Implementations derive `active_key_version` from the one
     /// `wallet_key_version` row whose status is `active`; they must not infer
     /// signing readiness from `pay_wallet` metadata alone.
@@ -330,7 +330,7 @@ pub trait IWalletRepository: Send + Sync {
 
 /// Persistence port for periodic wallet-balance observations.
 #[async_trait]
-pub trait WalletBalanceStorage: Send + Sync {
+pub trait IWalletBalanceRepository: Send + Sync {
     async fn upsert_balance(&self, balance: &WalletBalanceRecord) -> Result<WalletBalanceRecord>;
 
     async fn get_balance(&self, wallet_id: &str, asset: &AssetIdentity) -> Result<Option<WalletBalanceRecord>>;
@@ -339,9 +339,6 @@ pub trait WalletBalanceStorage: Send + Sync {
 #[cfg(test)]
 #[path = "../../../tests/storage/wallet/mod_test.rs"]
 mod tests;
-
-/// Compatibility import for the single repository contract.
-pub use IWalletRepository as WalletStorage;
 
 mod validation {
     use crate::{

@@ -9,17 +9,17 @@ use crate::{
     apm::AgentVaultMetrics, apm::ReadinessProbe, cache::CacheFactory, cache::ICache, config::AppConfig,
     controller::api::ApiController, controller::principal_context::PrincipalContext, controller::GrpcController,
     controller::MqttController, handler::ScenarioHandler, payment::ApprovalPrincipalAuthorizer,
-    payment::ApprovalWorkflow, payment::EvmReceiptRegistry, payment::JwtApprovalGrantTokenService,
-    payment::MerchantEvidenceRecorder, payment::OutboundEvidenceDependencies, payment::OutboundSigner,
-    payment::OutboundSigningDependencies, payment::PaymentApi, payment::PaymentApiDependencies,
-    payment::PaymentAuthorizer, payment::PriceResolver, payment::ProtocolRegistry, payment::SettlementCoordinator,
+    payment::ApprovalWorkflow, payment::JwtApprovalGrantTokenService, payment::MerchantEvidenceRecorder,
+    payment::OutboundEvidenceDependencies, payment::OutboundSigner, payment::OutboundSigningDependencies,
+    payment::PaymentApi, payment::PaymentApiDependencies, payment::PaymentAuthorizer, payment::PriceResolver,
+    payment::ProtocolRegistry, payment::ReceiptRegistry, payment::SettlementCoordinator,
     payment::SettlementDependencies, payment::SettlementProviderRegistry, payment::StoredApprovalPrincipalAuthorizer,
-    payment::WalletBalanceSource, storage::ApprovalStorage, storage::ApproverStorage, storage::ClientStorage,
-    storage::EventStorage, storage::LedgerStorage, storage::OutboxStorage, storage::PaymentStorage,
-    storage::PolicyStorage, storage::PriceStorage, storage::ScenarioStorage, storage::SigningStorage,
-    storage::StorageFactory, storage::StoragePorts, storage::WalletBalanceStorage, storage::WalletKeyManager,
-    storage::WalletPaymentSigner, storage::WalletStorage, utils::secure_material::Aes256GcmMaterialProtector,
-    utils::secure_material::SensitiveMaterialProtector,
+    payment::WalletBalanceSource, storage::IApprovalRepository, storage::IApproverRepository,
+    storage::IClientRepository, storage::IEventRepository, storage::IIntentRepository, storage::ILedgerRepository,
+    storage::IOutboxRepository, storage::IPolicyRepository, storage::IPriceRepository, storage::IScenarioRepository,
+    storage::ISigningRepository, storage::IWalletBalanceRepository, storage::IWalletRepository,
+    storage::StorageFactory, storage::StoragePorts, storage::WalletKeyManager, storage::WalletPaymentSigner,
+    utils::secure_material::Aes256GcmMaterialProtector, utils::secure_material::SensitiveMaterialProtector,
 };
 use anyhow::{anyhow, Context as _};
 use axum::Router;
@@ -38,19 +38,19 @@ pub(crate) struct AssembledPaymentRuntime {
 }
 
 pub(crate) struct PaymentPorts {
-    pub(crate) clients: Arc<dyn ClientStorage>,
-    pub(crate) scenarios: Arc<dyn ScenarioStorage>,
-    pub(crate) approvers: Arc<dyn ApproverStorage>,
-    pub(crate) policies: Arc<dyn PolicyStorage>,
-    pub(crate) offers: Arc<dyn PriceStorage>,
-    pub(crate) wallets: Arc<dyn WalletStorage>,
-    pub(crate) wallet_balances: Arc<dyn WalletBalanceStorage>,
-    pub(crate) payments: Arc<dyn PaymentStorage>,
-    pub(crate) approvals: Arc<dyn ApprovalStorage>,
-    pub(crate) events: Arc<dyn EventStorage>,
-    pub(crate) ledger: Arc<dyn LedgerStorage>,
-    pub(crate) outbox: Arc<dyn OutboxStorage>,
-    pub(crate) signing: Arc<dyn SigningStorage>,
+    pub(crate) clients: Arc<dyn IClientRepository>,
+    pub(crate) scenarios: Arc<dyn IScenarioRepository>,
+    pub(crate) approvers: Arc<dyn IApproverRepository>,
+    pub(crate) policies: Arc<dyn IPolicyRepository>,
+    pub(crate) prices: Arc<dyn IPriceRepository>,
+    pub(crate) wallets: Arc<dyn IWalletRepository>,
+    pub(crate) wallet_balances: Arc<dyn IWalletBalanceRepository>,
+    pub(crate) payments: Arc<dyn IIntentRepository>,
+    pub(crate) approvals: Arc<dyn IApprovalRepository>,
+    pub(crate) events: Arc<dyn IEventRepository>,
+    pub(crate) ledger: Arc<dyn ILedgerRepository>,
+    pub(crate) outbox: Arc<dyn IOutboxRepository>,
+    pub(crate) signing: Arc<dyn ISigningRepository>,
     pub(crate) wallet_signer: Arc<dyn WalletPaymentSigner>,
     pub(crate) wallet_keys: Arc<dyn WalletKeyManager>,
 }
@@ -66,7 +66,7 @@ impl PaymentPorts {
             scenarios: ports.scenarios,
             approvers: ports.approvers,
             policies: ports.policies,
-            offers: ports.offers,
+            prices: ports.prices,
             wallets: ports.wallets,
             wallet_balances: ports.wallet_balances,
             payments: ports.payments,
@@ -92,7 +92,7 @@ impl BuiltPaymentApplication {
     fn new(
         config: &AppConfig,
         dependencies: PaymentApiDependencies,
-        wallet_balances: Arc<dyn WalletBalanceStorage>,
+        wallet_balances: Arc<dyn IWalletBalanceRepository>,
     ) -> anyhow::Result<Self> {
         let reconciliation = RuntimeJobFactory::build_reconciliation(
             config,
@@ -120,17 +120,17 @@ impl BuiltPaymentApplication {
 
 pub(crate) struct ExecutionDependencies {
     pub(crate) scenarios: Arc<ScenarioHandler>,
-    pub(crate) offers: Arc<dyn PriceStorage>,
-    pub(crate) policies: Arc<dyn PolicyStorage>,
-    pub(crate) wallets: Arc<dyn WalletStorage>,
-    pub(crate) payments: Arc<dyn PaymentStorage>,
-    pub(crate) events: Arc<dyn EventStorage>,
-    pub(crate) signing: Arc<dyn SigningStorage>,
+    pub(crate) prices: Arc<dyn IPriceRepository>,
+    pub(crate) policies: Arc<dyn IPolicyRepository>,
+    pub(crate) wallets: Arc<dyn IWalletRepository>,
+    pub(crate) payments: Arc<dyn IIntentRepository>,
+    pub(crate) events: Arc<dyn IEventRepository>,
+    pub(crate) signing: Arc<dyn ISigningRepository>,
     pub(crate) payer_protocols: Arc<ProtocolRegistry>,
     pub(crate) payee_protocols: Arc<ProtocolRegistry>,
     pub(crate) providers: Arc<SettlementProviderRegistry>,
     pub(crate) balances: Arc<dyn WalletBalanceSource>,
-    pub(crate) receipts: Arc<EvmReceiptRegistry>,
+    pub(crate) receipts: Arc<ReceiptRegistry>,
     pub(crate) material_protector: Arc<dyn SensitiveMaterialProtector>,
     pub(crate) wallet_signer: Arc<dyn WalletPaymentSigner>,
 }
@@ -244,7 +244,7 @@ impl PaymentRuntimeFactory {
             scenarios: scenarios_store,
             approvers,
             policies,
-            offers,
+            prices,
             wallets,
             wallet_balances,
             payments,
@@ -274,9 +274,9 @@ impl PaymentRuntimeFactory {
             Arc::clone(&payments),
             Arc::clone(&adapters.material_protector),
         )?;
-        let offer_handler = PaymentRuntimeFactory::build_price_resolver(
+        let price_resolver = PaymentRuntimeFactory::build_price_resolver(
             &scenarios,
-            &offers,
+            &prices,
             &policies,
             &wallets,
             &adapters.payee_protocols,
@@ -285,7 +285,7 @@ impl PaymentRuntimeFactory {
             config,
             ExecutionDependencies {
                 scenarios: Arc::clone(&scenarios),
-                offers: Arc::clone(&offers),
+                prices: Arc::clone(&prices),
                 policies: Arc::clone(&policies),
                 wallets: Arc::clone(&wallets),
                 payments: Arc::clone(&payments),
@@ -313,13 +313,13 @@ impl PaymentRuntimeFactory {
                 signing_handler,
                 outbound_evidence_handler,
                 settlement_handler,
-                offer_handler,
+                price_resolver,
                 approval_handler,
                 approval_authorizer,
                 payer_protocols: adapters.payer_protocols,
                 payments,
                 approvals,
-                offers,
+                prices,
                 policies,
                 wallets,
                 wallet_handler,
@@ -339,8 +339,8 @@ impl PaymentRuntimeFactory {
     pub(crate) fn build_payment_handler(
         config: &AppConfig,
         scenarios: Arc<ScenarioHandler>,
-        policies: Arc<dyn PolicyStorage>,
-        payments: Arc<dyn PaymentStorage>,
+        policies: Arc<dyn IPolicyRepository>,
+        payments: Arc<dyn IIntentRepository>,
         protocols: Arc<ProtocolRegistry>,
         metrics: AgentVaultMetrics,
     ) -> anyhow::Result<Arc<PaymentAuthorizer>> {
@@ -360,14 +360,14 @@ impl PaymentRuntimeFactory {
 
     pub(crate) fn build_price_resolver(
         scenarios: &Arc<ScenarioHandler>,
-        offers: &Arc<dyn PriceStorage>,
-        policies: &Arc<dyn PolicyStorage>,
-        wallets: &Arc<dyn WalletStorage>,
+        prices: &Arc<dyn IPriceRepository>,
+        policies: &Arc<dyn IPolicyRepository>,
+        wallets: &Arc<dyn IWalletRepository>,
         protocols: &Arc<ProtocolRegistry>,
     ) -> Arc<PriceResolver> {
         Arc::new(PriceResolver::new(
             Arc::clone(scenarios),
-            Arc::clone(offers),
+            Arc::clone(prices),
             Arc::clone(policies),
             Arc::clone(wallets),
             Arc::clone(protocols),
@@ -386,7 +386,7 @@ impl PaymentRuntimeFactory {
             SettlementCoordinator::new(
                 SettlementDependencies {
                     scenarios: Arc::clone(&dependencies.scenarios),
-                    offers: dependencies.offers,
+                    prices: dependencies.prices,
                     policies: dependencies.policies,
                     wallets: dependencies.wallets,
                     payments: Arc::clone(&dependencies.payments),
@@ -424,9 +424,9 @@ impl PaymentRuntimeFactory {
 
     pub(crate) fn build_approval_services(
         config: &AppConfig,
-        approvers: Arc<dyn ApproverStorage>,
-        approvals: Arc<dyn ApprovalStorage>,
-        payments: Arc<dyn PaymentStorage>,
+        approvers: Arc<dyn IApproverRepository>,
+        approvals: Arc<dyn IApprovalRepository>,
+        payments: Arc<dyn IIntentRepository>,
         material_protector: Arc<dyn SensitiveMaterialProtector>,
     ) -> anyhow::Result<(Arc<dyn ApprovalPrincipalAuthorizer>, Arc<ApprovalWorkflow>)> {
         let authorizer: Arc<dyn ApprovalPrincipalAuthorizer> =

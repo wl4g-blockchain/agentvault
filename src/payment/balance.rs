@@ -1,7 +1,7 @@
 use crate::{
     apm::AgentVaultMetrics, model::wallet::Wallet, model::Amount, model::AssetIdentity, model::WalletBalanceSnapshot,
-    model::WalletBalanceSyncRun, storage::PageRequest, storage::WalletBalanceRecord, storage::WalletBalanceStorage,
-    storage::WalletStorage, utils::evm_client::FixedEvmRpcClient, Error, Result,
+    model::WalletBalanceSyncRun, storage::IWalletBalanceRepository, storage::IWalletRepository, storage::PageRequest,
+    storage::WalletBalanceRecord, utils::evm_client::FixedEvmRpcClient, Error, Result,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -29,8 +29,8 @@ pub trait WalletBalanceSync: Send + Sync {
 /// payer asset. These snapshots support management and alerts only; payment
 /// signing continues to load a fresh balance through [`WalletBalanceSource`].
 pub struct WalletBalanceSynchronizer {
-    wallets: Arc<dyn WalletStorage>,
-    balances: Arc<dyn WalletBalanceStorage>,
+    wallets: Arc<dyn IWalletRepository>,
+    balances: Arc<dyn IWalletBalanceRepository>,
     sources: Arc<dyn WalletBalanceSource>,
     assets: Vec<AssetIdentity>,
     metrics: AgentVaultMetrics,
@@ -46,8 +46,8 @@ impl WalletBalanceSynchronizer {
     /// Returns an error for an empty asset set, invalid asset identity, or
     /// batch size outside the bounded storage-page contract.
     pub fn new(
-        wallets: Arc<dyn WalletStorage>,
-        balances: Arc<dyn WalletBalanceStorage>,
+        wallets: Arc<dyn IWalletRepository>,
+        balances: Arc<dyn IWalletBalanceRepository>,
         sources: Arc<dyn WalletBalanceSource>,
         assets: impl IntoIterator<Item = AssetIdentity>,
         metrics: AgentVaultMetrics,

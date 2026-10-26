@@ -166,7 +166,7 @@ func TestPayerReportsMPPReceiptThroughProtocolEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 		if body["protocol"] != "mpp" || body["payment_response"] != nil {
-			t.Fatalf("MPP receipt used legacy x402 contract: %s", request.Body)
+			t.Fatalf("MPP receipt used the x402-only contract: %s", request.Body)
 		}
 		evidence := body["evidence"].(map[string]any)
 		if evidence["header_name"] != "payment-receipt" || evidence["header_value"] != receipt {

@@ -14,7 +14,7 @@ use crate::model::ReservationStatus;
 use crate::protocol::ProtocolSigningRequest;
 use crate::storage::payment::sqlite::PaymentSqliteRepository;
 use crate::storage::scenario::sqlite::ScenarioSqliteRepository;
-use crate::storage::sqlite::SqliteStorage;
+use crate::storage::sqlite::SqliteRepository;
 use crate::storage::wallet::sqlite::SqliteWalletKeyRepository;
 use crate::storage::wallet::sqlite::WalletSqliteRepository;
 use crate::storage::AuthorizationAction;
@@ -22,13 +22,13 @@ use crate::storage::AuthorizationGuard;
 use crate::storage::AuthorizationRecord;
 use crate::storage::AuthorizationWrite;
 use crate::storage::EncryptedWalletKeyVersion;
+use crate::storage::IIntentRepository as _;
+use crate::storage::IWalletRepository as _;
 use crate::storage::IdempotentWrite;
 use crate::storage::IntentBoundPaymentSignatureRequest;
-use crate::storage::PaymentStorage as _;
 use crate::storage::PaymentWallet;
 use crate::storage::WalletPaymentSignature;
 use crate::storage::WalletPaymentSigner as _;
-use crate::storage::WalletStorage as _;
 use crate::Error;
 use k256::ecdsa::RecoveryId;
 use k256::ecdsa::Signature;
@@ -38,14 +38,14 @@ use sha3::Keccak256;
 use std::time::Duration;
 use tempfile::TempDir;
 
-pub(crate) async fn storage() -> (TempDir, SqliteStorage) {
+pub(crate) async fn storage() -> (TempDir, SqliteRepository) {
     let directory = TempDir::new().unwrap();
     let config = SqliteStorageConfig {
         database_file: directory.path().join("agentvault.sqlite3").display().to_string(),
         max_connections: 4,
         busy_timeout: Duration::from_secs(5),
     };
-    let storage = SqliteStorage::connect(&config).await.unwrap();
+    let storage = SqliteRepository::connect(&config).await.unwrap();
     (directory, storage)
 }
 
@@ -56,7 +56,7 @@ async fn migrates_schema_and_enforces_foreign_keys_on_every_connection() {
         .fetch_one(storage.pool())
         .await
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 1);
 
     let mut connections = Vec::new();
     for _ in 0..4 {
@@ -72,7 +72,7 @@ async fn migrates_schema_and_enforces_foreign_keys_on_every_connection() {
 }
 
 pub(crate) async fn assert_invalid_wallet_rolls_back(
-    storage: &SqliteStorage,
+    storage: &SqliteRepository,
     scenario: &PaymentScenario,
     policy: &PaymentPolicy,
 ) {
@@ -90,14 +90,14 @@ pub(crate) async fn assert_invalid_wallet_rolls_back(
         updated_at: 3,
         ..policy.clone()
     };
-    assert!(crate::storage::ScenarioStorage::register_with_policy(
+    assert!(crate::storage::IScenarioRepository::register_with_policy(
         &ScenarioSqliteRepository::new(storage.clone()),
         &invalid_scenario,
         &invalid_policy
     )
     .await
     .is_err());
-    assert!(crate::storage::ScenarioStorage::get(
+    assert!(crate::storage::IScenarioRepository::get(
         &ScenarioSqliteRepository::new(storage.clone()),
         &invalid_scenario.id
     )
@@ -145,7 +145,7 @@ pub(crate) async fn sign_fixture(
 }
 
 pub(crate) async fn reserve_authoritatively(
-    storage: &SqliteStorage,
+    storage: &SqliteRepository,
     client: &PaymentClient,
     scenario: &PaymentScenario,
     policy: &PaymentPolicy,
@@ -195,7 +195,7 @@ pub(crate) async fn reserve_authoritatively(
 pub(crate) fn signing_challenge(intent: &PaymentIntent) -> PaymentChallenge {
     PaymentChallenge {
         scenario_id: intent.scenario_id.clone(),
-        offer_id: None,
+        price_id: None,
         resource: intent.resource.clone(),
         protocol: intent.protocol.clone(),
         asset: intent.asset.clone(),
@@ -232,7 +232,7 @@ pub(crate) fn intent(
         run_id: run_id.to_owned(),
         wallet_id: Some(wallet_id.to_owned()),
         policy_id: Some(policy_id.to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: PaymentDirection::Outbound,
         protocol: "x402".to_owned(),
         asset: asset.clone(),
@@ -259,7 +259,7 @@ pub(crate) fn intent(
 async fn entity_macros_preserve_values_and_reject_unsafe_mutations() {
     let (_directory, database) = storage().await;
     crate::storage::schema_tests::entity_crud_contract!(
-        &database, SqliteStorage,
+        &database, SqliteRepository,
         "CREATE TABLE repository_macro_contract (id TEXT PRIMARY KEY, label TEXT NOT NULL, enabled BOOLEAN NOT NULL CHECK(enabled IN (0,1)), count INTEGER NOT NULL, optional_text TEXT, payload TEXT NOT NULL, amount TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
     );
 }
@@ -272,9 +272,9 @@ async fn base_accepts_unrelated_schema_and_rolls_back_cancelled_work() {
         max_connections: 2,
         busy_timeout: Duration::from_secs(5),
     };
-    let database = SqliteStorage::from_config(&config).unwrap();
+    let database = SqliteRepository::from_config(&config).unwrap();
     crate::storage::schema_tests::independent_catalog_contract!(
-        database, SqliteStorage, immediate,
+        database, SqliteRepository, immediate,
         "CREATE TABLE repository_catalog_version (version INTEGER NOT NULL); INSERT INTO repository_catalog_version VALUES (7); CREATE TABLE repository_catalog_book (id TEXT PRIMARY KEY, title TEXT NOT NULL, copies INTEGER NOT NULL, available BOOLEAN NOT NULL, borrowed_at INTEGER)"
     );
 }

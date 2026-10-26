@@ -13,7 +13,7 @@ from ..transport import APIError
 from a2a.server.tasks import TaskStore
 from .a2a import A2APaymentCall
 
-from .payee import PayeeMiddleware, PaymentRejectedError, _event
+from .payee import PayeeMiddleware, PaymentRejectedError
 
 ASGIApp = Callable[
     [
@@ -30,7 +30,7 @@ class FastPayeeRoute:
     method: str
     path: str
     scenario_id: str
-    offer_id: str
+    price_id: str
     resource: str
     origin: str
     protocol: str = "x402"
@@ -43,12 +43,12 @@ class FastPayeeRoute:
         path: str,
         tool: str,
         scenario_id: str,
-        offer_id: str,
+        price_id: str,
         resource: str,
         origin: str,
     ) -> "FastPayeeRoute":
         return cls.mcp_tool_with_protocol(
-            path, tool, scenario_id, offer_id, resource, origin, "x402"
+            path, tool, scenario_id, price_id, resource, origin, "x402"
         )
 
     @classmethod
@@ -57,12 +57,12 @@ class FastPayeeRoute:
         path: str,
         tool: str,
         scenario_id: str,
-        offer_id: str,
+        price_id: str,
         resource: str,
         origin: str,
         protocol: str,
     ) -> "FastPayeeRoute":
-        return cls("POST", path, scenario_id, offer_id, resource, origin, protocol, tool)
+        return cls("POST", path, scenario_id, price_id, resource, origin, protocol, tool)
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ class FastPayeeMiddleware:
             return
         try:
             operation = PayeeOperation(
-                route.scenario_id, run_id, route.offer_id, route.resource,
+                route.scenario_id, run_id, route.price_id, route.resource,
                 route.origin, route.protocol, self._request_hash(route.method, route.path, body),
             )
             if route.a2a_task_store is not None:
@@ -213,7 +213,7 @@ class FastPayeeMiddleware:
                 scope, body, send, adapter, payment
             )
         if released:
-            _event(
+            PayeeMiddleware._event(
                 "agentvault.sdk.payee.resource_released",
                 run_id=run_id,
                 intent_id=payment.intent.id,
@@ -569,9 +569,3 @@ class FastPayeeMiddleware:
         state = scope.get("state")
         value = state.get("agentvault_payment") if isinstance(state, dict) else None
         return value if isinstance(value, SettledIncomingPayment) else None
-
-
-
-
-# Compatibility export; implementation belongs to the middleware.
-settled_payment = FastPayeeMiddleware.settled_payment

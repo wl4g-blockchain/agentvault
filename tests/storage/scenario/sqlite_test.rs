@@ -34,7 +34,7 @@ async fn registers_scenario_and_multi_wallet_policy_atomically() {
         created_at: 1,
         updated_at: 1,
     };
-    crate::storage::ClientStorage::insert(&ClientSqliteRepository::new(storage.clone()), &client)
+    crate::storage::IClientRepository::insert(&ClientSqliteRepository::new(storage.clone()), &client)
         .await
         .unwrap();
     let scenario = PaymentScenario {
@@ -73,7 +73,7 @@ async fn registers_scenario_and_multi_wallet_policy_atomically() {
         created_at: 2,
         updated_at: 2,
     };
-    let inserted = crate::storage::ScenarioStorage::register_with_policy(
+    let inserted = crate::storage::IScenarioRepository::register_with_policy(
         &ScenarioSqliteRepository::new(storage.clone()),
         &scenario,
         &policy,
@@ -87,7 +87,7 @@ async fn registers_scenario_and_multi_wallet_policy_atomically() {
     let mut retried_policy = policy.clone();
     retried_policy.created_at = 200;
     retried_policy.updated_at = 200;
-    let replay = crate::storage::ScenarioStorage::register_with_policy(
+    let replay = crate::storage::IScenarioRepository::register_with_policy(
         &ScenarioSqliteRepository::new(storage.clone()),
         &retried_scenario,
         &retried_policy,
@@ -100,7 +100,7 @@ async fn registers_scenario_and_multi_wallet_policy_atomically() {
     assert_eq!(replayed.scenario.created_at, scenario.created_at);
     assert_eq!(replayed.policy.created_at, policy.created_at);
     assert_eq!(
-        crate::storage::PolicyStorage::get(&PolicySqliteRepository::new(storage.clone()), &policy.id)
+        crate::storage::IPolicyRepository::get(&PolicySqliteRepository::new(storage.clone()), &policy.id)
             .await
             .unwrap()
             .unwrap()

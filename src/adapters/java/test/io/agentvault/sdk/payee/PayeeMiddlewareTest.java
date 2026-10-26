@@ -21,14 +21,14 @@ final class PayeeMiddlewareTest {
             @Override public <T> T get(String path, Class<T> type) { throw new UnsupportedOperationException(); }
             @Override public <T> T post(String path, Object body, Class<T> type) {
                 return type.cast(new PaymentChallenge(
-                        "scenario-1", "offer-1", "mcp://marketpulse/realtime", "x402",
+                        "scenario-1", "price-1", "mcp://marketpulse/realtime", "x402",
                         new AssetIdentity("eip155:1", "USDC", null, 6), "100", "recipient-1",
                         "nonce-1", "challenge-1", 1, mapper.createObjectNode()));
             }
         };
         var core = new PayeeMiddleware(transport, PayeeConfig.defaults());
         assertInstanceOf(PaymentRequired.class, core.protect(new PayeeOperation(
-                "scenario-1", "run-1", "offer-1", "mcp://marketpulse/realtime",
+                "scenario-1", "run-1", "price-1", "mcp://marketpulse/realtime",
                 "https://marketpulse.test", "x402", "request-hash", null)));
     }
 
@@ -41,7 +41,7 @@ final class PayeeMiddlewareTest {
                 paths.add(path);
                 if (path.equals("/api/v1/payee/challenges")) {
                     return type.cast(new PaymentChallenge(
-                            "scenario", "offer", "mcp://marketpulse/realtime", "x402",
+                            "scenario", "price", "mcp://marketpulse/realtime", "x402",
                             new AssetIdentity("eip155:31337", "USDC", null, 6), "1000", "0x1",
                             "nonce", "challenge", 1, mapper.createObjectNode().set(
                                     "payment_required", mapper.createObjectNode())));
@@ -49,7 +49,7 @@ final class PayeeMiddlewareTest {
                 if (path.equals("/api/v1/payee/verify")) {
                     try {
                         return mapper.readValue("{\"intent\":{\"id\":\"intent\","
-                                + "\"scenario_id\":\"scenario\",\"run_id\":\"run\",\"offer_id\":\"offer\","
+                                + "\"scenario_id\":\"scenario\",\"run_id\":\"run\",\"price_id\":\"price\","
                                 + "\"direction\":\"inbound\",\"protocol\":\"x402\","
                                 + "\"asset\":{\"network\":\"eip155:31337\",\"asset\":\"USDC\",\"decimals\":6},"
                                 + "\"recipient\":\"0x1\",\"amount\":\"1000\",\"settled_amount\":\"0\","
@@ -66,7 +66,7 @@ final class PayeeMiddlewareTest {
             }
         };
         var operation = new PayeeOperation(
-                "scenario", "run", "offer", "mcp://marketpulse/realtime",
+                "scenario", "run", "price", "mcp://marketpulse/realtime",
                 "https://marketpulse.example", "x402", "request-hash",
                 mapper.createObjectNode().put("signature", "present"));
         assertThrows(SecurityException.class,

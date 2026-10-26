@@ -21,12 +21,12 @@ macro_rules! payment_repository {
         use crate::storage::BudgetSnapshot;
         use crate::storage::ChallengeIssuanceGuard;
         use crate::storage::ChallengeWrite;
+        use crate::storage::IIntentRepository;
         use crate::storage::IdempotentWrite;
         use crate::storage::OutboundEvidenceWrite;
         use crate::storage::Page;
         use crate::storage::PaymentProgressWrite;
         use crate::storage::PaymentQuery;
-        use crate::storage::PaymentStorage;
         use crate::storage::ReconciliationClaim;
         use crate::storage::ReconciliationLeaseRequest;
         use crate::storage::SettlementWrite;
@@ -38,7 +38,7 @@ macro_rules! payment_repository {
         use sqlx::Row as _;
 
         #[async_trait]
-        impl PaymentStorage for $repository {
+        impl IIntentRepository for $repository {
             async fn find_run(&self, scenario_id: &str, run_id: &str) -> Result<Option<AuthorizationRecord>> {
                 let row = dynamic_query!(
                     select,

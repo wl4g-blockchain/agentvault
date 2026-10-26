@@ -5,13 +5,13 @@ use crate::model::wallet::is_solana_wallet_algorithm;
 use crate::model::wallet::Wallet;
 use crate::model::wallet::EVM_EOA_ALGORITHM;
 use crate::storage::EncryptedWalletKeyVersion;
+use crate::storage::IWalletRepository;
 use crate::storage::IntentBoundPaymentSignatureRequest;
 use crate::storage::WalletCreationConfig;
 use crate::storage::WalletKeyManager;
 use crate::storage::WalletKeyStatus;
 use crate::storage::WalletPaymentSignature;
 use crate::storage::WalletPaymentSigner;
-use crate::storage::WalletStorage;
 use crate::utils::aead::Aes256GcmUuidNonce;
 use crate::utils::aead::UuidNonce;
 use crate::utils::aead::UuidNonceCodec;
@@ -36,14 +36,14 @@ const AAD_DOMAIN: &[u8] = b"agentvault.wallet-key.v2";
 /// KEKs are resolved only from environment-variable references at startup.
 /// The active key encrypts new versions; historical KEKs remain decrypt-only
 /// until no retained wallet version references them.
-pub struct WalletKeyRepository<S: WalletStorage> {
+pub struct WalletKeyRepository<S: IWalletRepository> {
     storage: S,
     active_kek_id: String,
     keks: BTreeMap<String, Zeroizing<[u8; KEY_BYTES]>>,
 }
 
 #[async_trait]
-impl<S: WalletStorage> WalletPaymentSigner for WalletKeyRepository<S> {
+impl<S: IWalletRepository> WalletPaymentSigner for WalletKeyRepository<S> {
     async fn sign_payment(&self, request: IntentBoundPaymentSignatureRequest<'_>) -> Result<WalletPaymentSignature> {
         let intent_wallet_id = request
             .intent()
@@ -82,7 +82,7 @@ impl<S: WalletStorage> WalletPaymentSigner for WalletKeyRepository<S> {
 }
 
 #[async_trait]
-impl<S: WalletStorage> WalletKeyManager for WalletKeyRepository<S> {
+impl<S: IWalletRepository> WalletKeyManager for WalletKeyRepository<S> {
     async fn create_local(
         &self,
         wallet_id: &str,
@@ -100,7 +100,7 @@ impl<S: WalletStorage> WalletKeyManager for WalletKeyRepository<S> {
     }
 }
 
-impl<S: WalletStorage> fmt::Debug for WalletKeyRepository<S> {
+impl<S: IWalletRepository> fmt::Debug for WalletKeyRepository<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WalletKeyRepository")
@@ -110,7 +110,7 @@ impl<S: WalletStorage> fmt::Debug for WalletKeyRepository<S> {
     }
 }
 
-impl<S: WalletStorage> WalletKeyRepository<S> {
+impl<S: IWalletRepository> WalletKeyRepository<S> {
     /// Resolves a KEK ring from environment-only secret references.
     ///
     /// # Errors

@@ -70,14 +70,8 @@ pub(crate) struct AuthorizePaymentResponse {
 pub(crate) struct ReportOutboundResponseRequest {
     #[serde(flatten)]
     pub context: OperationContextDto,
-    /// Compatibility field for the original x402 v2 API. New SDKs send the
-    /// protocol-owned evidence envelope below.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payment_response: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<ProtocolEvidenceDto>,
+    pub protocol: String,
+    pub evidence: ProtocolEvidenceDto,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -85,32 +79,6 @@ pub(crate) struct ReportOutboundResponseRequest {
 pub(crate) struct ProtocolEvidenceDto {
     pub header_name: String,
     pub header_value: String,
-}
-
-pub(crate) struct ResolvedProtocolEvidence {
-    pub(crate) protocol: String,
-    pub(crate) header_name: String,
-    pub(crate) header_value: String,
-}
-
-impl ReportOutboundResponseRequest {
-    pub(crate) fn evidence(&self) -> Result<ResolvedProtocolEvidence> {
-        match (&self.payment_response, &self.protocol, &self.evidence) {
-            (Some(value), None, None) => Ok(ResolvedProtocolEvidence {
-                protocol: "x402".to_owned(),
-                header_name: "payment-response".to_owned(),
-                header_value: value.clone(),
-            }),
-            (None, Some(protocol), Some(evidence)) => Ok(ResolvedProtocolEvidence {
-                protocol: protocol.clone(),
-                header_name: evidence.header_name.clone(),
-                header_value: evidence.header_value.clone(),
-            }),
-            _ => Err(Error::InvalidRequest(
-                "provide either legacy payment_response or protocol evidence".to_owned(),
-            )),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -455,7 +423,7 @@ pub struct ResolvePriceRequest {
 pub struct CreateChallengeRequest {
     #[serde(flatten)]
     pub context: OperationContextDto,
-    pub offer_id: String,
+    pub price_id: String,
     pub resource: String,
     pub origin: String,
     pub protocol: String,

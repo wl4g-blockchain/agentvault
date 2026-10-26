@@ -1,7 +1,7 @@
 //! Outbox persistence for `sqlite`.
 
 use crate::{
-    storage::{sqlite::BaseSqliteRepository, OutboxLeaseRequest, OutboxMessage, OutboxStorage},
+    storage::{sqlite::SqliteRepository, IOutboxRepository, OutboxLeaseRequest, OutboxMessage},
     Error, Result,
 };
 use async_trait::async_trait;
@@ -9,11 +9,11 @@ use sqlx::sqlite::SqliteRow;
 
 #[derive(Clone)]
 pub struct OutboxSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 
 #[async_trait]
-impl OutboxStorage for OutboxSqliteRepository {
+impl IOutboxRepository for OutboxSqliteRepository {
     async fn claim(&self, request: &OutboxLeaseRequest) -> Result<Vec<OutboxMessage>> {
         if request.owner.trim().is_empty() || request.lease_until <= request.now || request.limit == 0 {
             return Err(Error::InvalidRequest("invalid outbox lease request".to_owned()));
@@ -36,7 +36,7 @@ impl OutboxStorage for OutboxSqliteRepository {
                     .bind(request.class.as_str())
                     .fetch_all(&mut *connection)
                     .await
-                    .map_err(|error| BaseSqliteRepository::storage_error("select due outbox messages", error))?;
+                    .map_err(|error| SqliteRepository::storage_error("select due outbox messages", error))?;
                     let mut claimed = Vec::with_capacity(ids.len());
                     for id in ids {
                         let result = sqlx::query(
@@ -51,7 +51,7 @@ impl OutboxStorage for OutboxSqliteRepository {
                         .bind(request.now)
                         .execute(&mut *connection)
                         .await
-                        .map_err(|error| BaseSqliteRepository::storage_error("claim outbox message", error))?;
+                        .map_err(|error| SqliteRepository::storage_error("claim outbox message", error))?;
                         if result.rows_affected() != 1 {
                             return Err(crate::Error::conflict("outbox claim lost its conditional lease update"));
                         }
@@ -59,9 +59,7 @@ impl OutboxStorage for OutboxSqliteRepository {
                             .bind(&id)
                             .fetch_one(&mut *connection)
                             .await
-                            .map_err(|error| {
-                                BaseSqliteRepository::storage_error("reload claimed outbox message", error)
-                            })?;
+                            .map_err(|error| SqliteRepository::storage_error("reload claimed outbox message", error))?;
                         claimed.push(Self::decode_row(&row)?);
                     }
                     Ok(claimed)
@@ -114,7 +112,7 @@ impl OutboxStorage for OutboxSqliteRepository {
 }
 
 impl OutboxSqliteRepository {
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
 
@@ -129,7 +127,7 @@ impl OutboxSqliteRepository {
         .bind(&message.run_id)
         .fetch_all(&mut *connection)
         .await
-        .map_err(|error| BaseSqliteRepository::storage_error("find outbox replay", error))?;
+        .map_err(|error| SqliteRepository::storage_error("find outbox replay", error))?;
         if !existing.is_empty() {
             if existing.len() != 1
                 || !OutboxStorageRules::same_logical_message(&Self::decode_row(&existing[0])?, message)
@@ -138,7 +136,7 @@ impl OutboxSqliteRepository {
             }
             return Ok(());
         }
-        let payload = BaseSqliteRepository::encode_json(&message.payload, "pay_outbox.payload")?;
+        let payload = SqliteRepository::encode_json(&message.payload, "pay_outbox.payload")?;
         sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
      run_id, payload, status, attempt_count, available_at, lease_owner, lease_expires_at, \
@@ -192,7 +190,7 @@ impl OutboxSqliteRepository {
                         .bind(error)
                         .execute(&mut *connection)
                         .await
-                        .map_err(|source| BaseSqliteRepository::storage_error(operation, source))?;
+                        .map_err(|source| SqliteRepository::storage_error(operation, source))?;
                     if result.rows_affected() != 1 {
                         return Err(crate::Error::conflict("outbox message is not held by the lease owner"));
                     }
@@ -204,27 +202,27 @@ impl OutboxSqliteRepository {
 
     pub(crate) fn decode_row(row: &SqliteRow) -> Result<OutboxMessage> {
         Ok(OutboxMessage {
-            id: BaseSqliteRepository::field(row, "id")?,
-            aggregate_type: BaseSqliteRepository::field(row, "aggregate_type")?,
-            aggregate_id: BaseSqliteRepository::field(row, "aggregate_id")?,
-            event_type: BaseSqliteRepository::field(row, "event_type")?,
-            destination: BaseSqliteRepository::field(row, "destination")?,
-            run_id: BaseSqliteRepository::field(row, "run_id")?,
-            payload: BaseSqliteRepository::decode_json(
-                &BaseSqliteRepository::field::<String>(row, "payload")?,
+            id: SqliteRepository::field(row, "id")?,
+            aggregate_type: SqliteRepository::field(row, "aggregate_type")?,
+            aggregate_id: SqliteRepository::field(row, "aggregate_id")?,
+            event_type: SqliteRepository::field(row, "event_type")?,
+            destination: SqliteRepository::field(row, "destination")?,
+            run_id: SqliteRepository::field(row, "run_id")?,
+            payload: SqliteRepository::decode_json(
+                &SqliteRepository::field::<String>(row, "payload")?,
                 "pay_outbox.payload",
             )?,
-            status: PaymentStorageCodec::outbox_status(&BaseSqliteRepository::field::<String>(row, "status")?)?,
-            attempt_count: BaseSqliteRepository::decode_u32(
-                BaseSqliteRepository::field(row, "attempt_count")?,
+            status: PaymentStorageCodec::outbox_status(&SqliteRepository::field::<String>(row, "status")?)?,
+            attempt_count: SqliteRepository::decode_u32(
+                SqliteRepository::field(row, "attempt_count")?,
                 "pay_outbox.attempt_count",
             )?,
-            available_at: BaseSqliteRepository::field(row, "available_at")?,
-            lease_owner: BaseSqliteRepository::field(row, "lease_owner")?,
-            lease_expires_at: BaseSqliteRepository::field(row, "lease_expires_at")?,
-            last_error: BaseSqliteRepository::field(row, "last_error")?,
-            created_at: BaseSqliteRepository::field(row, "created_at")?,
-            delivered_at: BaseSqliteRepository::field(row, "delivered_at")?,
+            available_at: SqliteRepository::field(row, "available_at")?,
+            lease_owner: SqliteRepository::field(row, "lease_owner")?,
+            lease_expires_at: SqliteRepository::field(row, "lease_expires_at")?,
+            last_error: SqliteRepository::field(row, "last_error")?,
+            created_at: SqliteRepository::field(row, "created_at")?,
+            delivered_at: SqliteRepository::field(row, "delivered_at")?,
         })
     }
 }

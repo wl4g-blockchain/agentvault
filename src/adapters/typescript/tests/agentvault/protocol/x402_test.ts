@@ -11,7 +11,7 @@ test('X402Adapter uses only native x402 challenge headers', () => {
     'utf8',
   )) as { protocols: { x402: { challenge_response: { result: { structuredContent: unknown } } } } };
   const challenge: PaymentChallenge = {
-    scenario_id: 'scenario', offer_id: 'offer', resource: 'https://merchant.example/tool', protocol: 'x402',
+    scenario_id: 'scenario', price_id: 'price', resource: 'https://merchant.example/tool', protocol: 'x402',
     asset: { network: 'eip155:42431', asset: 'USDC', decimals: 6 }, amount: '1000',
     recipient: '0x1111111111111111111111111111111111111111', nonce: 'nonce',
     challenge_hash: 'challenge', expires_at: 2_000_000_000,

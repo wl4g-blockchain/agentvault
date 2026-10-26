@@ -32,7 +32,7 @@ fn each_dialect_contains_only_the_canonical_init_pair() {
             })
             .collect::<Vec<_>>();
         names.sort();
-        assert_eq!(names, ["001_init.ddl.sql", "001_init.dml.sql", "002_price.ddl.sql"]);
+        assert_eq!(names, ["001_init.ddl.sql", "001_init.dml.sql"]);
     }
 }
 
@@ -203,11 +203,11 @@ pub(crate) struct RepositoryFixture {
     pub scenario: crate::model::PaymentScenario,
     pub wallet: crate::model::Wallet,
     pub policy: crate::model::PaymentPolicy,
-    pub offer: crate::model::PaymentPrice,
+    pub price: crate::model::PaymentPrice,
 }
 
 impl RepositoryFixture {
-    pub async fn create(storage: std::sync::Arc<dyn crate::storage::IStorage>) -> Self {
+    pub async fn create(storage: std::sync::Arc<dyn crate::storage::IRepository>) -> Self {
         use crate::{model::*, storage::PageRequest};
 
         let ports = storage.ports();
@@ -278,8 +278,8 @@ impl RepositoryFixture {
             updated_at: 3,
         };
         ports.policies.insert(&policy).await.unwrap();
-        let offer = PaymentPrice {
-            id: format!("{prefix}-offer"),
+        let price = PaymentPrice {
+            id: format!("{prefix}-price"),
             scenario_id: scenario.id.clone(),
             policy_id: policy.id.clone(),
             resource: format!("https://feed.example/{prefix}"),
@@ -291,7 +291,7 @@ impl RepositoryFixture {
             created_at: 4,
             updated_at: 4,
         };
-        ports.offers.insert(&offer).await.unwrap();
+        ports.prices.insert(&price).await.unwrap();
         assert!(ports.clients.list(PageRequest::default()).await.unwrap().total > 0);
         Self {
             ports,
@@ -299,7 +299,7 @@ impl RepositoryFixture {
             scenario,
             wallet,
             policy,
-            offer,
+            price,
         }
     }
 }
@@ -329,7 +329,7 @@ macro_rules! entity_crud_contract {
     ($database:expr, $base:ty, $ddl:literal) => {{
         use crate::storage::schema_tests::EntityCrudRecord;
         use crate::storage::{
-            EntityComparison, EntityQuery, EntityValue, EntityValues, IGenericStorage, RepositoryEntity,
+            EntityComparison, EntityQuery, EntityValue, EntityValues, RepositoryEntity, RepositorySql,
         };
         let database = $database;
         sqlx::query($ddl).execute(database.pool()).await.unwrap();
@@ -394,18 +394,18 @@ macro_rules! entity_crud_contract {
             .entity_update_returning::<EntityCrudRecord>(EntityValues::from([("id", "replace".into())]), filter.clone())
             .await
             .is_err());
-        assert!(<$base as IGenericStorage>::update::<EntityCrudRecord>(
+        assert!(<$base as RepositorySql>::update::<EntityCrudRecord>(
             EntityValues::from([("enabled", true.into())]),
             &EntityQuery::new()
         )
         .is_err());
-        assert!(<$base as IGenericStorage>::delete_by::<crate::model::PaymentLedgerEntry>(&filter).is_err());
-        assert!(<$base as IGenericStorage>::update::<crate::model::PaymentEvent>(
+        assert!(<$base as RepositorySql>::delete_by::<crate::model::PaymentLedgerEntry>(&filter).is_err());
+        assert!(<$base as RepositorySql>::update::<crate::model::PaymentEvent>(
             EntityValues::from([("payload", EntityValue::Json(serde_json::json!({})))]),
             &filter
         )
         .is_err());
-        assert!(<$base as IGenericStorage>::select::<EntityCrudRecord>(
+        assert!(<$base as RepositorySql>::select::<EntityCrudRecord>(
             &EntityQuery::new().compare(
                 "amount",
                 EntityComparison::Less,
@@ -417,7 +417,7 @@ macro_rules! entity_crud_contract {
         let mut replacement = changed.clone();
         replacement.name = "replacement".into();
         replacement.updated_at = 12;
-        let mut upsert = <$base as IGenericStorage>::upsert(
+        let mut upsert = <$base as RepositorySql>::upsert(
             &replacement,
             &["id"],
             &["label", "updated_at"],
@@ -432,7 +432,7 @@ macro_rules! entity_crud_contract {
             .await
             .unwrap();
         assert_eq!(stored, replacement);
-        let mut replay = <$base as IGenericStorage>::upsert(
+        let mut replay = <$base as RepositorySql>::upsert(
             &replacement,
             &["id"],
             &["label", "updated_at"],
@@ -472,7 +472,7 @@ macro_rules! entity_crud_contract {
         );
         replacement.created_at += 1;
         replacement.updated_at += 1;
-        let mut invalid = <$base as IGenericStorage>::upsert(
+        let mut invalid = <$base as RepositorySql>::upsert(
             &replacement,
             &["id"],
             &["label", "updated_at"],
@@ -489,7 +489,7 @@ macro_rules! entity_crud_contract {
             .is_none());
         assert!(!EntityCrudRecord::columns().contains(&"name"));
         assert!(EntityCrudRecord::columns().contains(&"label"));
-        let mut delete = <$base as IGenericStorage>::delete_by::<EntityCrudRecord>(&filter).unwrap();
+        let mut delete = <$base as RepositorySql>::delete_by::<EntityCrudRecord>(&filter).unwrap();
         assert_eq!(
             delete.build().execute(database.pool()).await.unwrap().rows_affected(),
             1
@@ -515,7 +515,7 @@ macro_rules! independent_catalog_contract {
     ($database:expr, $base:ty, $operation:ident, $ddl:literal) => {{
         use crate::storage::schema_tests::CatalogBook;
         use crate::storage::{
-            EntityKey, EntityQuery, EntityValues, IGenericRepository, IGenericStorage, PageRequest, StorageSchema,
+            EntityKey, EntityQuery, EntityValues, IGenericRepository, PageRequest, RepositorySql, StorageSchema,
         };
         let database = $database;
         let schema = StorageSchema {
@@ -615,7 +615,7 @@ macro_rules! independent_catalog_contract {
             pending_database
                 .$operation(move |connection| {
                     Box::pin(async move {
-                        <$base as IGenericStorage>::insert(&pending_book, false)?
+                        <$base as RepositorySql>::insert(&pending_book, false)?
                             .build()
                             .execute(&mut *connection)
                             .await

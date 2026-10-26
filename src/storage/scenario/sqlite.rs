@@ -3,8 +3,8 @@
 use crate::{
     model::{PaymentPolicy, PaymentScenario},
     storage::{
-        policy::sqlite::PolicySqliteRepository, sqlite::BaseSqliteRepository, IdempotentWrite, Page, PageRequest,
-        ScenarioConfiguration, ScenarioStorage,
+        policy::sqlite::PolicySqliteRepository, sqlite::SqliteRepository, IScenarioRepository, IdempotentWrite, Page,
+        PageRequest, ScenarioConfiguration,
     },
     Error, Result,
 };
@@ -13,11 +13,11 @@ use sqlx::sqlite::SqliteRow;
 
 #[derive(Clone)]
 pub struct ScenarioSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 
 #[async_trait]
-impl ScenarioStorage for ScenarioSqliteRepository {
+impl IScenarioRepository for ScenarioSqliteRepository {
     async fn register(&self, scenario: &PaymentScenario) -> Result<IdempotentWrite<PaymentScenario>> {
         scenario
             .validate()
@@ -55,7 +55,7 @@ impl ScenarioStorage for ScenarioSqliteRepository {
                     .build()
                     .fetch_optional(&mut *connection)
                     .await
-                    .map_err(|error| BaseSqliteRepository::storage_error("find registered payment scenario", error))?;
+                    .map_err(|error| SqliteRepository::storage_error("find registered payment scenario", error))?;
                     let scenario_inserted = existing.is_none();
                     let registered_scenario = if let Some(row) = existing {
                         Self::decode_row(&row)?
@@ -147,7 +147,7 @@ impl ScenarioStorage for ScenarioSqliteRepository {
 }
 
 impl ScenarioSqliteRepository {
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
 
@@ -174,8 +174,7 @@ impl ScenarioSqliteRepository {
     }
 
     pub(crate) fn decode_row(row: &SqliteRow) -> Result<PaymentScenario> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BaseSqliteRepository::storage_error("decode scenario entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| SqliteRepository::storage_error("decode scenario entity", error))
     }
 }
 

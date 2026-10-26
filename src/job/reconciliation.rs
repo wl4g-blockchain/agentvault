@@ -1,6 +1,6 @@
 use crate::{
     model::ReconciliationRun, model::WalletBalanceSyncRun, payment::PaymentReconciler, payment::ReconciliationConfig,
-    payment::ReconciliationEvidenceSource, payment::WalletBalanceSync, storage::PaymentStorage,
+    payment::ReconciliationEvidenceSource, payment::WalletBalanceSync, storage::IIntentRepository,
     utils::clock::SystemUnixClock, utils::clock::UnixClock, Result,
 };
 use std::sync::Arc;
@@ -13,7 +13,7 @@ impl ReconciliationJob {
     /// # Errors
     /// Returns invalid worker configuration.
     pub fn new(
-        storage: Arc<dyn PaymentStorage>,
+        storage: Arc<dyn IIntentRepository>,
         evidence: Arc<dyn ReconciliationEvidenceSource>,
         config: ReconciliationConfig,
     ) -> Result<Self> {
@@ -24,7 +24,7 @@ impl ReconciliationJob {
     /// # Errors
     /// Returns invalid worker configuration.
     pub fn with_clock(
-        storage: Arc<dyn PaymentStorage>,
+        storage: Arc<dyn IIntentRepository>,
         evidence: Arc<dyn ReconciliationEvidenceSource>,
         clock: Arc<dyn UnixClock>,
         config: ReconciliationConfig,

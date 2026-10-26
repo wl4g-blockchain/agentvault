@@ -116,7 +116,7 @@ class ProtocolEvidence:
     def __post_init__(self) -> None:
         if (
             not self.header_name or len(self.header_name) > 64
-            or not all(character.isalnum() or character == "-" for character in self.header_name)
+            or not all(character.isascii() and (character.isalnum() or character == "-") for character in self.header_name)
         ):
             raise ValueError("evidence.header_name is invalid")
         if (
@@ -132,31 +132,15 @@ class ProtocolEvidence:
 @dataclass(frozen=True)
 class ReportOutboundResponseRequest:
     context: OperationContext
-    payment_response: str | None = None
-    protocol: str | None = None
-    evidence: ProtocolEvidence | None = None
+    protocol: str
+    evidence: ProtocolEvidence
 
     def __post_init__(self) -> None:
-        if (
-            self.payment_response is not None
-            and (self.protocol is not None or self.evidence is not None)
-        ) or (
-            self.payment_response is None
-            and (self.protocol is None or self.evidence is None)
-        ):
-            raise ValueError("provide either legacy payment_response or protocol evidence")
-        if self.payment_response is not None and (
-            not self.payment_response or len(self.payment_response) > 64 * 1024
-            or not all(0x21 <= ord(character) <= 0x7E for character in self.payment_response)
-        ):
-            raise ValueError("payment_response must be a bounded official x402 header value")
-        if self.protocol is not None:
-            required("protocol", self.protocol)
+        required("protocol", self.protocol)
+        if not isinstance(self.evidence, ProtocolEvidence):
+            raise ValueError("protocol evidence is required")
 
     def wire(self) -> dict[str, Any]:
-        if self.payment_response is not None:
-            return {**self.context.wire(), "payment_response": self.payment_response}
-        assert self.protocol is not None and self.evidence is not None
         return {**self.context.wire(), "protocol": self.protocol, "evidence": self.evidence.wire()}
 
 

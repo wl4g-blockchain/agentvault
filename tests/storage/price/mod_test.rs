@@ -4,59 +4,59 @@ impl RepositoryFixture {
     pub async fn price_delete_contract(self) {
         assert!(self
             .ports
-            .offers
-            .delete(&self.offer.id, self.offer.updated_at - 1)
+            .prices
+            .delete(&self.price.id, self.price.updated_at - 1)
             .await
             .is_err());
         assert_eq!(
-            self.ports.offers.get(&self.offer.id).await.unwrap(),
-            Some(self.offer.clone())
+            self.ports.prices.get(&self.price.id).await.unwrap(),
+            Some(self.price.clone())
         );
         self.ports
-            .offers
-            .delete(&self.offer.id, self.offer.updated_at)
+            .prices
+            .delete(&self.price.id, self.price.updated_at)
             .await
             .unwrap();
-        assert!(self.ports.offers.get(&self.offer.id).await.unwrap().is_none());
-        self.ports.offers.insert(&self.offer).await.unwrap();
+        assert!(self.ports.prices.get(&self.price.id).await.unwrap().is_none());
+        self.ports.prices.insert(&self.price).await.unwrap();
         let intent = self.challenge().await;
         assert!(self
             .ports
-            .offers
-            .delete(&self.offer.id, self.offer.updated_at)
+            .prices
+            .delete(&self.price.id, self.price.updated_at)
             .await
             .is_err());
-        assert_eq!(self.ports.offers.get(&self.offer.id).await.unwrap(), Some(self.offer));
+        assert_eq!(self.ports.prices.get(&self.price.id).await.unwrap(), Some(self.price));
         assert_eq!(self.ports.payments.get(&intent.id).await.unwrap(), Some(intent));
     }
 
-    pub async fn offer_contract(self) {
+    pub async fn price_contract(self) {
         assert_eq!(
             self.ports
-                .offers
-                .resolve_resource(&self.scenario.id, &self.offer.resource)
+                .prices
+                .resolve_resource(&self.scenario.id, &self.price.resource)
                 .await
                 .unwrap(),
-            Some(self.offer.clone())
+            Some(self.price.clone())
         );
-        let mut duplicate = self.offer.clone();
+        let mut duplicate = self.price.clone();
         duplicate.id.push_str("-duplicate");
-        assert!(self.ports.offers.insert(&duplicate).await.is_err());
-        let mut disabled = self.offer.clone();
+        assert!(self.ports.prices.insert(&duplicate).await.is_err());
+        let mut disabled = self.price.clone();
         disabled.enabled = false;
         disabled.updated_at += 1;
         self.ports
-            .offers
-            .update(&disabled, self.offer.updated_at)
+            .prices
+            .update(&disabled, self.price.updated_at)
             .await
             .unwrap();
         assert!(self
             .ports
-            .offers
-            .resolve(&self.scenario.id, &self.offer.resource, "x402")
+            .prices
+            .resolve(&self.scenario.id, &self.price.resource, "x402")
             .await
             .unwrap()
             .is_none());
-        assert_eq!(self.ports.offers.get(&self.offer.id).await.unwrap(), Some(disabled));
+        assert_eq!(self.ports.prices.get(&self.price.id).await.unwrap(), Some(disabled));
     }
 }

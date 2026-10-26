@@ -23,8 +23,6 @@ pub struct EvmAuthorizationQuery {
     pub from_block: u64,
 }
 
-pub type EvmTransferQuery = TransferQuery;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedTransfer {
     pub authority: String,
@@ -35,16 +33,12 @@ pub struct ConfirmedTransfer {
     pub effective_at: i64,
 }
 
-pub type ConfirmedEvmTransfer = ConfirmedTransfer;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceiptObservation {
     Confirmed(ConfirmedTransfer),
     Pending,
     Mismatch { reason: String },
 }
-
-pub use ReceiptObservation as EvmReceiptObservation;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvmAuthorizationObservation {

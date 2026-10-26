@@ -97,7 +97,7 @@ fn subscribes_only_to_the_six_shared_acl_authorized_command_filters() {
         [
             "$share/agentvault-pool/agentvault/v1/clients/+/commands/authorize",
             "$share/agentvault-pool/agentvault/v1/clients/+/commands/outbound-response",
-            "$share/agentvault-pool/agentvault/v1/clients/+/commands/resolve-offer",
+            "$share/agentvault-pool/agentvault/v1/clients/+/commands/resolve-price",
             "$share/agentvault-pool/agentvault/v1/clients/+/commands/create-challenge",
             "$share/agentvault-pool/agentvault/v1/clients/+/commands/verify-payment",
             "$share/agentvault-pool/agentvault/v1/clients/+/commands/settle-payment",

@@ -104,7 +104,7 @@ pub(crate) mod paths {
     pub const PAYMENTS: &str = "/api/v1/payments";
     pub const PAYMENT_BALANCE: &str = "/api/v1/payments/balance";
     pub const APPROVALS: &str = "/api/v1/approvals";
-    pub const RESOLVE_OFFER: &str = "/api/v1/offers/resolve";
+    pub const RESOLVE_PRICE: &str = "/api/v1/prices/resolve";
     pub const CREATE_CHALLENGE: &str = "/api/v1/payee/challenges";
     pub const VERIFY_PAYMENT: &str = "/api/v1/payee/verify";
     pub const SETTLE_PAYMENT: &str = "/api/v1/payee/settle";

@@ -3,7 +3,7 @@
 use crate::{
     model::PaymentPrice,
     storage::{
-        policy::postgres::PolicyPostgresRepository, postgres::BasePostgresRepository, Page, PageRequest, PriceStorage,
+        policy::postgres::PolicyPostgresRepository, postgres::PostgresRepository, IPriceRepository, Page, PageRequest,
     },
     Error, Result,
 };
@@ -12,28 +12,28 @@ use sqlx::{postgres::PgRow, PgConnection};
 
 #[derive(Clone)]
 pub struct PricePostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 
 #[async_trait]
-impl PriceStorage for PricePostgresRepository {
-    async fn insert(&self, offer: &PaymentPrice) -> Result<PaymentPrice> {
-        Self::validate_offer(offer)?;
-        let offer = offer.clone();
+impl IPriceRepository for PricePostgresRepository {
+    async fn insert(&self, price: &PaymentPrice) -> Result<PaymentPrice> {
+        Self::validate_price(price)?;
+        let price = price.clone();
         self.base
             .transaction(|connection| {
                 Box::pin(async move {
-                    Self::lock_offer_authority(connection, &offer).await?;
-                    Self::insert_offer(connection, &offer).await?;
-                    Ok(offer)
+                    Self::lock_price_authority(connection, &price).await?;
+                    Self::insert_price(connection, &price).await?;
+                    Ok(price)
                 })
             })
             .await
     }
 
-    async fn get(&self, offer_id: &str) -> Result<Option<PaymentPrice>> {
+    async fn get(&self, price_id: &str) -> Result<Option<PaymentPrice>> {
         self.base
-            .select_one(crate::storage::EntityQuery::new().eq("id", offer_id))
+            .select_one(crate::storage::EntityQuery::new().eq("id", price_id))
             .await
     }
 
@@ -47,12 +47,12 @@ impl PriceStorage for PricePostgresRepository {
         .bind(protocol)
         .fetch_all(self.base.pool())
         .await
-        .map_err(|error| BasePostgresRepository::storage_error("resolve payment offer", error))?;
+        .map_err(|error| PostgresRepository::storage_error("resolve payment price", error))?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => Self::decode_row(row).map(Some),
             _ => Err(Error::Storage(
-                "multiple enabled offers own one scenario resource".to_owned(),
+                "multiple enabled prices own one scenario resource".to_owned(),
             )),
         }
     }
@@ -68,35 +68,35 @@ impl PriceStorage for PricePostgresRepository {
             .await
     }
 
-    async fn update(&self, offer: &PaymentPrice, expected_updated_at: i64) -> Result<PaymentPrice> {
-        Self::validate_offer(offer)?;
-        if offer.updated_at <= expected_updated_at {
-            return Err(crate::Error::conflict("payment offer update timestamp did not advance"));
+    async fn update(&self, price: &PaymentPrice, expected_updated_at: i64) -> Result<PaymentPrice> {
+        Self::validate_price(price)?;
+        if price.updated_at <= expected_updated_at {
+            return Err(crate::Error::conflict("payment price update timestamp did not advance"));
         }
-        let offer = offer.clone();
+        let price = price.clone();
         self.base
             .transaction(|connection| {
                 Box::pin(async move {
-                    Self::lock_offer_authority(connection, &offer).await?;
-                    let mut changes = crate::storage::RepositoryEntity::values(&offer)?;
+                    Self::lock_price_authority(connection, &price).await?;
+                    let mut changes = crate::storage::RepositoryEntity::values(&price)?;
                     for field in ["id", "scenario_id", "policy_id", "created_at"] {
                         changes.remove(field);
                     }
                     let filters = crate::storage::EntityQuery::new()
-                        .eq("id", &offer.id)
-                        .eq("scenario_id", &offer.scenario_id)
-                        .eq("policy_id", &offer.policy_id)
-                        .eq("created_at", offer.created_at)
+                        .eq("id", &price.id)
+                        .eq("scenario_id", &price.scenario_id)
+                        .eq("policy_id", &price.policy_id)
+                        .eq("created_at", price.created_at)
                         .eq("updated_at", expected_updated_at);
                     let result = crate::storage::postgres::dynamic_postgres!(update, PaymentPrice, changes, filters)?
                         .build()
                         .execute(&mut *connection)
                         .await
-                        .map_err(|error| crate::Error::conflict(format!("payment offer update rejected: {error}")))?;
+                        .map_err(|error| crate::Error::conflict(format!("payment price update rejected: {error}")))?;
                     if result.rows_affected() != 1 {
-                        return Err(crate::Error::conflict("payment offer identity or revision changed"));
+                        return Err(crate::Error::conflict("payment price identity or revision changed"));
                     }
-                    Ok(offer)
+                    Ok(price)
                 })
             })
             .await
@@ -131,71 +131,70 @@ impl PriceStorage for PricePostgresRepository {
 }
 
 impl PricePostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 
-    fn validate_offer(offer: &PaymentPrice) -> Result<()> {
-        offer
+    fn validate_price(price: &PaymentPrice) -> Result<()> {
+        price
             .validate()
-            .map_err(|field| Error::InvalidRequest(format!("invalid payment offer {field}")))
+            .map_err(|field| Error::InvalidRequest(format!("invalid payment price {field}")))
     }
 
-    async fn lock_offer_authority(connection: &mut PgConnection, offer: &PaymentPrice) -> Result<()> {
+    async fn lock_price_authority(connection: &mut PgConnection, price: &PaymentPrice) -> Result<()> {
         let policy: Option<String> = sqlx::query_scalar("SELECT id FROM pay_policy WHERE id = $1 FOR SHARE")
-            .bind(&offer.policy_id)
+            .bind(&price.policy_id)
             .fetch_optional(&mut *connection)
             .await
-            .map_err(|error| BasePostgresRepository::storage_error("lock offer payment policy", error))?;
+            .map_err(|error| PostgresRepository::storage_error("lock price payment policy", error))?;
         if policy.is_none() {
-            return Err(Error::NotFound(format!("payment policy {}", offer.policy_id)));
+            return Err(Error::NotFound(format!("payment policy {}", price.policy_id)));
         }
         let wallet: Option<String> = sqlx::query_scalar("SELECT id FROM pay_wallet WHERE id = $1 FOR UPDATE")
-            .bind(&offer.wallet_id)
+            .bind(&price.wallet_id)
             .fetch_optional(&mut *connection)
             .await
-            .map_err(|error| BasePostgresRepository::storage_error("lock offer payment wallet", error))?;
+            .map_err(|error| PostgresRepository::storage_error("lock price payment wallet", error))?;
         if wallet.is_none() {
-            return Err(Error::NotFound(format!("payment wallet {}", offer.wallet_id)));
+            return Err(Error::NotFound(format!("payment wallet {}", price.wallet_id)));
         }
-        let policy = PolicyPostgresRepository::load_policy_connection(connection, &offer.policy_id)
+        let policy = PolicyPostgresRepository::load_policy_connection(connection, &price.policy_id)
             .await?
-            .ok_or_else(|| Error::NotFound(format!("payment policy {}", offer.policy_id)))?;
+            .ok_or_else(|| Error::NotFound(format!("payment policy {}", price.policy_id)))?;
         let inbound = policy
             .inbound_limits
             .as_ref()
-            .ok_or_else(|| crate::Error::conflict("offer policy does not authorize inbound payments"))?;
-        if policy.scenario_id != offer.scenario_id
-            || !policy.wallet_ids.contains(&offer.wallet_id)
-            || !policy.budget_unit.matches(&offer.asset)
-            || !policy.networks.contains(&offer.asset.network)
-            || !policy.assets.contains(&offer.asset)
-            || offer.amount > inbound.max_per_payment
-            || offer
+            .ok_or_else(|| crate::Error::conflict("price policy does not authorize inbound payments"))?;
+        if policy.scenario_id != price.scenario_id
+            || !policy.wallet_ids.contains(&price.wallet_id)
+            || !policy.budget_unit.matches(&price.asset)
+            || !policy.networks.contains(&price.asset.network)
+            || !policy.assets.contains(&price.asset)
+            || price.amount > inbound.max_per_payment
+            || price
                 .protocols
                 .iter()
                 .any(|protocol| !policy.protocols.contains(protocol))
         {
             return Err(crate::Error::conflict(
-                "offer exceeds or falls outside its inbound policy scope",
+                "price exceeds or falls outside its inbound policy scope",
             ));
         }
         Ok(())
     }
 
-    async fn insert_offer(connection: &mut PgConnection, offer: &PaymentPrice) -> Result<()> {
-        let _ = crate::storage::postgres::dynamic_postgres!(insert, offer)?
+    async fn insert_price(connection: &mut PgConnection, price: &PaymentPrice) -> Result<()> {
+        let _ = crate::storage::postgres::dynamic_postgres!(insert, price)?
             .push(" RETURNING id")
             .build()
             .fetch_optional(connection)
             .await
-            .map_err(|error| crate::Error::conflict(format!("payment offer insert rejected: {error}")))?;
+            .map_err(|error| crate::Error::conflict(format!("payment price insert rejected: {error}")))?;
         Ok(())
     }
 
     pub(crate) fn decode_row(row: &PgRow) -> Result<PaymentPrice> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BasePostgresRepository::storage_error("decode offer entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| PostgresRepository::storage_error("decode price entity", error))
     }
 }
 

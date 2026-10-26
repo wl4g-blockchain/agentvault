@@ -254,12 +254,12 @@ impl MppAdapter {
             ));
         }
 
-        if let Some(offer_id) = challenge.offer_id.as_deref() {
+        if let Some(price_id) = challenge.price_id.as_deref() {
             let payee = self.payee.as_ref().ok_or_else(|| {
                 Error::PaymentProtocol("payer-only MPP adapter cannot verify a payee challenge".to_owned())
             })?;
             if !integrity.official.verify(payee.challenge_secret.as_str())
-                || integrity.request.external_id.as_deref() != Some(offer_id)
+                || integrity.request.external_id.as_deref() != Some(price_id)
             {
                 return Err(Error::PaymentProtocol(
                     "payee MPP challenge authenticity check failed".to_owned(),
@@ -272,7 +272,7 @@ impl MppAdapter {
                 .ok_or_else(|| Error::PaymentProtocol("payee MPP challenge metadata is missing".to_owned()))?
                 .decode::<BTreeMap<String, String>>()
                 .map_err(MppWire::error)?;
-            if opaque.get("offer_id").map(String::as_str) != Some(offer_id)
+            if opaque.get("price_id").map(String::as_str) != Some(price_id)
                 || opaque.get("resource").map(String::as_str) != Some(challenge.resource.as_str())
                 || opaque.get("scenario_id").map(String::as_str) != Some(challenge.scenario_id.as_str())
             {
@@ -473,7 +473,7 @@ impl PaymentProtocol for MppAdapter {
         let mcp_challenge = Self::mcp_challenge_value(&integrity.official)?;
         let challenge = PaymentChallenge {
             scenario_id: scenario_id.to_owned(),
-            offer_id: None,
+            price_id: None,
             resource: expected_resource.to_owned(),
             protocol: MPP_PROTOCOL.to_owned(),
             asset: integrity.asset,
@@ -594,43 +594,43 @@ impl PaymentProtocol for MppAdapter {
             .map_err(|field| Error::PaymentProtocol(format!("invalid MPP receipt field: {field}")))
     }
 
-    async fn build_challenge(&self, offer: &PaymentPrice, recipient: &str, now: i64) -> Result<PaymentChallenge> {
+    async fn build_challenge(&self, price: &PaymentPrice, recipient: &str, now: i64) -> Result<PaymentChallenge> {
         let payee = self.payee.as_ref().ok_or_else(|| {
             Error::PaymentProtocol("payer-only MPP adapter cannot issue a payee challenge".to_owned())
         })?;
-        if !offer.supports_protocol(MPP_PROTOCOL) {
+        if !price.supports_protocol(MPP_PROTOCOL) {
             return Err(Error::PaymentProtocol(
-                "offer cannot produce an MPP challenge".to_owned(),
+                "price cannot produce an MPP challenge".to_owned(),
             ));
         }
         let recipient = canonicalize_wallet_address(EVM_EOA_ALGORITHM, recipient)
-            .map_err(|_| Error::PaymentProtocol("offer recipient is not a valid EVM address".to_owned()))?;
-        MppWire::validate_resource(&offer.resource)?;
+            .map_err(|_| Error::PaymentProtocol("price recipient is not a valid EVM address".to_owned()))?;
+        MppWire::validate_resource(&price.resource)?;
         let configured = self
             .assets
             .iter()
             .find(|configured| {
-                configured.network == offer.asset.network
-                    && configured.symbol == offer.asset.asset
-                    && configured.token_contract == offer.asset.token_contract
-                    && configured.decimals == offer.asset.decimals
+                configured.network == price.asset.network
+                    && configured.symbol == price.asset.asset
+                    && configured.token_contract == price.asset.token_contract
+                    && configured.decimals == price.asset.decimals
             })
-            .ok_or_else(|| Error::PaymentProtocol("offer asset is not registered for MPP".to_owned()))?;
-        let chain_id = offer
+            .ok_or_else(|| Error::PaymentProtocol("price asset is not registered for MPP".to_owned()))?;
+        let chain_id = price
             .asset
             .network
             .strip_prefix("eip155:")
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| Error::PaymentProtocol("MPP Tempo network must use numeric CAIP-2".to_owned()))?;
         let request = ChargeRequest {
-            amount: offer.amount.to_string(),
+            amount: price.amount.to_string(),
             currency: configured.currency.clone(),
             decimals: None,
             recipient: Some(recipient.clone()),
             description: None,
-            external_id: Some(offer.id.clone()),
+            external_id: Some(price.id.clone()),
             method_details: Some(json!({"chainId": chain_id})),
-            mppx_scope: Some(json!({"resource": offer.resource})),
+            mppx_scope: Some(json!({"resource": price.resource})),
         };
         let request = Base64UrlJson::from_typed(&request).map_err(MppWire::error)?;
         let expires_at = now.saturating_add(i64::try_from(self.timeout_seconds).unwrap_or(i64::MAX));
@@ -641,9 +641,9 @@ impl PaymentProtocol for MppAdapter {
         let issuance_id = Uuid::new_v4().to_string();
         let opaque = Base64UrlJson::from_typed(&BTreeMap::from([
             ("challenge_id", issuance_id.as_str()),
-            ("offer_id", offer.id.as_str()),
-            ("resource", offer.resource.as_str()),
-            ("scenario_id", offer.scenario_id.as_str()),
+            ("price_id", price.id.as_str()),
+            ("resource", price.resource.as_str()),
+            ("scenario_id", price.scenario_id.as_str()),
         ]))
         .map_err(MppWire::error)?;
         let official = mpp::PaymentChallenge::with_secret_key_full(
@@ -659,15 +659,15 @@ impl PaymentProtocol for MppAdapter {
             Some("Payment-Authorization"),
         );
         let header = format_www_authenticate(&official).map_err(MppWire::error)?;
-        let challenge_hash = MppWire::challenge_hash(&offer.resource, &header);
+        let challenge_hash = MppWire::challenge_hash(&price.resource, &header);
         let mcp_challenge = Self::mcp_challenge_value(&official)?;
         let challenge = PaymentChallenge {
-            scenario_id: offer.scenario_id.clone(),
-            offer_id: Some(offer.id.clone()),
-            resource: offer.resource.clone(),
+            scenario_id: price.scenario_id.clone(),
+            price_id: Some(price.id.clone()),
+            resource: price.resource.clone(),
             protocol: MPP_PROTOCOL.to_owned(),
-            asset: offer.asset.clone(),
-            amount: offer.amount,
+            asset: price.asset.clone(),
+            amount: price.amount,
             recipient,
             nonce: official.id,
             challenge_hash,

@@ -66,7 +66,7 @@ func (middleware *PayeeMiddleware) Gin(routes ...GinPayeeRoute) *GinPayeeMiddlew
 	return NewGinPayeeMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
 }
 
-func (middleware *PayeeMiddleware) Standard(routes ...StandardPayeeRoute) *StandardPayeeMiddleware {
+func (middleware *PayeeMiddleware) Standard(routes ...StandardPayeeRoute) *StdHttpMiddleware {
 	return NewStdHttpMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
 }
 
@@ -550,7 +550,7 @@ func (middleware *PayeeMiddleware) ResolvePrice(ctx context.Context, request mod
 		return nil, err
 	}
 	var result model.PaymentPrice
-	if err := middleware.api.Post(ctx, "/api/v1/offers/resolve", request, &result); err != nil {
+	if err := middleware.api.Post(ctx, "/api/v1/prices/resolve", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -561,7 +561,7 @@ func (middleware *PayeeMiddleware) createChallenge(ctx context.Context, request 
 		return nil, err
 	}
 	for name, value := range map[string]string{
-		"offer_id": request.PriceID, "resource": request.Resource, "origin": request.Origin,
+		"price_id": request.PriceID, "resource": request.Resource, "origin": request.Origin,
 		"protocol": request.Protocol, "request_hash": request.RequestHash,
 	} {
 		if err := model.Required(name, value); err != nil {

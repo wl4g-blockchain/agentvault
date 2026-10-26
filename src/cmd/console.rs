@@ -20,7 +20,7 @@ use crate::model::Amount;
 use crate::model::ApprovalDecisionKind;
 use crate::model::SubmitApprovalDecision;
 use crate::payment::ResourceImporter;
-use crate::storage::IStorage;
+use crate::storage::IRepository;
 use crate::storage::LedgerQuery;
 use crate::storage::PageRequest;
 use crate::storage::PaymentQuery;
@@ -82,7 +82,6 @@ enum ConsoleResource {
     Client,
     Scenario,
     Policy,
-    #[value(alias = "offer")]
     Price,
     Approver,
     Payment,
@@ -96,7 +95,6 @@ enum MutableResource {
     Client,
     Scenario,
     Policy,
-    #[value(alias = "offer")]
     Price,
     Approver,
 }
@@ -199,7 +197,7 @@ struct ConsoleLine {
 }
 
 struct ConsoleStore {
-    storage: Arc<dyn IStorage>,
+    storage: Arc<dyn IRepository>,
     ports: StoragePorts,
 }
 
@@ -247,7 +245,7 @@ impl ConsoleStore {
             }
             ConsoleResource::Price => {
                 let scenario_id = Self::required(args.scenario_id.as_deref(), "scenario-id", args.resource)?;
-                serde_json::to_value(self.ports.offers.list_for_scenario(scenario_id, page).await?)?
+                serde_json::to_value(self.ports.prices.list_for_scenario(scenario_id, page).await?)?
             }
             ConsoleResource::Approver => {
                 let scenario_id = Self::required(args.scenario_id.as_deref(), "scenario-id", args.resource)?;
@@ -318,10 +316,10 @@ impl ConsoleStore {
             )?,
             ConsoleResource::Price => serde_json::to_value(
                 self.ports
-                    .offers
+                    .prices
                     .get(&args.id)
                     .await?
-                    .ok_or_else(|| anyhow!("offer not found"))?,
+                    .ok_or_else(|| anyhow!("price not found"))?,
             )?,
             ConsoleResource::Approver => {
                 let scenario_id = Self::required(args.scenario_id.as_deref(), "scenario-id", args.resource)?;
@@ -387,16 +385,16 @@ impl ConsoleStore {
                 serde_json::to_value(self.ports.policies.update(&policy, expected_updated_at).await?)?
             }
             MutableResource::Price => {
-                let mut offer = self
+                let mut price = self
                     .ports
-                    .offers
+                    .prices
                     .get(&args.id)
                     .await?
-                    .ok_or_else(|| anyhow!("offer not found"))?;
-                let expected_updated_at = offer.updated_at;
-                offer.enabled = args.enabled;
-                offer.updated_at = Self::next_timestamp(expected_updated_at, now)?;
-                serde_json::to_value(self.ports.offers.update(&offer, expected_updated_at).await?)?
+                    .ok_or_else(|| anyhow!("price not found"))?;
+                let expected_updated_at = price.updated_at;
+                price.enabled = args.enabled;
+                price.updated_at = Self::next_timestamp(expected_updated_at, now)?;
+                serde_json::to_value(self.ports.prices.update(&price, expected_updated_at).await?)?
             }
             MutableResource::Approver => {
                 let scenario_id = args

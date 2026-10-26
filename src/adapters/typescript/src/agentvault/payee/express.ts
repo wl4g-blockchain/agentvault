@@ -12,7 +12,7 @@ export interface ExpressPayeeRoute {
   method: string;
   path: string;
   scenarioId: string;
-  offerId: string;
+  priceId: string;
   resource: string;
   origin: string;
   protocol?: string;
@@ -30,7 +30,7 @@ export function mcpToolRoute(
   path: string,
   tool: string,
   scenarioId: string,
-  offerId: string,
+  priceId: string,
   resource: string,
   origin: string,
 ): ExpressPayeeRoute {
@@ -38,7 +38,7 @@ export function mcpToolRoute(
     path,
     tool,
     scenarioId,
-    offerId,
+    priceId,
     resource,
     origin,
     'x402',
@@ -49,12 +49,12 @@ export function mcpToolRouteWithProtocol(
   path: string,
   tool: string,
   scenarioId: string,
-  offerId: string,
+  priceId: string,
   resource: string,
   origin: string,
   protocol: string,
 ): ExpressPayeeRoute {
-  return { method: 'POST', path, scenarioId, offerId, resource, origin, protocol, mcpTool: tool };
+  return { method: 'POST', path, scenarioId, priceId, resource, origin, protocol, mcpTool: tool };
 }
 
 /** Express middleware that protects only explicitly registered routes. */
@@ -104,7 +104,7 @@ export class ExpressPayeeMiddleware {
         }
         const protocolName = route.protocol ?? 'x402';
         const operation: PayeeOperation = {
-          scenarioId: route.scenarioId, runId, offerId: route.offerId,
+          scenarioId: route.scenarioId, runId, priceId: route.priceId,
           resource: route.resource, origin: route.origin, protocol: protocolName,
           requestHash: this.requestHash(request.method, request.path, request.body),
         };

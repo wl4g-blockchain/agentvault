@@ -175,7 +175,7 @@ impl ResourceImporter {
                 envelope.data,
                 path,
             )?),
-            ResourceKind::Price => batch.offers.push(ResourceImporter::decode_named_resource(
+            ResourceKind::Price => batch.prices.push(ResourceImporter::decode_named_resource(
                 envelope.metadata.name,
                 enabled,
                 envelope.data,
@@ -227,9 +227,7 @@ impl ResourceImporter {
         Ok(())
     }
 
-    /// Converts aggregate test fixtures into the canonical one-resource-per-
-    /// document import format. Production import intentionally has no aggregate
-    /// compatibility path.
+    /// Emits one canonical resource document for each aggregate fixture entry.
     #[cfg(test)]
     pub(crate) fn encode_test_resource_documents(aggregate: &serde_json::Value) -> String {
         let kinds = [
@@ -237,7 +235,7 @@ impl ResourceImporter {
             ("wallets", "Wallet"),
             ("scenarios", "Scenario"),
             ("policies", "Policy"),
-            ("offers", "Price"),
+            ("prices", "Price"),
             ("approvers", "Approver"),
         ];
         let mut documents = Vec::new();

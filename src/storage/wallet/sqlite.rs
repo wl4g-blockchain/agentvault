@@ -1,5 +1,5 @@
 use crate::{
-    storage::sqlite::{dynamic_sqlite as dynamic_query, BaseSqliteRepository as BaseRepository},
+    storage::sqlite::{dynamic_sqlite as dynamic_query, SqliteRepository as BaseRepository},
     utils::storage::SqliteAmountCodec as AmountCodec,
 };
 use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection};

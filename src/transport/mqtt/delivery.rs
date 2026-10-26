@@ -9,8 +9,8 @@ pub(crate) struct OutboxSettings {
 
 pub(crate) struct MqttPaymentEventSink {
     pub(crate) client: AsyncClient,
-    pub(crate) clients: Arc<dyn ClientStorage>,
-    pub(crate) scenarios: Arc<dyn ScenarioStorage>,
+    pub(crate) clients: Arc<dyn IClientRepository>,
+    pub(crate) scenarios: Arc<dyn IScenarioRepository>,
     pub(crate) topic_prefix: String,
 }
 
@@ -199,8 +199,8 @@ pub(crate) struct MqttOutboxPublisher;
 impl MqttOutboxPublisher {
     pub(crate) async fn run_outbox_publisher(
         client: AsyncClient,
-        clients: Arc<dyn ClientStorage>,
-        outbox: Arc<dyn OutboxStorage>,
+        clients: Arc<dyn IClientRepository>,
+        outbox: Arc<dyn IOutboxRepository>,
         settings: OutboxSettings,
         mut shutdown: Shutdown,
     ) -> anyhow::Result<()> {
@@ -239,8 +239,8 @@ impl MqttOutboxPublisher {
 
     pub(crate) async fn deliver_outbox_message(
         client: &AsyncClient,
-        clients: &dyn ClientStorage,
-        outbox: &dyn OutboxStorage,
+        clients: &dyn IClientRepository,
+        outbox: &dyn IOutboxRepository,
         settings: &OutboxSettings,
         message: &OutboxMessage,
         now: i64,
@@ -381,7 +381,7 @@ impl MqttOutboxPublisher {
     }
 
     pub(crate) async fn reschedule_outbox(
-        outbox: &dyn OutboxStorage,
+        outbox: &dyn IOutboxRepository,
         settings: &OutboxSettings,
         message: &OutboxMessage,
         now: i64,

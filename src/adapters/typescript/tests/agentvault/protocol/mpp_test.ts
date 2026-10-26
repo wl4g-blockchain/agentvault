@@ -15,7 +15,7 @@ test('MppAdapter preserves Bearer and uses only native MPP headers', () => {
     header: 'Payment-Authorization',
   });
   const challenge: PaymentChallenge = {
-    scenario_id: 'scenario', offer_id: 'offer', resource: 'https://merchant.example/tool', protocol: 'mpp',
+    scenario_id: 'scenario', price_id: 'price', resource: 'https://merchant.example/tool', protocol: 'mpp',
     asset: { network: 'eip155:42431', asset: 'USDC', decimals: 6 }, amount: '1000',
     recipient: '0x1111111111111111111111111111111111111111', nonce: 'nonce',
     challenge_hash: 'challenge', expires_at: 2_000_000_000,
@@ -67,7 +67,7 @@ test('MppAdapter rejects unimplemented methods and intents', () => {
     });
     assert.throws(() => adapter.challenge({
       scenario_id: 'scenario',
-      offer_id: 'offer',
+      price_id: 'price',
       resource: 'https://merchant.example/tool',
       protocol: 'mpp',
       asset: { network: 'eip155:42431', asset: 'USDC', decimals: 6 },

@@ -26,8 +26,8 @@ pub use approval::{
 pub use balance::{WalletBalanceSnapshot, WalletBalanceSyncRun};
 pub(crate) use domain::MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS;
 pub use domain::{
-    LedgerEntryType, PaymentClient, PaymentEvent, PaymentEventType, PaymentLedgerEntry, PaymentPrice, PaymentPrice,
-    PaymentReceipt, PaymentScenario,
+    LedgerEntryType, PaymentClient, PaymentEvent, PaymentEventType, PaymentLedgerEntry, PaymentPrice, PaymentReceipt,
+    PaymentScenario,
 };
 pub use event::{PaymentEventDelivery, PaymentEventDispatchRun};
 
@@ -39,8 +39,8 @@ pub use payment::{
 pub use policy::{PaymentPolicy, PaymentPolicyLimits, PolicyDecision, PolicyEngine, PolicyEvaluation, WalletBudget};
 pub(crate) use receipt::OutboundEvidenceObservation;
 pub use receipt::{
-    ConfirmedEvmTransfer, ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery, EvmReceiptObservation,
-    EvmTransferQuery, ReceiptObservation, RecordOutboundPaymentResponse, RecordedOutboundEvidence, TransferQuery,
+    ConfirmedTransfer, EvmAuthorizationObservation, EvmAuthorizationQuery, ReceiptObservation,
+    RecordOutboundPaymentResponse, RecordedOutboundEvidence, TransferQuery,
 };
 pub(crate) use reconciliation::ReconciliationProviderObservation;
 pub use reconciliation::{ConfirmedSettlement, ReconciliationEvidence, ReconciliationRun};

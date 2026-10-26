@@ -7,8 +7,8 @@ use crate::{
     model::PaymentStatus, model::PolicyDecision, model::PolicyEngine, model::PolicyEvaluation,
     model::ReservationStatus, model::WalletBudget, payment::validation::PaymentValidation,
     storage::AuthorizationAction, storage::AuthorizationGuard, storage::AuthorizationRecord,
-    storage::AuthorizationWrite, storage::BudgetSnapshot, storage::IdempotentWrite, storage::OutboxMessage,
-    storage::OutboxStatus, storage::PageRequest, storage::PaymentStorage, storage::PolicyStorage, Error, Result,
+    storage::AuthorizationWrite, storage::BudgetSnapshot, storage::IIntentRepository, storage::IPolicyRepository,
+    storage::IdempotentWrite, storage::OutboxMessage, storage::OutboxStatus, storage::PageRequest, Error, Result,
 };
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -22,8 +22,8 @@ const MAX_WALLET_CANDIDATES: usize = 4_096;
 /// repeats aggregate budget checks in its authorization transaction.
 pub struct PaymentAuthorizer {
     scenarios: Arc<ScenarioHandler>,
-    policies: Arc<dyn PolicyStorage>,
-    payments: Arc<dyn PaymentStorage>,
+    policies: Arc<dyn IPolicyRepository>,
+    payments: Arc<dyn IIntentRepository>,
     protocols: Arc<ProtocolRegistry>,
     approval_ttl_seconds: i64,
     wallet_selection_strategy: WalletSelectionStrategy,
@@ -38,8 +38,8 @@ impl PaymentAuthorizer {
     /// Returns an error when the approval TTL is not positive.
     pub fn new(
         scenarios: Arc<ScenarioHandler>,
-        policies: Arc<dyn PolicyStorage>,
-        payments: Arc<dyn PaymentStorage>,
+        policies: Arc<dyn IPolicyRepository>,
+        payments: Arc<dyn IIntentRepository>,
         protocols: Arc<ProtocolRegistry>,
         approval_ttl_seconds: i64,
         wallet_selection_strategy: WalletSelectionStrategy,
@@ -349,7 +349,7 @@ impl PaymentAuthorizer {
             run_id: command.run_id.clone(),
             wallet_id: Some(wallet_id.to_owned()),
             policy_id: Some(policy_id.to_owned()),
-            offer_id: None,
+            price_id: None,
             direction: PaymentDirection::Outbound,
             protocol: command.challenge.protocol.clone(),
             asset: command.challenge.asset.clone(),
@@ -566,7 +566,7 @@ impl PaymentAuthorizer {
     fn validate_command(command: &AuthorizePayment) -> Result<()> {
         PaymentValidation::validate_identifier("scenario_id", &command.scenario_id)?;
         PaymentValidation::validate_identifier("run_id", &command.run_id)?;
-        if command.challenge.scenario_id != command.scenario_id || command.challenge.offer_id.is_some() {
+        if command.challenge.scenario_id != command.scenario_id || command.challenge.price_id.is_some() {
             return Err(Error::InvalidRequest(
                 "outbound challenge scenario binding is invalid".to_owned(),
             ));

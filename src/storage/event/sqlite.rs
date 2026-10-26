@@ -2,7 +2,7 @@
 
 use crate::{
     model::{PaymentEvent, PaymentEventType},
-    storage::{sqlite::BaseSqliteRepository, EventStorage, IdempotentWrite, Page, PageRequest},
+    storage::{sqlite::SqliteRepository, IEventRepository, IdempotentWrite, Page, PageRequest},
     Error, Result,
 };
 use async_trait::async_trait;
@@ -10,11 +10,11 @@ use sqlx::sqlite::SqliteRow;
 
 #[derive(Clone)]
 pub struct EventSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 
 #[async_trait]
-impl EventStorage for EventSqliteRepository {
+impl IEventRepository for EventSqliteRepository {
     async fn append(&self, event: &PaymentEvent) -> Result<IdempotentWrite<PaymentEvent>> {
         let event = event.clone();
         self.base
@@ -58,7 +58,7 @@ impl EventStorage for EventSqliteRepository {
 }
 
 impl EventSqliteRepository {
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
 
@@ -78,7 +78,7 @@ impl EventSqliteRepository {
         .bind(i64::from(event.attempt_no))
         .fetch_all(&mut *connection)
         .await
-        .map_err(|error| BaseSqliteRepository::storage_error("find payment event replay", error))?;
+        .map_err(|error| SqliteRepository::storage_error("find payment event replay", error))?;
         if !existing.is_empty() {
             if existing.len() != 1 {
                 return Err(crate::Error::conflict(
@@ -104,7 +104,7 @@ impl EventSqliteRepository {
     }
 
     pub(crate) fn decode_row(row: &SqliteRow) -> Result<PaymentEvent> {
-        sqlx::FromRow::from_row(row).map_err(|error| BaseSqliteRepository::storage_error("decode event entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| SqliteRepository::storage_error("decode event entity", error))
     }
 }
 

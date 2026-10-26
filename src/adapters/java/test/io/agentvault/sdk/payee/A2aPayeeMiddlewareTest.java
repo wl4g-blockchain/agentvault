@@ -71,7 +71,7 @@ final class A2aPayeeMiddlewareTest {
                                             SpringInterceptorPayeeMiddleware.Route.a2a(
                                                     "/a2a",
                                                     "scenario",
-                                                    "offer-1",
+                                                    "price-1",
                                                     "mcp://tool/marketpulse.realtime",
                                                     "https://merchant.test",
                                                     protocol,
@@ -259,7 +259,7 @@ final class A2aPayeeMiddlewareTest {
                     requestHashes.add(request.path("request_hash").asText());
                     ObjectNode challenge = JSON.createObjectNode();
                     challenge.put("scenario_id", "scenario");
-                    challenge.put("offer_id", "offer-1");
+                    challenge.put("price_id", "price-1");
                     challenge.put("resource", "mcp://tool/marketpulse.realtime");
                     challenge.put("protocol", protocol);
                     challenge
@@ -336,7 +336,7 @@ final class A2aPayeeMiddlewareTest {
             value.put("run_id", "run-1");
             value.put("wallet_id", "wallet-1");
             value.put("policy_id", "policy-1");
-            value.put("offer_id", "offer-1");
+            value.put("price_id", "price-1");
             value.put("direction", "inbound");
             value.put("protocol", protocol);
             value.putObject("asset")

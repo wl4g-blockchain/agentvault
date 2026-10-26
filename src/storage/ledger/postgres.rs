@@ -3,8 +3,8 @@
 use crate::{
     model::PaymentLedgerEntry,
     storage::{
-        outbox::postgres::OutboxPostgresRepository, postgres::BasePostgresRepository, IdempotentWrite, LedgerQuery,
-        LedgerStorage, LedgerWrite, Page,
+        outbox::postgres::OutboxPostgresRepository, postgres::PostgresRepository, ILedgerRepository, IdempotentWrite,
+        LedgerQuery, LedgerWrite, Page,
     },
     Error, Result,
 };
@@ -14,11 +14,11 @@ use std::collections::BTreeSet;
 
 #[derive(Clone)]
 pub struct LedgerPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 
 #[async_trait]
-impl LedgerStorage for LedgerPostgresRepository {
+impl ILedgerRepository for LedgerPostgresRepository {
     async fn append(&self, entry: &PaymentLedgerEntry) -> Result<IdempotentWrite<PaymentLedgerEntry>> {
         let entry = entry.clone();
         self.base
@@ -78,7 +78,7 @@ impl LedgerStorage for LedgerPostgresRepository {
 }
 
 impl LedgerPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 
@@ -97,7 +97,7 @@ impl LedgerPostgresRepository {
                     .bind(&scenario_ids)
                     .fetch_all(&mut *connection)
                     .await
-                    .map_err(|error| BasePostgresRepository::storage_error("lock ledger scenarios", error))?;
+                    .map_err(|error| PostgresRepository::storage_error("lock ledger scenarios", error))?;
             if locked.len() != scenario_ids.len() {
                 return Err(crate::Error::conflict("ledger references an unavailable scenario"));
             }
@@ -108,7 +108,7 @@ impl LedgerPostgresRepository {
                     .bind(&wallet_ids)
                     .fetch_all(connection)
                     .await
-                    .map_err(|error| BasePostgresRepository::storage_error("lock ledger wallets", error))?;
+                    .map_err(|error| PostgresRepository::storage_error("lock ledger wallets", error))?;
             if locked.len() != wallet_ids.len() {
                 return Err(crate::Error::conflict("ledger references an unavailable wallet"));
             }
@@ -137,7 +137,7 @@ impl LedgerPostgresRepository {
                 .bind(original_id)
                 .fetch_optional(&mut *connection)
                 .await
-                .map_err(|error| BasePostgresRepository::storage_error("lock ledger reversal original", error))?
+                .map_err(|error| PostgresRepository::storage_error("lock ledger reversal original", error))?
                 .ok_or_else(|| crate::Error::conflict("ledger reversal original does not exist"))?;
             let original = Self::decode_row(&row)?;
             entry
@@ -158,7 +158,7 @@ impl LedgerPostgresRepository {
             .bind(&entry.posting_key)
             .fetch_optional(&mut *connection)
             .await
-            .map_err(|error| BasePostgresRepository::storage_error("find ledger posting replay", error))?;
+            .map_err(|error| PostgresRepository::storage_error("find ledger posting replay", error))?;
         let Some(row) = row else {
             return Err(crate::Error::conflict(
                 "ledger identity or reversal fact conflicts with an existing row",
@@ -175,8 +175,7 @@ impl LedgerPostgresRepository {
     }
 
     pub(crate) fn decode_row(row: &PgRow) -> Result<PaymentLedgerEntry> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BasePostgresRepository::storage_error("decode ledger entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| PostgresRepository::storage_error("decode ledger entity", error))
     }
 }
 

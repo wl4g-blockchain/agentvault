@@ -456,7 +456,7 @@ data:
 consoleVersion: core.agentvault.io/v1
 kind: Price
 metadata:
-  name: offer-realtime-news
+  name: price-realtime-news
   status: active
 data:
   scenario_id: scenario-marketpulse-feed

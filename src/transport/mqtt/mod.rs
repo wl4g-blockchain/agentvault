@@ -36,12 +36,12 @@ use crate::model::PaymentEventDelivery;
 use crate::payment::PaymentApi;
 use crate::payment::PaymentEventDispatcherConfig;
 use crate::payment::PaymentEventSink;
-use crate::storage::ClientStorage;
+use crate::storage::IClientRepository;
+use crate::storage::IOutboxRepository;
+use crate::storage::IScenarioRepository;
 use crate::storage::OutboxDeliveryClass;
 use crate::storage::OutboxLeaseRequest;
 use crate::storage::OutboxMessage;
-use crate::storage::OutboxStorage;
-use crate::storage::ScenarioStorage;
 use crate::Error;
 
 mod command;
@@ -64,7 +64,7 @@ pub(crate) const COMMAND_SUFFIX: &str = "/commands/authorize";
 
 pub(crate) const OUTBOUND_RESPONSE_SUFFIX: &str = "/commands/outbound-response";
 
-pub(crate) const RESOLVE_OFFER_SUFFIX: &str = "/commands/resolve-offer";
+pub(crate) const RESOLVE_PRICE_SUFFIX: &str = "/commands/resolve-price";
 
 pub(crate) const CREATE_CHALLENGE_SUFFIX: &str = "/commands/create-challenge";
 

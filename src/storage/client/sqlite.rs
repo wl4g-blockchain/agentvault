@@ -1,16 +1,16 @@
 //! Client repository; ordinary CRUD is generated from `PaymentClient`.
 use crate::{
     model::PaymentClient,
-    storage::{sqlite::BaseSqliteRepository, ClientStorage, EntityComparison, EntityQuery, Page, PageRequest},
+    storage::{sqlite::SqliteRepository, EntityComparison, EntityQuery, IClientRepository, Page, PageRequest},
     Error, Result,
 };
 use async_trait::async_trait;
 #[derive(Clone)]
 pub struct ClientSqliteRepository {
-    base: BaseSqliteRepository,
+    base: SqliteRepository,
 }
 #[async_trait]
-impl ClientStorage for ClientSqliteRepository {
+impl IClientRepository for ClientSqliteRepository {
     async fn insert(&self, client: &PaymentClient) -> Result<PaymentClient> {
         client
             .validate()
@@ -46,7 +46,7 @@ impl ClientStorage for ClientSqliteRepository {
     }
 }
 impl ClientSqliteRepository {
-    pub(crate) fn new(base: BaseSqliteRepository) -> Self {
+    pub(crate) fn new(base: SqliteRepository) -> Self {
         Self { base }
     }
 }

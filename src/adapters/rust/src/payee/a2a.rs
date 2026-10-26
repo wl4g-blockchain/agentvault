@@ -21,7 +21,7 @@ impl A2aPaymentCall {
     const SCOPE: [&'static str; 3] = [
         "agentvault.payment.run_id",
         "agentvault.payment.scenario_id",
-        "agentvault.payment.offer_id",
+        "agentvault.payment.price_id",
     ];
     async fn persist(&self, mut task: Task) -> Result<()> {
         if self.task.id != task.id || self.task.context_id != task.context_id {
@@ -129,7 +129,7 @@ impl<T> PayeeMiddleware<T> {
         for (key, value) in
             A2aPaymentCall::SCOPE
                 .into_iter()
-                .zip([&operation.run_id, &operation.scenario_id, &operation.offer_id])
+                .zip([&operation.run_id, &operation.scenario_id, &operation.price_id])
         {
             if meta.get(key).is_some_and(|v| v != value) || (credential.is_some() && !meta.contains_key(key)) {
                 return Err(A2aCall::invalid("A2A task belongs to another payment scope"));

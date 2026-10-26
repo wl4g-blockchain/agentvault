@@ -286,8 +286,8 @@ fn bounded_route(value: &str) -> &'static str {
         "/api/v1/approvals/{approval_id}"
     } else if value.ends_with("/approvals") {
         "/api/v1/approvals"
-    } else if value.ends_with("/offers/resolve") {
-        "/api/v1/offers/resolve"
+    } else if value.ends_with("/prices/resolve") {
+        "/api/v1/prices/resolve"
     } else if value.ends_with("/payee/challenges") {
         "/api/v1/payee/challenges"
     } else if value.ends_with("/payee/verify") {

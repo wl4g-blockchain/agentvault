@@ -12,11 +12,11 @@ use crate::storage::Page;
 use crate::storage::PageRequest;
 use crate::storage::PaymentWallet;
 use crate::storage::WalletBalanceRecord;
-use crate::storage::WalletBalanceStorage;
+use crate::storage::IWalletBalanceRepository;
 use crate::storage::WalletCreationConfig;
 use crate::storage::WalletCustody;
 use crate::storage::WalletKeyStatus;
-use crate::storage::WalletStorage;
+use crate::storage::IWalletRepository;
 use crate::utils::storage::AmountEncoding as _;
 use crate::utils::storage::PaymentStorageCodec;
 use crate::Error;
@@ -28,7 +28,7 @@ const PAYMENT_WALLET_SELECT: &str =
     "SELECT w.*, active.version AS active_key_version FROM pay_wallet w \
      LEFT JOIN wallet_key_version active ON active.wallet_id = w.id AND active.status = 'active'";
 #[async_trait]
-impl WalletStorage for $repository {
+impl IWalletRepository for $repository {
     async fn create_local(
         &self,
         wallet: &Wallet,
@@ -391,7 +391,7 @@ impl WalletStorage for $repository {
     }
 }
 #[async_trait]
-impl WalletBalanceStorage for $repository {
+impl IWalletBalanceRepository for $repository {
     async fn upsert_balance(&self, balance: &WalletBalanceRecord) -> Result<WalletBalanceRecord> {
         balance
             .validate()

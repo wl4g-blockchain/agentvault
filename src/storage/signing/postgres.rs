@@ -1,6 +1,6 @@
 use crate::storage::{
     payment::postgres::PaymentPostgresRepository as PaymentRepository,
-    policy::postgres::PolicyPostgresRepository as PolicyRepository, postgres::BasePostgresRepository as BaseRepository,
+    policy::postgres::PolicyPostgresRepository as PolicyRepository, postgres::PostgresRepository as BaseRepository,
     wallet::postgres::WalletPostgresRepository as WalletRepository,
 };
 use sqlx::PgConnection as Connection;

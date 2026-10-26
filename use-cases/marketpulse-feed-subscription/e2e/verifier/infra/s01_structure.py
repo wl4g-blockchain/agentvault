@@ -6,7 +6,7 @@ import re
 from common.context import VerificationContext
 from common.payer_identity import PAYER_IDENTITIES
 from common.project import E2E_ROOT, REPOSITORY_ROOT
-from common.resource_import import load_agentvault_resources
+from common.resource_import import ConsoleResourceFixture
 
 
 REQUIRED = (
@@ -49,7 +49,7 @@ REQUIRED = (
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/route/FeedController.java",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/handler/FeedHandler.java",
-    "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/storage/FeedSQLiteStorage.java",
+    "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/storage/FeedSqliteRepository.java",
     "deploy/mock-payee-marketpulse-python-service/app/main.py",
     "deploy/mock-payee-marketpulse-python-service/app/server.py",
     "deploy/mock-payee-marketpulse-python-service/app/route/feed.py",
@@ -324,7 +324,7 @@ PAYEE_SOURCE_ALLOWLISTS = {
     },
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e": {
         "Application.java", "server/MarketPulseServer.java", "handler/FeedHandler.java", "route/FeedController.java",
-        "storage/FeedSQLiteStorage.java",
+        "storage/FeedSqliteRepository.java",
     },
     "deploy/mock-payee-marketpulse-typescript-service/src": {
         "main.ts", "server.ts", "handler/feed.ts", "route/feed.ts", "storage/feed.ts",
@@ -420,7 +420,7 @@ SDK_MODEL_CONTRACTS = {
                               "interface SubmitApprovalDecisionRequest"),
         "model/payer.ts": ("type AuthorizationOutcome", "interface PaymentRequired",
                            "interface AuthorizePaymentRequest", "interface AuthorizePaymentResponse",
-                           "type ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
+                           "interface ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
                            "interface BalanceQuery", "interface PaymentBalance", "class PayerRequestContext",
                            "interface PayerHttpRequest", "interface PayerHttpResponse",
                            "interface AuthorizedPayment"),
@@ -468,7 +468,7 @@ SDK_LOGICAL_CONTRACTS = {
                             "intent.Asset != challenge.Asset", "payment.Intent.Status != model.PaymentStatusSettled",
                             "payment.Receipt.Status != model.PaymentStatusSettled"),
         "payee/gin.go": ("type GinPayeeMiddleware", "Handler() gin.HandlerFunc", "NewMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
-        "payee/standard.go": ("type StandardPayeeMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
+        "payee/standard.go": ("type StdHttpMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
         "payee/payee_test.go": ("RejectsInvalidPaymentBeforeSettlement", "/api/v1/payee/verify", "ErrInvalidPayment"),
         "transport/transport.go": ("type Transport interface",),
         "transport/grpc.go": ("type GrpcVaultTransport",),
@@ -484,7 +484,7 @@ SDK_LOGICAL_CONTRACTS = {
                             "intent.run_id != context.run_id", "delivery_retries", "view.status != 503"),
         "payer/standard.rs": ("pub struct ReqwestPayerMiddleware", "impl<T> Middleware", "Policy::none", ".deliver(&context"),
         "payer/payer_test.rs": ("payer_forwards_captured_protocol_hint_without_local_projection", "payment-protocol", "mpp"),
-        "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_offer", "pub async fn get_receipt",
+        "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_price", "pub async fn get_receipt",
                             "OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())",
                             "intent.asset != challenge.asset", "payment.intent.status != crate::PaymentStatus::Settled",
                             "payment.receipt.status != crate::PaymentStatus::Settled"),
@@ -505,7 +505,7 @@ SDK_LOGICAL_CONTRACTS = {
                             "self.config.delivery_retries", "response_view.status != 503"),
         "payer/standard.py": ("class HttpxPayerMiddleware", "async def request", "follow_redirects=False", "stream=True", "_read_bounded", "self.core.deliver("),
         "payer/payer_test.py": ("test_captured_protocol_hint_is_checked_against_vault_result", "payment-protocol", "mpp"),
-        "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_offer", "def get_receipt",
+        "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_price", "def get_receipt",
                             "operation.settlement_context(), verification.intent.id",
                             "intent.asset != challenge.asset", "intent.status.value != \"settled\"",
                             "receipt.status.value != \"settled\""),
@@ -635,23 +635,23 @@ PAYER_FORBIDDEN_CHAIN_PATTERNS = (
 PAYEE_FRAMEWORK_CONTRACTS = {
     "deploy/mock-payee-marketpulse-golang-service/pkg/server.go": (
         "GinPayeeMiddleware", "VaultTransportConfig", "NewFromConfig",
-        "NewFeedSQLiteStorage", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
+        "NewFeedSqliteRepository", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-rust-service/src/server.rs": (
         "AxumPayeeMiddleware", "VaultTransportConfig", "AgentVault::from_config",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-python-service/app/server.py": (
         "FastAPI", "FastPayeeMiddleware", "VaultTransportConfig", "AgentVault.from_config",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java": (
         "MarketPulseServer", "SpringInterceptorPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
-        "FeedSQLiteStorage", "McpEndpoint", '"/mcp"',
+        "FeedSqliteRepository", "McpEndpoint", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-typescript-service/src/server.ts": (
         "ExpressPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", "'/mcp'",
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", "'/mcp'",
     ),
 }
 
@@ -949,11 +949,11 @@ class StructureVerifier:
     @staticmethod
     def _verify_storage_boundaries() -> None:
         root = REPOSITORY_ROOT / "src" / "storage"
-        for dialect, base in (("postgres", "BasePostgresRepository"), ("sqlite", "BaseSqliteRepository")):
+        for dialect, base in (("postgres", "PostgresRepository"), ("sqlite", "SqliteRepository")):
             code = (root / f"{dialect}.rs").read_text(encoding="utf-8")
             if re.search(r"crate::model|utils::storage|\bpay_\w+|\bPayment(?:Status|Direction|EventType|Intent)|\bWalletCustody", code):
                 raise RuntimeError(f"{dialect} base must be independent of business models, schema and codecs")
-            if re.search(r"impl\s+(?!IStorage\b|IGenericStorage\b)\w+Storage\s+for\s+", code):
+            if re.search(r"impl\s+I(?:Approval|Approver|Client|Event|Intent|Ledger|Outbox|Policy|Price|Scenario|Signing|Wallet|WalletBalance)Repository\s+for\s+", code):
                 raise RuntimeError(f"{dialect} base must not implement domain ports")
             for domain in STORAGE_DOMAINS:
                 code = (root / domain / f"{dialect}.rs").read_text(encoding="utf-8")
@@ -972,12 +972,12 @@ class StructureVerifier:
             raise RuntimeError("CRUD requires compile-time entity fields and typed bindings")
         price = (REPOSITORY_ROOT / "src/model/domain/price.rs").read_text()
         domain = (REPOSITORY_ROOT / "src/model/domain/mod.rs").read_text()
-        if '"pay_price"' not in price or "pub struct PaymentPrice" not in price or "pub type PaymentPrice = PaymentPrice" not in domain:
-            raise RuntimeError("pricing must use pay_price/PaymentPrice with only the legacy type alias")
+        if '"pay_price"' not in price or "pub struct PaymentPrice" not in price or re.search(r"pub\s+type\s+PaymentPrice\s*=", domain):
+            raise RuntimeError("pricing must use only pay_price/PaymentPrice without a second type name")
         for package in ("handler", "storage", "payment", "controller"):
             for path in (REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
-                if re.search(r"\bpay_price\b", path.read_text()):
-                    raise RuntimeError(f"runtime SQL must use pay_price; old pay_price belongs only in migrations/tests: {path}")
+                if re.search(r"\bpay_offer\b", path.read_text()):
+                    raise RuntimeError(f"runtime SQL must use canonical pay_price: {path}")
 
 
     @staticmethod
@@ -996,6 +996,7 @@ class StructureVerifier:
         StructureVerifier._verify_controller_boundaries()
         StructureVerifier._verify_storage_boundaries()
         StructureVerifier._verify_source_limits()
+        StructureVerifier._verify_canonical_repository_names()
         for package in ("handler", "storage", "payment", "job", "config"):
             for path in (REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
                 if re.search(r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?fn\s", path.read_text()):
@@ -1007,6 +1008,20 @@ class StructureVerifier:
             raise RuntimeError("console wallet access must remain create plus public metadata only")
 
     @staticmethod
+    def _verify_canonical_repository_names() -> None:
+        for root in (REPOSITORY_ROOT / "src", E2E_ROOT / "deploy"):
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in SOURCE_SUFFIXES or GENERATED_DIRECTORIES.intersection(path.parts):
+                    continue
+                if {"tests", "test"}.intersection(path.relative_to(root).parts):
+                    continue
+                code = path.read_text(encoding="utf-8")
+                if re.search(r"\b(?:struct|class|trait|type|interface)\s+\w+Storage\b|pub\s+use\s+\w+\s+as\s+\w+Storage\b", code):
+                    raise RuntimeError(f"persistence types must use their canonical Repository name: {path}")
+                if re.search(r"\b(?:BasePostgresRepository|BaseSqliteRepository|PaymentOffer|OfferSpec)\b", code):
+                    raise RuntimeError(f"obsolete persistence/price alias must be removed: {path}")
+
+    @staticmethod
     def _verify_controller_boundaries() -> None:
         root = REPOSITORY_ROOT / "src" / "controller"
         for file, expected in (("grpc.rs", "GrpcController"), ("mqtt.rs", "MqttController")):
@@ -1015,9 +1030,9 @@ class StructureVerifier:
             if structs != [expected]:
                 raise RuntimeError(f"controller/{file} must contain only the {expected} listener: {structs}")
         api = (root / "api.rs").read_text()
-        required = ("struct ApiController", "struct ApiError", "management_router", '"/prices/resolve"', '"/offers/resolve"')
+        required = ("struct ApiController", "struct ApiError", "management_router", '"/prices/resolve"')
         if any(token not in api for token in required):
-            raise RuntimeError("API must register payment/pricing and independent management routes with compatible aliases")
+            raise RuntimeError("API must register canonical payment/pricing and independent management routes")
         if "LocalController" in (root / "mod.rs").read_text():
             raise RuntimeError("the removed local transport must not remain exposed")
         for package in ("controller", "transport"):
@@ -1269,7 +1284,7 @@ class StructureVerifier:
     @staticmethod
     def _verify_wallet_pool_contract() -> None:
         """Require five isolated Payer identities with two local wallets each."""
-        manifest = load_agentvault_resources(E2E_ROOT / "config/agentvault/init.import.yaml")
+        manifest = ConsoleResourceFixture.load_agentvault_resources(E2E_ROOT / "config/agentvault/init.import.yaml")
         wallets = {item.get("id"): item for item in manifest.get("wallets", [])}
         policies = {item.get("id"): item for item in manifest.get("policies", [])}
         scenarios = {item.get("id"): item for item in manifest.get("scenarios", [])}

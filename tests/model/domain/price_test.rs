@@ -3,9 +3,9 @@
 use super::*;
 
 #[test]
-fn duplicate_protocols_do_not_create_ambiguous_offer_semantics() {
-    let offer = PaymentPrice {
-        id: "offer-1".to_owned(),
+fn duplicate_protocols_do_not_create_ambiguous_price_semantics() {
+    let price = PaymentPrice {
+        id: "price-1".to_owned(),
         scenario_id: "scenario-1".to_owned(),
         policy_id: "policy-1".to_owned(),
         resource: "https://merchant.example/tool".to_owned(),
@@ -22,5 +22,5 @@ fn duplicate_protocols_do_not_create_ambiguous_offer_semantics() {
         created_at: 1,
         updated_at: 1,
     };
-    assert_eq!(offer.validate(), Err("protocols"));
+    assert_eq!(price.validate(), Err("protocols"));
 }

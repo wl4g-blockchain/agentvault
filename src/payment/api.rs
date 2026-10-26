@@ -40,17 +40,17 @@ use crate::payment::SettlementCoordinator;
 use crate::payment::WalletBalanceSource;
 use crate::payment::WalletImportService;
 use crate::protocol::ProtocolRegistry;
-use crate::storage::ApprovalStorage;
-use crate::storage::ClientStorage;
-use crate::storage::EventStorage;
+use crate::storage::IApprovalRepository;
+use crate::storage::IClientRepository;
+use crate::storage::IEventRepository;
+use crate::storage::IIntentRepository;
+use crate::storage::ILedgerRepository;
+use crate::storage::IPolicyRepository;
+use crate::storage::IPriceRepository;
+use crate::storage::IWalletRepository;
 use crate::storage::LedgerQuery;
-use crate::storage::LedgerStorage;
 use crate::storage::PageRequest;
 use crate::storage::PaymentQuery;
-use crate::storage::PaymentStorage;
-use crate::storage::PolicyStorage;
-use crate::storage::PriceStorage;
-use crate::storage::WalletStorage;
 use crate::Error;
 use crate::Result;
 
@@ -63,24 +63,24 @@ use crate::model::payment_api::{
 
 /// Dependencies for the transport-neutral payment application façade.
 pub struct PaymentApiDependencies {
-    pub clients: Arc<dyn ClientStorage>,
+    pub clients: Arc<dyn IClientRepository>,
     pub scenarios: Arc<ScenarioHandler>,
     pub payments_handler: Arc<crate::payment::PaymentAuthorizer>,
     pub signing_handler: Arc<OutboundSigner>,
     pub outbound_evidence_handler: Arc<MerchantEvidenceRecorder>,
     pub settlement_handler: Arc<SettlementCoordinator>,
-    pub offer_handler: Arc<PriceResolver>,
+    pub price_resolver: Arc<PriceResolver>,
     pub approval_handler: Arc<ApprovalWorkflow>,
     pub approval_authorizer: Arc<dyn ApprovalPrincipalAuthorizer>,
     pub payer_protocols: Arc<ProtocolRegistry>,
-    pub payments: Arc<dyn PaymentStorage>,
-    pub approvals: Arc<dyn ApprovalStorage>,
-    pub offers: Arc<dyn PriceStorage>,
-    pub policies: Arc<dyn PolicyStorage>,
-    pub wallets: Arc<dyn WalletStorage>,
+    pub payments: Arc<dyn IIntentRepository>,
+    pub approvals: Arc<dyn IApprovalRepository>,
+    pub prices: Arc<dyn IPriceRepository>,
+    pub policies: Arc<dyn IPolicyRepository>,
+    pub wallets: Arc<dyn IWalletRepository>,
     pub wallet_handler: Arc<WalletImportService>,
-    pub events: Arc<dyn EventStorage>,
-    pub ledger: Arc<dyn LedgerStorage>,
+    pub events: Arc<dyn IEventRepository>,
+    pub ledger: Arc<dyn ILedgerRepository>,
     pub balances: Arc<dyn WalletBalanceSource>,
     pub metrics: AgentVaultMetrics,
 }
@@ -94,13 +94,13 @@ pub struct PaymentApi {
     pub(crate) signing_handler: Arc<OutboundSigner>,
     pub(crate) outbound_evidence_handler: Arc<MerchantEvidenceRecorder>,
     pub(crate) settlement_handler: Arc<SettlementCoordinator>,
-    pub(crate) offer_handler: Arc<PriceResolver>,
+    pub(crate) price_resolver: Arc<PriceResolver>,
     pub(crate) approval_handler: Arc<ApprovalWorkflow>,
     pub(crate) approval_authorizer: Arc<dyn ApprovalPrincipalAuthorizer>,
     pub(crate) payer_protocols: Arc<ProtocolRegistry>,
     pub(crate) payments: Arc<IntentHandler>,
     pub(crate) approvals: Arc<ApprovalHandler>,
-    pub(crate) offers: Arc<PriceHandler>,
+    pub(crate) prices: Arc<PriceHandler>,
     pub(crate) policies: Arc<PolicyHandler>,
     pub(crate) wallets: Arc<WalletHandler>,
     pub(crate) wallet_handler: Arc<WalletImportService>,
@@ -120,13 +120,13 @@ impl PaymentApi {
             signing_handler: dependencies.signing_handler,
             outbound_evidence_handler: dependencies.outbound_evidence_handler,
             settlement_handler: dependencies.settlement_handler,
-            offer_handler: dependencies.offer_handler,
+            price_resolver: dependencies.price_resolver,
             approval_handler: dependencies.approval_handler,
             approval_authorizer: dependencies.approval_authorizer,
             payer_protocols: dependencies.payer_protocols,
             payments: Arc::new(IntentHandler::new(dependencies.payments)),
             approvals: Arc::new(ApprovalHandler::new(dependencies.approvals)),
-            offers: Arc::new(PriceHandler::new(dependencies.offers)),
+            prices: Arc::new(PriceHandler::new(dependencies.prices)),
             policies: Arc::new(PolicyHandler::new(dependencies.policies)),
             wallets: Arc::new(WalletHandler::new(dependencies.wallets)),
             wallet_handler: dependencies.wallet_handler,
@@ -308,7 +308,7 @@ impl PaymentApi {
     ) -> Result<ReportOutboundResponseResponse> {
         let mut operation_metric = self.metrics.payment_operation("settle", "outbound");
         request.context.validate()?;
-        let evidence = request.evidence()?;
+        let evidence = &request.evidence;
         let recorded = self
             .outbound_evidence_handler
             .record_merchant_response(
@@ -317,9 +317,9 @@ impl PaymentApi {
                     scenario_id: request.context.scenario_id.clone(),
                     run_id: request.context.run_id.clone(),
                     intent_id: intent_id.to_owned(),
-                    protocol: evidence.protocol,
-                    header_name: evidence.header_name,
-                    header_value: evidence.header_value,
+                    protocol: request.protocol.clone(),
+                    header_name: evidence.header_name.clone(),
+                    header_value: evidence.header_value.clone(),
                 },
                 now,
             )
@@ -517,23 +517,23 @@ impl PaymentApi {
         Ok(approval)
     }
 
-    pub(crate) async fn resolve_offer(&self, principal: &str, request: &ResolvePriceRequest) -> Result<PaymentPrice> {
+    pub(crate) async fn resolve_price(&self, principal: &str, request: &ResolvePriceRequest) -> Result<PaymentPrice> {
         let protocol = if let Some(protocol) = request.protocol.as_deref() {
             protocol.to_owned()
         } else {
             let _ = self.scenarios.authorize(principal, &request.scenario_id).await?;
-            let offer = self
-                .offers
+            let price = self
+                .prices
                 .resolve_resource(&request.scenario_id, &request.resource)
                 .await?
-                .ok_or_else(|| Error::NotFound("payment offer".to_owned()))?;
-            offer
+                .ok_or_else(|| Error::NotFound("payment price".to_owned()))?;
+            price
                 .protocols
                 .first()
                 .cloned()
-                .ok_or_else(|| Error::Storage("payment offer has no protocol".to_owned()))?
+                .ok_or_else(|| Error::Storage("payment price has no protocol".to_owned()))?
         };
-        self.offer_handler
+        self.price_resolver
             .resolve(principal, &request.scenario_id, &request.resource, &protocol)
             .await
     }
@@ -553,7 +553,7 @@ impl PaymentApi {
                 &IssuePaymentChallenge {
                     scenario_id: request.context.scenario_id.clone(),
                     run_id: request.context.run_id.clone(),
-                    offer_id: request.offer_id.clone(),
+                    price_id: request.price_id.clone(),
                     resource: request.resource.clone(),
                     origin: request.origin.clone(),
                     protocol: request.protocol.clone(),

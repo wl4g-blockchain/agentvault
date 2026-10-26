@@ -13,7 +13,7 @@ crate::storage::repository_entity! { "pay_price", Catalog;
     pub struct PaymentPrice {
         pub id: String,
         pub scenario_id: String,
-        /// Inbound-capable policy authorizing this offer and recipient wallet.
+        /// Inbound-capable policy authorizing this price and recipient wallet.
         pub policy_id: String,
         pub resource: String,
         #[sqlx(json)]

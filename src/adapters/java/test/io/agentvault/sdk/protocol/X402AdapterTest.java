@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 final class X402AdapterTest {
     @Test void emitsOnlyNativeX402ChallengeHeaders() throws Exception {
         PaymentChallenge challenge = new ObjectMapper().readValue("""
-                {"scenario_id":"scenario","offer_id":"offer","resource":"https://merchant.example/tool",
+                {"scenario_id":"scenario","price_id":"price","resource":"https://merchant.example/tool",
                  "protocol":"x402","asset":{"network":"eip155:42431","asset":"USDC","decimals":6},
                  "amount":"1000","recipient":"0x1111111111111111111111111111111111111111",
                  "nonce":"nonce","challenge_hash":"challenge","expires_at":2000000000,

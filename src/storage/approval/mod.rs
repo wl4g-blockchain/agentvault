@@ -102,9 +102,6 @@ pub trait IApprovalRepository: Send + Sync {
 #[path = "../../../tests/storage/approval/mod_test.rs"]
 mod tests;
 
-/// Compatibility import for the single repository contract.
-pub use IApprovalRepository as ApprovalStorage;
-
 mod validation {
     use crate::{
         model::{ApprovalRequest, ApprovalStatus, PaymentEvent, PaymentEventType, PaymentStatus, ReservationStatus},

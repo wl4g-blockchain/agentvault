@@ -1,16 +1,16 @@
 //! Client repository; ordinary CRUD is generated from `PaymentClient`.
 use crate::{
     model::PaymentClient,
-    storage::{postgres::BasePostgresRepository, ClientStorage, EntityComparison, EntityQuery, Page, PageRequest},
+    storage::{postgres::PostgresRepository, EntityComparison, EntityQuery, IClientRepository, Page, PageRequest},
     Error, Result,
 };
 use async_trait::async_trait;
 #[derive(Clone)]
 pub struct ClientPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 #[async_trait]
-impl ClientStorage for ClientPostgresRepository {
+impl IClientRepository for ClientPostgresRepository {
     async fn insert(&self, client: &PaymentClient) -> Result<PaymentClient> {
         client
             .validate()
@@ -46,7 +46,7 @@ impl ClientStorage for ClientPostgresRepository {
     }
 }
 impl ClientPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 }

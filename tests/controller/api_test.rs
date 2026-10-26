@@ -6,21 +6,28 @@ use axum::{
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn canonical_and_compatibility_price_routes_reach_the_same_handlers() {
-    let router = ApiController::price_routes(
-        Router::new(),
-        post(|| async { StatusCode::CREATED }),
-        get(|| async { StatusCode::ACCEPTED }),
-    );
+async fn price_routes_require_canonical_names() {
+    let fixture = PriceApiFixture::new().await;
+    let owner = fixture.principal(&fixture.owner.client.auth_principal).await;
     for (method, path, status) in [
-        ("POST", "/prices/resolve", StatusCode::CREATED),
-        ("POST", "/offers/resolve", StatusCode::CREATED),
-        ("GET", "/admin/prices", StatusCode::ACCEPTED),
-        ("GET", "/admin/offers", StatusCode::ACCEPTED),
+        (
+            "GET",
+            format!("/admin/prices?scenario_id={}", fixture.owner.scenario.id),
+            StatusCode::OK,
+        ),
+        ("POST", "/prices/resolve".to_owned(), StatusCode::UNPROCESSABLE_ENTITY),
+        ("GET", "/admin/offers".to_owned(), StatusCode::NOT_FOUND),
+        ("POST", "/offers/resolve".to_owned(), StatusCode::NOT_FOUND),
     ] {
-        let request = Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
-        assert_eq!(router.clone().oneshot(request).await.unwrap().status(), status);
+        assert_eq!(
+            fixture
+                .request(Some(owner.clone()), method, &path, serde_json::Value::Null)
+                .await
+                .status(),
+            status
+        );
     }
+    fixture.close().await;
 }
 
 #[test]
@@ -187,7 +194,7 @@ async fn price_admin_rejects_unauthenticated_and_cross_scenario_writes() {
     use serde_json::json;
     let fixture = PriceApiFixture::new().await;
     let outsider = fixture.principal(&fixture.outsider.client.auth_principal).await;
-    let price = &fixture.owner.offer;
+    let price = &fixture.owner.price;
     let path = format!("/admin/prices/{}", price.id);
     let spec = PriceApiFixture::spec(price);
     assert_eq!(
@@ -220,7 +227,7 @@ async fn price_admin_rejects_unauthenticated_and_cross_scenario_writes() {
         );
     }
     assert_eq!(
-        fixture.owner.ports.offers.get(&price.id).await.unwrap(),
+        fixture.owner.ports.prices.get(&price.id).await.unwrap(),
         Some(price.clone())
     );
     fixture.close().await;
@@ -231,8 +238,8 @@ async fn price_admin_create_update_delete_uses_server_revisions() {
     use serde_json::json;
     let fixture = PriceApiFixture::new().await;
     let owner = fixture.principal(&fixture.owner.client.auth_principal).await;
-    let mut spec = PriceApiFixture::spec(&fixture.owner.offer);
-    let id = format!("{}-new", fixture.owner.offer.id);
+    let mut spec = PriceApiFixture::spec(&fixture.owner.price);
+    let id = format!("{}-new", fixture.owner.price.id);
     spec["id"] = json!(id);
     spec["resource"] = json!("https://feed.example/new-price");
     let created = fixture

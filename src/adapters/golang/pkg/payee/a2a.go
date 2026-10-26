@@ -114,7 +114,7 @@ func (middleware *PayeeMiddleware) prepareA2ACall(ctx context.Context, body []by
 		bound.Metadata = map[string]any{}
 	}
 	scope := map[string]string{"agentvault.payment.run_id": runID,
-		"agentvault.payment.scenario_id": operation.ScenarioID, "agentvault.payment.offer_id": operation.PriceID}
+		"agentvault.payment.scenario_id": operation.ScenarioID, "agentvault.payment.price_id": operation.PriceID}
 	for key, value := range scope {
 		if existing, found := bound.Metadata[key]; found && existing != value {
 			return nil, errors.New("A2A task is bound to a different payment scope")
@@ -166,7 +166,7 @@ func (middleware *PayeeMiddleware) persistA2ATask(call *mcpCall, body []byte) er
 	if response.Result.Metadata == nil {
 		response.Result.Metadata = map[string]any{}
 	}
-	for _, key := range []string{"agentvault.payment.run_id", "agentvault.payment.scenario_id", "agentvault.payment.offer_id"} {
+	for _, key := range []string{"agentvault.payment.run_id", "agentvault.payment.scenario_id", "agentvault.payment.price_id"} {
 		if value, present := response.Result.Metadata[key]; present && value != call.a2a.task.Metadata[key] {
 			return errors.New("A2A handler changed payment scope")
 		}

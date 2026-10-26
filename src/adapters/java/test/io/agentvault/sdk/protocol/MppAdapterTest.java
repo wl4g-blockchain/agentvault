@@ -27,7 +27,7 @@ final class MppAdapterTest {
                 .put("www_authenticate", nativeChallenge.toWwwAuthenticate()
                         + ", header=\"Payment-Authorization\"");
         PaymentChallenge challenge = new PaymentChallenge(
-                "scenario", "offer", "https://merchant.example/tool", "mpp",
+                "scenario", "price", "https://merchant.example/tool", "mpp",
                 new AssetIdentity("eip155:42431", "USDC", null, 6), "1000",
                 "0x1111111111111111111111111111111111111111", "nonce", "challenge",
                 2_000_000_000L, payload);

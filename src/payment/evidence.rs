@@ -10,8 +10,8 @@ use crate::{
     model::canonicalize_payment_recipient, model::OutboundEvidenceObservation, model::PaymentChallenge,
     model::PaymentCredential, model::PaymentDirection, model::PaymentEvent, model::PaymentEventType,
     model::PaymentIntent, model::PaymentLedgerEntry, model::PaymentStatus, model::RecordOutboundPaymentResponse,
-    model::RecordedOutboundEvidence, payment::validation::PaymentValidation, storage::EventStorage,
-    storage::IdempotentWrite, storage::OutboundEvidenceWrite, storage::PaymentStorage,
+    model::RecordedOutboundEvidence, payment::validation::PaymentValidation, storage::IEventRepository,
+    storage::IIntentRepository, storage::IdempotentWrite, storage::OutboundEvidenceWrite,
     utils::secure_material::SealedSensitiveMaterial, utils::secure_material::SensitiveMaterialProtector, Error, Result,
 };
 use serde::{Deserialize, Serialize};
@@ -30,8 +30,8 @@ struct ValidatedMerchantEvidence {
 
 pub struct OutboundEvidenceDependencies {
     pub scenarios: Arc<ScenarioHandler>,
-    pub payments: Arc<dyn PaymentStorage>,
-    pub events: Arc<dyn EventStorage>,
+    pub payments: Arc<dyn IIntentRepository>,
+    pub events: Arc<dyn IEventRepository>,
     pub protocols: Arc<ProtocolRegistry>,
     pub material_protector: Arc<dyn SensitiveMaterialProtector>,
     pub receipts: Arc<dyn ReceiptSource>,
@@ -41,8 +41,8 @@ pub struct OutboundEvidenceDependencies {
 /// outbound reconciliation observation.
 pub struct MerchantEvidenceRecorder {
     scenarios: Arc<ScenarioHandler>,
-    payments: Arc<dyn PaymentStorage>,
-    events: Arc<dyn EventStorage>,
+    payments: Arc<dyn IIntentRepository>,
+    events: Arc<dyn IEventRepository>,
     protocols: Arc<ProtocolRegistry>,
     material_protector: Arc<dyn SensitiveMaterialProtector>,
     receipts: Arc<dyn ReceiptSource>,

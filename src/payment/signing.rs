@@ -10,6 +10,7 @@ use crate::model::ReservationStatus;
 use crate::model::SignAuthorizedPayment;
 use crate::model::SignedOutboundPayment;
 use crate::payment::validation::PaymentValidation;
+use crate::storage::ISigningRepository;
 use crate::storage::IdempotentWrite;
 use crate::storage::IntentBoundPaymentSignatureRequest;
 use crate::storage::OutboundSigningAuthorization;
@@ -19,7 +20,6 @@ use crate::storage::OutboxMessage;
 use crate::storage::OutboxStatus;
 use crate::storage::PersistedSignedPayment;
 use crate::storage::SigningGuard;
-use crate::storage::SigningStorage;
 use crate::storage::SigningWrite;
 use crate::storage::WalletCustody;
 use crate::storage::WalletKeyStatus;
@@ -37,7 +37,7 @@ use zeroize::Zeroizing;
 
 /// Collaborators for the intent-bound outbound signing application service.
 pub struct OutboundSigningDependencies {
-    pub storage: Arc<dyn SigningStorage>,
+    pub storage: Arc<dyn ISigningRepository>,
     pub protocols: Arc<ProtocolRegistry>,
     pub balances: Arc<dyn WalletBalanceSource>,
     pub signer: Arc<dyn WalletPaymentSigner>,
@@ -47,7 +47,7 @@ pub struct OutboundSigningDependencies {
 /// Revalidates authorization and balances immediately before an adapter-owned
 /// payment digest reaches local custody.
 pub struct OutboundSigner {
-    storage: Arc<dyn SigningStorage>,
+    storage: Arc<dyn ISigningRepository>,
     protocols: Arc<ProtocolRegistry>,
     balances: Arc<dyn WalletBalanceSource>,
     signer: Arc<dyn WalletPaymentSigner>,
@@ -320,7 +320,7 @@ impl OutboundSigner {
         if identity.intent.id != command.intent_id
             || identity.challenge != command.challenge
             || identity.challenge.scenario_id != identity.scenario.id
-            || identity.challenge.offer_id.is_some()
+            || identity.challenge.price_id.is_some()
         {
             return Err(Error::PaymentConflict(
                 "payment challenge does not match its durable intent".to_owned(),

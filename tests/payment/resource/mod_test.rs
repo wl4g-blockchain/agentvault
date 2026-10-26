@@ -8,7 +8,7 @@ use crate::{config::SecretRefConfig, model::BudgetUnit};
 
 use super::*;
 use crate::config::StorageProvider;
-use crate::storage::sqlite::SqliteStorage;
+use crate::storage::sqlite::SqliteRepository;
 use crate::storage::EncryptedWalletKeyVersion;
 use crate::utils::aead::UuidNonceCodec;
 use crate::utils::aead::WALLET_KEY_ENCRYPTION_SCHEME;
@@ -19,8 +19,8 @@ fn assert_aes_uuid_envelope(version: &EncryptedWalletKeyVersion) {
     assert!(UuidNonceCodec::parse(&version.key_nonce).is_ok());
 }
 
-async fn assert_imported_key_is_active(storage: &SqliteStorage, version: &EncryptedWalletKeyVersion) {
-    let client = ClientStorage::get(
+async fn assert_imported_key_is_active(storage: &SqliteRepository, version: &EncryptedWalletKeyVersion) {
+    let client = IClientRepository::get(
         &crate::storage::client::sqlite::ClientSqliteRepository::new(storage.clone()),
         "client",
     )
@@ -71,7 +71,7 @@ data:
 ---
 consoleVersion: core.agentvault.io/v1
 kind: Price
-metadata: {{ name: offer }}
+metadata: {{ name: price }}
 data:
   scenario_id: scenario
   policy_id: policy
@@ -281,7 +281,7 @@ async fn sqlite_resource_import_is_idempotent_encrypted_and_drift_safe() {
         .unwrap();
     assert_eq!(second, ImportReport { created: 0, reused: 6 });
 
-    let storage = SqliteStorage::connect(&config.storage.sqlite).await.unwrap();
+    let storage = SqliteRepository::connect(&config.storage.sqlite).await.unwrap();
     let stored_wallet = crate::storage::wallet::sqlite::WalletSqliteRepository::new(storage.clone())
         .get_payment_wallet("wallet")
         .await
@@ -314,7 +314,7 @@ async fn sqlite_resource_import_is_idempotent_encrypted_and_drift_safe() {
         Err(Error::PaymentConflict(_))
     ));
     assert_eq!(
-        ClientStorage::get(
+        IClientRepository::get(
             &crate::storage::client::sqlite::ClientSqliteRepository::new(storage.clone()),
             "client"
         )
@@ -357,7 +357,7 @@ async fn import_reuses_policy_derived_wallet_budget_unit() {
             .unwrap(),
         ImportReport { created: 4, reused: 0 }
     );
-    let storage = SqliteStorage::connect(&config.storage.sqlite).await.unwrap();
+    let storage = SqliteRepository::connect(&config.storage.sqlite).await.unwrap();
     assert_eq!(
         crate::storage::wallet::sqlite::WalletSqliteRepository::new(storage.clone())
             .get_payment_wallet("revenue-wallet")

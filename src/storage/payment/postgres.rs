@@ -5,7 +5,7 @@ use crate::{
         ledger::postgres::LedgerPostgresRepository as LedgerRepository,
         outbox::postgres::OutboxPostgresRepository as OutboxRepository,
         policy::postgres::PolicyPostgresRepository as PolicyRepository,
-        postgres::{dynamic_postgres as dynamic_query, BasePostgresRepository as BaseRepository},
+        postgres::{dynamic_postgres as dynamic_query, PostgresRepository as BaseRepository},
         scenario::postgres::ScenarioPostgresRepository as ScenarioRepository,
         wallet::postgres::WalletPostgresRepository as WalletRepository,
     },

@@ -115,21 +115,6 @@ impl PaymentProtocolFactory {
     }
 }
 
-impl ProtocolRegistry {
-    /// Compatibility constructor retained for existing embedders. New runtime
-    /// assembly should use [`PaymentProtocolFactory`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when two adapters claim the same protocol name.
-    pub fn new(adapters: impl IntoIterator<Item = Arc<dyn PaymentProtocol>>) -> Result<Self> {
-        adapters
-            .into_iter()
-            .fold(PaymentProtocolFactory::new(), PaymentProtocolFactory::register)
-            .build()
-    }
-}
-
 #[cfg(test)]
 #[path = "../../tests/protocol/factory_test.rs"]
 mod tests;

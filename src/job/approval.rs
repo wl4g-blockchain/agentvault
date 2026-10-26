@@ -1,12 +1,12 @@
 use super::{SystemUnixClock, UnixClock};
-use crate::{model::ApprovalExpirationRun, storage::ApprovalStorage, Error, Result};
+use crate::{model::ApprovalExpirationRun, storage::IApprovalRepository, Error, Result};
 use std::sync::Arc;
 
 const MAX_EXPIRATION_BATCH_SIZE: u32 = 10_000;
 
 /// Bounded expiration worker for pending approvals and unconsumed grants.
 pub struct ApprovalExpirationJob {
-    storage: Arc<dyn ApprovalStorage>,
+    storage: Arc<dyn IApprovalRepository>,
     clock: Arc<dyn UnixClock>,
     batch_size: u32,
 }
@@ -17,7 +17,7 @@ impl ApprovalExpirationJob {
     /// # Errors
     ///
     /// Returns a configuration error when the batch size is invalid.
-    pub fn new(storage: Arc<dyn ApprovalStorage>, batch_size: u32) -> Result<Self> {
+    pub fn new(storage: Arc<dyn IApprovalRepository>, batch_size: u32) -> Result<Self> {
         Self::with_clock(storage, Arc::new(SystemUnixClock), batch_size)
     }
 
@@ -26,7 +26,11 @@ impl ApprovalExpirationJob {
     /// # Errors
     ///
     /// Returns a configuration error when the batch size is invalid.
-    pub fn with_clock(storage: Arc<dyn ApprovalStorage>, clock: Arc<dyn UnixClock>, batch_size: u32) -> Result<Self> {
+    pub fn with_clock(
+        storage: Arc<dyn IApprovalRepository>,
+        clock: Arc<dyn UnixClock>,
+        batch_size: u32,
+    ) -> Result<Self> {
         if batch_size == 0 || batch_size > MAX_EXPIRATION_BATCH_SIZE {
             return Err(Error::Config(format!(
                 "approval expiry batch_size must be between 1 and {MAX_EXPIRATION_BATCH_SIZE}"

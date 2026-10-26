@@ -4,7 +4,7 @@ import { operationContext, validatePayeeOperation } from '../../../src/agentvaul
 
 test('payee phases reuse one run identity', () => {
   const operation = {
-    scenarioId: 'scenario', runId: 'run', offerId: 'offer',
+    scenarioId: 'scenario', runId: 'run', priceId: 'price',
     resource: 'mcp://marketpulse/realtime', origin: 'https://marketpulse.test', protocol: 'x402', requestHash: 'hash',
   };
   assert.doesNotThrow(() => validatePayeeOperation(operation));

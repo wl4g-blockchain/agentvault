@@ -1,5 +1,6 @@
 //! Native MPP challenge, reference and receipt projections.
 use super::*;
+use mpp::protocol::methods::tempo::TempoChargeExt as _;
 
 pub(super) struct MppWire;
 impl MppWire {
@@ -41,16 +42,9 @@ impl MppWire {
                 ));
             }
         }
-        let chain_id = details
-            .get("chainId")
-            .and_then(|value| {
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .or_else(|| value.as_u64().map(|value| value.to_string()))
-            })
-            .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
-            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo chainId is missing or invalid".to_owned()))?;
+        let chain_id = request
+            .chain_id()
+            .ok_or_else(|| Error::PaymentProtocol("MPP Tempo chainId must be a numeric integer".to_owned()))?;
         Ok(format!("eip155:{chain_id}"))
     }
 

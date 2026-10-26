@@ -218,7 +218,7 @@ pub enum ReplayCheck {
 pub struct PaymentChallenge {
     pub scenario_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub offer_id: Option<String>,
+    pub price_id: Option<String>,
     pub resource: String,
     pub protocol: String,
     pub asset: AssetIdentity,

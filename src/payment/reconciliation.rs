@@ -2,8 +2,8 @@ use super::{reconciliation_posting::ReconciliationPosting, ReconciliationEvidenc
 use crate::{
     model::ConfirmedSettlement, model::PaymentDirection, model::PaymentEvent, model::PaymentEventType,
     model::PaymentIntent, model::PaymentStatus, model::ReconciliationEvidence, model::ReconciliationRun,
-    model::ReservationStatus, storage::OutboxMessage, storage::OutboxStatus, storage::PaymentProgressWrite,
-    storage::PaymentStorage, storage::ReconciliationLeaseRequest, storage::SettlementWrite,
+    model::ReservationStatus, storage::IIntentRepository, storage::OutboxMessage, storage::OutboxStatus,
+    storage::PaymentProgressWrite, storage::ReconciliationLeaseRequest, storage::SettlementWrite,
     utils::clock::SystemUnixClock, utils::clock::UnixClock, Error, Result,
 };
 use serde_json::json;
@@ -54,7 +54,7 @@ impl ReconciliationConfig {
 /// Read-only settlement evidence boundary. Provider and chain-specific query
 /// behavior belongs in adapters, not in the scheduling job.
 pub struct PaymentReconciler {
-    storage: Arc<dyn PaymentStorage>,
+    storage: Arc<dyn IIntentRepository>,
     evidence: Arc<dyn ReconciliationEvidenceSource>,
     clock: Arc<dyn UnixClock>,
     config: ReconciliationConfig,
@@ -70,7 +70,7 @@ impl PaymentReconciler {
     ///
     /// Returns an error when the worker configuration is invalid.
     pub fn new(
-        storage: Arc<dyn PaymentStorage>,
+        storage: Arc<dyn IIntentRepository>,
         evidence: Arc<dyn ReconciliationEvidenceSource>,
         config: ReconciliationConfig,
     ) -> Result<Self> {
@@ -83,7 +83,7 @@ impl PaymentReconciler {
     ///
     /// Returns an error when the worker configuration is invalid.
     pub fn with_clock(
-        storage: Arc<dyn PaymentStorage>,
+        storage: Arc<dyn IIntentRepository>,
         evidence: Arc<dyn ReconciliationEvidenceSource>,
         clock: Arc<dyn UnixClock>,
         config: ReconciliationConfig,

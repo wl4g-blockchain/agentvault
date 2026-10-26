@@ -21,7 +21,7 @@ test('A2A both roles, both protocols retain native Task and business failure rec
     await store.save({kind:'task', id:'task-1', contextId:'context-1', status:{state:'submitted'}});
     const app = express(); let executions = 0;
     const middleware = new PayeeMiddleware(vault, {protocols:[protocol]}).express([{
-      method:'POST', path:'/a2a', scenarioId:'scenario', offerId:'offer', resource:'mcp://marketpulse/realtime',
+      method:'POST', path:'/a2a', scenarioId:'scenario', priceId:'price', resource:'mcp://marketpulse/realtime',
       origin:'https://merchant.test', protocol, a2aTaskStore:store,
     }]);
     app.post('/a2a', ...middleware.handlers(), (req, res) => {
@@ -140,7 +140,7 @@ class A2ATestVault implements VaultTransport {
   private challengeBase(nonce: string) {
     return {
       scenario_id: 'scenario',
-      offer_id: 'offer',
+      price_id: 'price',
       resource: 'mcp://marketpulse/realtime',
       protocol: this.protocol,
       asset: this.asset(),
@@ -157,7 +157,7 @@ class A2ATestVault implements VaultTransport {
       id: 'intent-1',
       scenario_id: 'scenario',
       run_id: 'run-1',
-      offer_id: 'offer',
+      price_id: 'price',
       direction: 'inbound',
       protocol: this.protocol,
       asset: this.asset(),

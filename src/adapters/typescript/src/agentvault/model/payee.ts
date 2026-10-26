@@ -30,7 +30,7 @@ export interface PaymentPrice {
 export interface PayeeOperation {
   scenarioId: string;
   runId: string;
-  offerId: string;
+  priceId: string;
   resource: string;
   origin: string;
   protocol: string;
@@ -39,7 +39,7 @@ export interface PayeeOperation {
 }
 
 export interface CreateChallengeRequest extends OperationContext {
-  offer_id: string;
+  price_id: string;
   resource: string;
   origin: string;
   protocol: string;
@@ -94,7 +94,7 @@ export function validateResolvePriceRequest(request: ResolvePriceRequest): void 
 export function validatePayeeOperation(operation: PayeeOperation): void {
   for (const [name, value] of [
     ['scenarioId', operation.scenarioId], ['runId', operation.runId],
-    ['offerId', operation.offerId],
+    ['priceId', operation.priceId],
     ['resource', operation.resource], ['origin', operation.origin],
     ['protocol', operation.protocol], ['requestHash', operation.requestHash],
   ]) {

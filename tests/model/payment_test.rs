@@ -7,7 +7,7 @@ fn outbound_intent() -> PaymentIntent {
         run_id: "run-1".to_owned(),
         wallet_id: Some("wallet-1".to_owned()),
         policy_id: Some("policy-1".to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: PaymentDirection::Outbound,
         protocol: "x402".to_owned(),
         asset: AssetIdentity {

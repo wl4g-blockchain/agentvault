@@ -39,7 +39,7 @@ transport does not change middleware configuration or application handlers.
 
 MQTT keeps one connection and callback/event loop per transport instance. Go
 exposes `DoAsync`, Python `request_async`, Java `getAsync`/`postAsync`, and
-Rust/TypeScript return Futures/Promises. Synchronous compatibility methods wait
+Rust/TypeScript return Futures/Promises. Request/response entrypoints wait
 on that same asynchronous implementation. Both commands and result subscriptions
 require QoS 1; a rejected or downgraded subscription fails closed.
 
@@ -79,9 +79,9 @@ signing, bounded delivery and receipt reporting for HTTP, MCP and A2A.
 The host supplies **its existing TaskStore** and authorizes access to tasks before
 the payment middleware. Do not expose another tenant's tasks through that store.
 The SDK preserves existing task/context/message IDs and application metadata,
-and records the run/scenario/offer binding in SDK-owned Task metadata. A task
+and records the run/scenario/price binding in SDK-owned Task metadata. A task
 created by the payment interceptor uses `run_id` as its stable Task ID; existing
-Task IDs may differ. The same paid task cannot be rebound to another run or offer.
+Task IDs may differ. The same paid task cannot be rebound to another run or price.
 Use a durable host TaskStore for restart recovery. Rust's upstream `a2a-types`
 provides wire types only, so implement the SDK's small `A2aTaskStore` port over the
 host store; the other languages directly use their upstream TaskStore contract.
@@ -103,7 +103,7 @@ by Flowgent; it does not claim support for every A2A version or transport bindin
 
 Construct `vault` through the SDK's typed `AgentVault.from_config` /
 `fromConfig` / `NewFromConfig` entrypoint. In these snippets `store` is the
-application's TaskStore, `route` contains its existing scenario, offer, resource
+application's TaskStore, `route` contains its existing scenario, price, resource
 and origin, and `request` contains an upstream `MessageSendParams` JSON-RPC body.
 Selecting MQTT versus gRPC in Vault configuration does not change this code.
 
@@ -113,7 +113,7 @@ Selecting MQTT versus gRPC in Vault configuration does not change this code.
 | Rust | `core.axum(vec![route]).with_a2a_task_store("/a2a", store)`; leave `route.mcp_tool` unset | `core.standard().client()?.post(url).header("content-type", "application/json").body(body).with_payment(operation).send().await` |
 | Python | `FastPayeeRoute(..., a2a_task_store=store)` with `core.fast(app, routes)` | `await core.standard().post(url, json=request, operation=operation)` |
 | TypeScript | Set `a2aTaskStore: store` on `core.express([route])`; mount its `handlers()` before the application's JSON body parser | `await core.standard().request(url, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(request)}, operation)` |
-| Java | `SpringInterceptorPayeeMiddleware.Route.a2a(path, scenario, offer, resource, origin, protocol, store)` through `core.spring(routes)` | `core.jdkHttp().send(request, body, operation)` or the existing Spring Rest/WebFlux adapters |
+| Java | `SpringInterceptorPayeeMiddleware.Route.a2a(path, scenario, price, resource, origin, protocol, store)` through `core.spring(routes)` | `core.jdkHttp().send(request, body, operation)` or the existing Spring Rest/WebFlux adapters |
 
 Use `PayeeMiddleware.A2AAgentCard` (Go), `a2a_agent_card` (Rust), or
 `core.a2a().agent_card/agentCard` (Python/TypeScript/Java) to declare the enabled

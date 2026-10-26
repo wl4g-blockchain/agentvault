@@ -8,7 +8,7 @@ fn axum_adapter_binds_an_exact_mcp_tool() {
         "/mcp",
         "marketpulse.realtime",
         "scenario",
-        "offer",
+        "price",
         "mcp://marketpulse/realtime",
         "https://marketpulse.example",
     );

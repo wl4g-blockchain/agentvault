@@ -141,7 +141,7 @@ impl SettlementFacts {
     pub(crate) fn validate_issue_command(command: &IssuePaymentChallenge) -> Result<()> {
         PaymentValidation::validate_identifier("scenario_id", &command.scenario_id)?;
         PaymentValidation::validate_identifier("run_id", &command.run_id)?;
-        PaymentValidation::validate_identifier("offer_id", &command.offer_id)?;
+        PaymentValidation::validate_identifier("price_id", &command.price_id)?;
         PaymentValidation::validate_identifier("protocol", &command.protocol)?;
         PaymentValidation::validate_identifier("request_hash", &command.request_hash)?;
         if command.resource.trim().is_empty()
@@ -156,7 +156,7 @@ impl SettlementFacts {
 
     pub(crate) fn build_inbound_intent(
         command: &IssuePaymentChallenge,
-        offer: &PaymentPrice,
+        price: &PaymentPrice,
         wallet: &crate::model::wallet::Wallet,
         challenge: &PaymentChallenge,
         now: i64,
@@ -165,21 +165,21 @@ impl SettlementFacts {
             id: Uuid::new_v4().to_string(),
             scenario_id: command.scenario_id.clone(),
             run_id: command.run_id.clone(),
-            wallet_id: Some(offer.wallet_id.clone()),
-            policy_id: Some(offer.policy_id.clone()),
-            offer_id: Some(offer.id.clone()),
+            wallet_id: Some(price.wallet_id.clone()),
+            policy_id: Some(price.policy_id.clone()),
+            price_id: Some(price.id.clone()),
             direction: PaymentDirection::Inbound,
             protocol: command.protocol.clone(),
-            asset: offer.asset.clone(),
+            asset: price.asset.clone(),
             recipient: wallet.address.clone(),
-            amount: offer.amount,
+            amount: price.amount,
             settled_amount: Amount::ZERO,
-            resource: offer.resource.clone(),
+            resource: price.resource.clone(),
             challenge_hash: Some(challenge.challenge_hash.clone()),
             request_hash: command.request_hash.clone(),
             status: PaymentStatus::Created,
             reservation_status: ReservationStatus::Reserved,
-            reserved_amount: offer.amount,
+            reserved_amount: price.amount,
             tx_hash: None,
             settlement_ref: None,
             next_reconcile_at: None,
@@ -230,7 +230,7 @@ impl SettlementFacts {
     pub(crate) fn ensure_replay_identity(intent: &PaymentIntent, command: &IssuePaymentChallenge) -> Result<()> {
         if intent.scenario_id != command.scenario_id
             || intent.run_id != command.run_id
-            || intent.offer_id.as_deref() != Some(command.offer_id.as_str())
+            || intent.price_id.as_deref() != Some(command.price_id.as_str())
             || intent.resource != command.resource
             || intent.protocol != command.protocol
             || intent.request_hash != command.request_hash
@@ -256,21 +256,21 @@ impl SettlementFacts {
 
     pub(crate) fn validate_payee_challenge(
         challenge: &PaymentChallenge,
-        offer: &PaymentPrice,
+        price: &PaymentPrice,
         wallet: &crate::model::wallet::Wallet,
         now: i64,
     ) -> Result<()> {
-        if challenge.scenario_id != offer.scenario_id
-            || challenge.offer_id.as_deref() != Some(offer.id.as_str())
-            || challenge.resource != offer.resource
-            || challenge.asset != offer.asset
-            || challenge.amount != offer.amount
+        if challenge.scenario_id != price.scenario_id
+            || challenge.price_id.as_deref() != Some(price.id.as_str())
+            || challenge.resource != price.resource
+            || challenge.asset != price.asset
+            || challenge.amount != price.amount
             || !wallet.address_matches(&challenge.recipient)
             || challenge.expires_at <= now
             || challenge.challenge_hash.trim().is_empty()
         {
             return Err(Error::PaymentProtocol(
-                "adapter produced a challenge inconsistent with the offer".to_owned(),
+                "adapter produced a challenge inconsistent with the price".to_owned(),
             ));
         }
         Ok(())

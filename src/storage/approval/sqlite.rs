@@ -3,7 +3,7 @@ use crate::{
         event::sqlite::EventSqliteRepository as EventRepository,
         outbox::sqlite::OutboxSqliteRepository as OutboxRepository,
         payment::sqlite::PaymentSqliteRepository as PaymentRepository,
-        sqlite::{dynamic_sqlite as dynamic_query, BaseSqliteRepository as BaseRepository},
+        sqlite::{dynamic_sqlite as dynamic_query, SqliteRepository as BaseRepository},
     },
     utils::storage::SqliteAmountCodec as AmountCodec,
 };

@@ -54,7 +54,7 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             String method,
             String path,
             String scenarioId,
-            String offerId,
+            String priceId,
             String resource,
             String origin,
             String protocol,
@@ -64,12 +64,12 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 String method,
                 String path,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin,
                 String protocol,
                 String mcpTool) {
-            this(method, path, scenarioId, offerId, resource, origin, protocol, mcpTool, null);
+            this(method, path, scenarioId, priceId, resource, origin, protocol, mcpTool, null);
         }
 
         public Route {
@@ -80,7 +80,7 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
         public static Route a2a(
                 String path,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin,
                 String protocol,
@@ -89,7 +89,7 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                     "POST",
                     path,
                     scenarioId,
-                    offerId,
+                    priceId,
                     resource,
                     origin,
                     protocol,
@@ -101,21 +101,21 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 String path,
                 String tool,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin) {
-            return mcpToolWithProtocol(path, tool, scenarioId, offerId, resource, origin, "x402");
+            return mcpToolWithProtocol(path, tool, scenarioId, priceId, resource, origin, "x402");
         }
 
         public static Route mcpToolWithProtocol(
                 String path,
                 String tool,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin,
                 String protocol) {
-            return new Route("POST", path, scenarioId, offerId, resource, origin, protocol, tool);
+            return new Route("POST", path, scenarioId, priceId, resource, origin, protocol, tool);
         }
     }
 
@@ -188,7 +188,7 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                                         body,
                                         runId,
                                         route.scenarioId(),
-                                        route.offerId(),
+                                        route.priceId(),
                                         route.protocol(),
                                         route.a2aTaskStore(),
                                         requestHeaders);
@@ -218,7 +218,7 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                             new PayeeOperation(
                                     route.scenarioId(),
                                     runId,
-                                    route.offerId(),
+                                    route.priceId(),
                                     route.resource(),
                                     route.origin(),
                                     route.protocol(),

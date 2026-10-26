@@ -430,8 +430,8 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
             }
         }
         return switch (path) {
-            case "/api/v1/offers/resolve" ->
-                    new Operation("resolve-offer", "payment.resolve_offer", "payment.offer_resolved");
+            case "/api/v1/prices/resolve" ->
+                    new Operation("resolve-price", "payment.resolve_price", "payment.price_resolved");
             case "/api/v1/payee/challenges" ->
                     new Operation("create-challenge", "payment.create_challenge", "payment.challenge_created");
             case "/api/v1/payee/verify" ->

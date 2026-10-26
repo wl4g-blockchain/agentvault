@@ -1,6 +1,6 @@
 use crate::storage::outbox::postgres::OutboxPostgresRepository;
 use crate::storage::postgres::tests::*;
-use crate::storage::OutboxStorage as _;
+use crate::storage::IOutboxRepository as _;
 
 #[tokio::test]
 #[ignore = "requires AGENTVAULT_TEST_POSTGRES_URL pointing at a dedicated PostgreSQL database"]

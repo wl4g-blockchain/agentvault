@@ -74,7 +74,7 @@ public final class Base {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PaymentChallenge(
             @JsonProperty("scenario_id") String scenarioId,
-            @JsonProperty("offer_id") String offerId,
+            @JsonProperty("price_id") String priceId,
             String resource,
             String protocol,
             AssetIdentity asset,
@@ -119,7 +119,7 @@ public final class Base {
             @JsonProperty("run_id") String runId,
             @JsonProperty("wallet_id") String walletId,
             @JsonProperty("policy_id") String policyId,
-            @JsonProperty("offer_id") String offerId,
+            @JsonProperty("price_id") String priceId,
             PaymentDirection direction,
             String protocol,
             AssetIdentity asset,

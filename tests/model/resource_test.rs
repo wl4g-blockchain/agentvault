@@ -53,8 +53,8 @@ fn import_specs_copy_every_shared_field_into_domain_entities() {
     assert_eq!(policy.assets.as_slice(), std::slice::from_ref(&asset));
     assert_eq!((policy.created_at, policy.updated_at), (imported_at, imported_at));
 
-    let offer = PriceSpec {
-        id: "offer-1".to_owned(),
+    let price = PriceSpec {
+        id: "price-1".to_owned(),
         scenario_id: scenario.id.clone(),
         policy_id: policy.id.clone(),
         resource: "https://merchant.example/feed".to_owned(),
@@ -65,9 +65,9 @@ fn import_specs_copy_every_shared_field_into_domain_entities() {
         enabled: true,
     }
     .into_domain(imported_at);
-    assert_eq!(offer.policy_id, policy.id);
-    assert_eq!(offer.wallet_id, "wallet-1");
-    assert_eq!((offer.created_at, offer.updated_at), (imported_at, imported_at));
+    assert_eq!(price.policy_id, policy.id);
+    assert_eq!(price.wallet_id, "wallet-1");
+    assert_eq!((price.created_at, price.updated_at), (imported_at, imported_at));
 
     let approver = ApproverSpec {
         scenario_id: scenario.id,
@@ -105,11 +105,10 @@ fn wallet_spec_builds_domain_metadata_without_copying_custody_material() {
 }
 
 #[test]
-fn canonical_price_resources_accept_legacy_offer_kind_without_two_models() {
-    for kind in ["Price", "Price"] {
-        assert!(matches!(
-            serde_yaml::from_str::<ResourceKind>(kind).unwrap(),
-            ResourceKind::Price
-        ));
-    }
+fn price_resource_kind_is_the_single_supported_name() {
+    assert!(matches!(
+        serde_yaml::from_str::<ResourceKind>("Price").unwrap(),
+        ResourceKind::Price
+    ));
+    assert!(serde_yaml::from_str::<ResourceKind>("Offer").is_err());
 }

@@ -27,21 +27,21 @@ use crate::storage::scenario::postgres::ScenarioPostgresRepository;
 use crate::storage::signing::postgres::SigningPostgresRepository;
 use crate::storage::wallet::postgres::PgWalletKeyRepository;
 use crate::storage::wallet::postgres::WalletPostgresRepository;
+use crate::storage::IIntentRepository as _;
+use crate::storage::IOutboxRepository as _;
+use crate::storage::ISigningRepository as _;
+use crate::storage::IWalletRepository as _;
 use crate::storage::IdempotentWrite;
 use crate::storage::OutboundSigningRead;
 use crate::storage::OutboxMessage;
 use crate::storage::OutboxStatus;
-use crate::storage::OutboxStorage as _;
 use crate::storage::PaymentProgressWrite;
 use crate::storage::PaymentQuery;
-use crate::storage::PaymentStorage as _;
 use crate::storage::ReconciliationLeaseRequest;
 use crate::storage::SettlementWrite;
 use crate::storage::SigningGuard;
-use crate::storage::SigningStorage as _;
 use crate::storage::SigningWrite;
 use crate::storage::VerificationWrite;
-use crate::storage::WalletStorage as _;
 use crate::utils::secure_material::SealedSensitiveMaterial;
 use crate::Error;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         created_at: 1,
         updated_at: 1,
     };
-    crate::storage::ClientStorage::insert(&ClientPostgresRepository::new(storage.clone()), &client)
+    crate::storage::IClientRepository::insert(&ClientPostgresRepository::new(storage.clone()), &client)
         .await
         .unwrap();
     let scenario = PaymentScenario {
@@ -106,7 +106,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         created_at: 1,
         updated_at: 1,
     };
-    crate::storage::ScenarioStorage::register(&ScenarioPostgresRepository::new(storage.clone()), &scenario)
+    crate::storage::IScenarioRepository::register(&ScenarioPostgresRepository::new(storage.clone()), &scenario)
         .await
         .unwrap();
     let asset = AssetIdentity {
@@ -144,7 +144,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         created_at: 3,
         updated_at: 3,
     };
-    crate::storage::PolicyStorage::insert(&PolicyPostgresRepository::new(storage.clone()), &policy)
+    crate::storage::IPolicyRepository::insert(&PolicyPostgresRepository::new(storage.clone()), &policy)
         .await
         .unwrap();
     let mut duplicate_policy = policy.clone();
@@ -152,11 +152,12 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     duplicate_policy.created_at += 1;
     duplicate_policy.updated_at += 1;
     assert!(matches!(
-        crate::storage::PolicyStorage::insert(&PolicyPostgresRepository::new(storage.clone()), &duplicate_policy).await,
+        crate::storage::IPolicyRepository::insert(&PolicyPostgresRepository::new(storage.clone()), &duplicate_policy)
+            .await,
         Err(Error::PaymentConflict(_))
     ));
-    let excessive_offer = PaymentPrice {
-        id: unique("pg-offer-excessive"),
+    let excessive_price = PaymentPrice {
+        id: unique("pg-price-excessive"),
         scenario_id: scenario.id.clone(),
         policy_id: policy.id.clone(),
         resource: format!("https://feed.example/mcp/excessive-{}", Uuid::new_v4()),
@@ -169,7 +170,8 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         updated_at: 4,
     };
     assert!(matches!(
-        crate::storage::PriceStorage::insert(&PricePostgresRepository::new(storage.clone()), &excessive_offer).await,
+        crate::storage::IPriceRepository::insert(&PricePostgresRepository::new(storage.clone()), &excessive_price)
+            .await,
         Err(Error::PaymentConflict(_))
     ));
     let mut alternate_policy = policy.clone();
@@ -177,7 +179,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     alternate_policy.wallet_ids = vec![alternate_wallet.id.clone()];
     alternate_policy.created_at = 4;
     alternate_policy.updated_at = 4;
-    crate::storage::PolicyStorage::insert(&PolicyPostgresRepository::new(storage.clone()), &alternate_policy)
+    crate::storage::IPolicyRepository::insert(&PolicyPostgresRepository::new(storage.clone()), &alternate_policy)
         .await
         .unwrap();
 
@@ -250,7 +252,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         1
     );
 
-    let page = crate::storage::PaymentStorage::list(
+    let page = crate::storage::IIntentRepository::list(
         &PaymentPostgresRepository::new(storage.clone()),
         &PaymentQuery {
             scenario_id: Some(scenario.id.clone()),
@@ -268,7 +270,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         IdempotentWrite::Replay(_)
     ));
 
-    let challenge_event = crate::storage::EventStorage::find_for_intent_type(
+    let challenge_event = crate::storage::IEventRepository::find_for_intent_type(
         &EventPostgresRepository::new(storage.clone()),
         &current.id,
         PaymentEventType::ChallengeReceived,
@@ -374,10 +376,11 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     .unwrap()
     .rows_affected();
     assert_eq!(submitted_rows, 1);
-    let submitted = crate::storage::PaymentStorage::get(&PaymentPostgresRepository::new(storage.clone()), &signed.id)
-        .await
-        .unwrap()
-        .unwrap();
+    let submitted =
+        crate::storage::IIntentRepository::get(&PaymentPostgresRepository::new(storage.clone()), &signed.id)
+            .await
+            .unwrap()
+            .unwrap();
 
     let mut pending = submitted.clone();
     pending.status = PaymentStatus::PendingSettlement;
@@ -406,10 +409,11 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
             .await,
         Err(Error::PaymentConflict(_))
     ));
-    let unchanged = crate::storage::PaymentStorage::get(&PaymentPostgresRepository::new(storage.clone()), &signed.id)
-        .await
-        .unwrap()
-        .unwrap();
+    let unchanged =
+        crate::storage::IIntentRepository::get(&PaymentPostgresRepository::new(storage.clone()), &signed.id)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(unchanged.status, PaymentStatus::Submitted);
     assert_eq!(unchanged.reservation_status, ReservationStatus::Reserved);
     let current = PaymentPostgresRepository::new(storage.clone())
@@ -480,7 +484,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         .await
         .unwrap();
     assert!(matches!(
-        crate::storage::LedgerStorage::append(&LedgerPostgresRepository::new(storage.clone()), &ledger)
+        crate::storage::ILedgerRepository::append(&LedgerPostgresRepository::new(storage.clone()), &ledger)
             .await
             .unwrap(),
         IdempotentWrite::Replay(_)
@@ -523,7 +527,8 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         ..ledger.clone()
     };
     assert!(matches!(
-        crate::storage::LedgerStorage::append(&LedgerPostgresRepository::new(storage.clone()), &invalid_reversal).await,
+        crate::storage::ILedgerRepository::append(&LedgerPostgresRepository::new(storage.clone()), &invalid_reversal)
+            .await,
         Err(Error::PaymentConflict(_))
     ));
     let losing_wallet_id = if settled.wallet_id.as_deref() == Some(wallet.id.as_str()) {
@@ -568,7 +573,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         created_at: 10,
         updated_at: 10,
     };
-    crate::storage::ScenarioStorage::register(&ScenarioPostgresRepository::new(storage.clone()), &race_scenario)
+    crate::storage::IScenarioRepository::register(&ScenarioPostgresRepository::new(storage.clone()), &race_scenario)
         .await
         .unwrap();
     let mut race_policy = policy.clone();
@@ -577,7 +582,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     race_policy.wallet_ids = vec![race_wallet.id.clone()];
     race_policy.created_at = 11;
     race_policy.updated_at = 11;
-    crate::storage::PolicyStorage::insert(&PolicyPostgresRepository::new(storage.clone()), &race_policy)
+    crate::storage::IPolicyRepository::insert(&PolicyPostgresRepository::new(storage.clone()), &race_policy)
         .await
         .unwrap();
     let race_intent = intent(
@@ -668,8 +673,8 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
     assert_eq!(race_snapshot.scenario_spent_and_reserved, Amount::new(60));
     assert_eq!(race_snapshot.wallet_spent_and_reserved, Amount::new(60));
 
-    let offer = PaymentPrice {
-        id: unique("pg-inbound-expiry-offer"),
+    let price = PaymentPrice {
+        id: unique("pg-inbound-expiry-price"),
         scenario_id: scenario.id.clone(),
         policy_id: policy.id.clone(),
         resource: format!("https://feed.example/mcp/expiry-{}", Uuid::new_v4()),
@@ -681,7 +686,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         created_at: 21,
         updated_at: 21,
     };
-    crate::storage::PriceStorage::insert(&PricePostgresRepository::new(storage.clone()), &offer)
+    crate::storage::IPriceRepository::insert(&PricePostgresRepository::new(storage.clone()), &price)
         .await
         .unwrap();
     let payment_wallet = WalletPostgresRepository::new(storage.clone())
@@ -694,7 +699,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         &client,
         &scenario,
         &policy,
-        &offer,
+        &price,
         &payment_wallet,
         2_000,
         2_010,
@@ -705,7 +710,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         &client,
         &scenario,
         &policy,
-        &offer,
+        &price,
         &payment_wallet,
         2_001,
         2_010,
@@ -754,8 +759,8 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         .budget_snapshot(&scenario.id, &wallet.id, PaymentDirection::Inbound, &unit, 0, 2_010)
         .await
         .unwrap();
-    assert_eq!(after_expiry.scenario_spent_and_reserved, offer.amount);
-    assert_eq!(after_expiry.wallet_spent_and_reserved, offer.amount);
+    assert_eq!(after_expiry.scenario_spent_and_reserved, price.amount);
+    assert_eq!(after_expiry.wallet_spent_and_reserved, price.amount);
 
     let mut raced_expiry = claimed_raced.intent.clone();
     raced_expiry.status = PaymentStatus::Expired;
@@ -827,7 +832,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         1,
         "the losing expiry/credential transition must be a conflict: {transition_results:?}"
     );
-    let raced = crate::storage::PaymentStorage::get(
+    let raced = crate::storage::IIntentRepository::get(
         &PaymentPostgresRepository::new(storage.clone()),
         &claimed_raced.intent.id,
     )
@@ -861,7 +866,7 @@ async fn serializes_budget_and_commits_settlement_ledger_and_outbox_atomically()
         ..ledger
     };
     assert!(matches!(
-        crate::storage::LedgerStorage::append(&LedgerPostgresRepository::new(storage.clone()), &reversal)
+        crate::storage::ILedgerRepository::append(&LedgerPostgresRepository::new(storage.clone()), &reversal)
             .await
             .unwrap(),
         IdempotentWrite::Inserted(_)

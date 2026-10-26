@@ -84,22 +84,28 @@ fn outbound_response_command_binds_intent_and_run() {
     let body = json!({
         "scenario_id": "scenario-quantstream",
         "run_id": "run-42",
-        "payment_response": "YWJjZA=="
+        "protocol": "x402",
+        "evidence": {"header_name":"payment-response", "header_value":"YWJjZA=="}
     });
     let parsed =
         MqttWireCodec::parse_outbound_response_command(&outbound_response_envelope("intent-1", &body)).unwrap();
     assert_eq!(parsed.intent_id, "intent-1");
     assert_eq!(parsed.request.context.scenario_id, "scenario-quantstream");
     assert_eq!(parsed.request.context.run_id, "run-42");
+    let obsolete = json!({"scenario_id":"scenario-quantstream", "run_id":"run-42", "payment_response":"YWJjZA=="});
+    assert!(
+        MqttWireCodec::parse_outbound_response_command(&outbound_response_envelope("intent-1", &obsolete)).is_err()
+    );
 
     assert!(
         MqttWireCodec::parse_outbound_response_command(&outbound_response_envelope(
             "../intent",
             &json!({
-                "scenario_id": "scenario-quantstream",
-                "run_id": "run-42",
-                "payment_response": "YWJjZA=="
-            })
+                    "scenario_id": "scenario-quantstream",
+                    "run_id": "run-42",
+                    "protocol": "x402",
+            "evidence": {"header_name":"payment-response", "header_value":"YWJjZA=="}
+                })
         ))
         .is_err()
     );

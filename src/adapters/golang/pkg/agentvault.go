@@ -59,7 +59,6 @@ type PayeeConfig = config.PayeeConfig
 type PayeeOperation = model.PayeeOperation
 type GinPayeeMiddleware = payee.GinPayeeMiddleware
 type GinPayeeRoute = payee.GinPayeeRoute
-type StandardPayeeMiddleware = payee.StandardPayeeMiddleware
 type StdHttpMiddleware = payee.StdHttpMiddleware
 type StandardPayeeRoute = payee.StandardPayeeRoute
 

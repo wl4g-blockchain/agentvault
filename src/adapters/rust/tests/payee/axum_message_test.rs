@@ -23,7 +23,7 @@ impl VaultTransport for UnusedTransport {
 fn mcp_challenge_carries_stable_payment_profile_metadata() {
     let core = PayeeMiddleware::new(UnusedTransport, PayeeConfig::default()).expect("payee middleware");
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
-        "scenario_id": "scenario", "offer_id": "offer", "resource": "mcp://tool/marketpulse.realtime",
+        "scenario_id": "scenario", "price_id": "price", "resource": "mcp://tool/marketpulse.realtime",
         "protocol": "x402", "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
         "amount": "1000", "recipient": "0x1111111111111111111111111111111111111111",
         "nonce": "nonce", "challenge_hash": "challenge", "expires_at": 2_000_000_000,
@@ -111,7 +111,7 @@ fn mcp_call_accepts_mpp_root_metadata_and_rejects_ambiguous_placement() {
 async fn paid_mcp_business_failure_remains_retryable_after_settlement() {
     let core = PayeeMiddleware::new(UnusedTransport, PayeeConfig::default()).expect("payee middleware");
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
-        "scenario_id": "scenario", "offer_id": "offer", "resource": "mcp://tool/realtime",
+        "scenario_id": "scenario", "price_id": "price", "resource": "mcp://tool/realtime",
         "protocol": "x402", "asset": {"network": "eip155:31337", "asset": "USDC", "decimals": 6},
         "amount": "1000", "recipient": "0x1", "nonce": "nonce", "challenge_hash": "challenge",
         "expires_at": 2_000_000_000, "payload": {}
@@ -119,7 +119,7 @@ async fn paid_mcp_business_failure_remains_retryable_after_settlement() {
     .expect("challenge");
     let payment: SettledIncomingPayment = serde_json::from_value(serde_json::json!({
         "intent": {
-            "id": "intent", "scenario_id": "scenario", "run_id": "run", "offer_id": "offer",
+            "id": "intent", "scenario_id": "scenario", "run_id": "run", "price_id": "price",
             "direction": "inbound", "protocol": "x402",
             "asset": {"network": "eip155:31337", "asset": "USDC", "decimals": 6},
             "recipient": "0x1", "amount": "1000", "settled_amount": "1000",

@@ -85,46 +85,25 @@ fn scenario_creation_normalizes_multi_wallet_policy_membership() {
 }
 
 #[test]
-fn outbound_evidence_supports_legacy_x402_and_protocol_owned_headers() {
-    let context = OperationContextDto {
-        scenario_id: "scenario-1".to_owned(),
-        run_id: "run-1".to_owned(),
-    };
-    let legacy = ReportOutboundResponseRequest {
-        context: context.clone(),
-        payment_response: Some("YWJjZA==".to_owned()),
-        protocol: None,
-        evidence: None,
+fn outbound_evidence_requires_the_protocol_owned_header_contract() {
+    for (protocol, header) in [("x402", "payment-response"), ("mpp", "payment-receipt")] {
+        let value = json!({"scenario_id":"scenario-1","run_id":"run-1","protocol":protocol,
+            "evidence":{"header_name":header,"header_value":"receipt"}});
+        let request: ReportOutboundResponseRequest = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(request.protocol, protocol);
+        assert_eq!(request.evidence.header_name, header);
+        for field in ["protocol", "evidence"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<ReportOutboundResponseRequest>(missing).is_err());
+        }
+        let mut old = value;
+        old["payment_response"] = json!("receipt");
+        assert!(serde_json::from_value::<ReportOutboundResponseRequest>(old).is_err());
     }
-    .evidence()
-    .expect("legacy x402 evidence");
-    assert_eq!(legacy.protocol, "x402");
-    assert_eq!(legacy.header_name, "payment-response");
-
-    let mpp = ReportOutboundResponseRequest {
-        context: context.clone(),
-        payment_response: None,
-        protocol: Some("mpp".to_owned()),
-        evidence: Some(ProtocolEvidenceDto {
-            header_name: "payment-receipt".to_owned(),
-            header_value: "receipt".to_owned(),
-        }),
-    }
-    .evidence()
-    .expect("MPP evidence");
-    assert_eq!(mpp.protocol, "mpp");
-    assert_eq!(mpp.header_name, "payment-receipt");
-
-    assert!(ReportOutboundResponseRequest {
-        context,
-        payment_response: Some("legacy".to_owned()),
-        protocol: Some("x402".to_owned()),
-        evidence: Some(ProtocolEvidenceDto {
-            header_name: "payment-response".to_owned(),
-            header_value: "modern".to_owned(),
-        }),
-    }
-    .evidence()
+    assert!(serde_json::from_value::<ReportOutboundResponseRequest>(json!({
+        "scenario_id":"scenario-1","run_id":"run-1","payment_response":"receipt"
+    }))
     .is_err());
 }
 

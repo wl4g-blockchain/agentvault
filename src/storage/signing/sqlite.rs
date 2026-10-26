@@ -1,6 +1,6 @@
 use crate::storage::{
     payment::sqlite::PaymentSqliteRepository as PaymentRepository,
-    policy::sqlite::PolicySqliteRepository as PolicyRepository, sqlite::BaseSqliteRepository as BaseRepository,
+    policy::sqlite::PolicySqliteRepository as PolicyRepository, sqlite::SqliteRepository as BaseRepository,
     wallet::sqlite::WalletSqliteRepository as WalletRepository,
 };
 use sqlx::SqliteConnection as Connection;

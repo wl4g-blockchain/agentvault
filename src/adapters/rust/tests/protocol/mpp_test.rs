@@ -19,7 +19,7 @@ fn mpp_adapter_preserves_bearer_and_uses_only_native_headers() {
     .expect("authorization");
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "https://merchant.example/tool",
         "protocol": "mpp",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
@@ -77,7 +77,7 @@ fn mpp_adapter_uses_upstream_verification_failed_mcp_error() {
     .with_header(mpp::PAYMENT_AUTHORIZATION_HEADER);
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "mcp://tool/marketpulse.realtime",
         "protocol": "mpp",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},

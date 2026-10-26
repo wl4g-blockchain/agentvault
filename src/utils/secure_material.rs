@@ -62,7 +62,6 @@ pub trait SensitiveMaterialProtector: Send + Sync {
 
 /// AES-256-GCM key ring. Rotation selects a new active key while old
 /// key versions remain available until no pending recovery material uses them.
-/// XChaCha20-Poly1305 was the pre-release design; no legacy decrypt path is retained.
 pub struct Aes256GcmMaterialProtector {
     active_key_id: String,
     keys: BTreeMap<String, Zeroizing<[u8; AES_256_KEY_BYTES]>>,

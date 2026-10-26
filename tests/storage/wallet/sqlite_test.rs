@@ -1,8 +1,8 @@
 use crate::storage::sqlite::tests::*;
 use crate::storage::wallet::sqlite::SqliteWalletKeyRepository;
 use crate::storage::wallet::sqlite::WalletSqliteRepository;
+use crate::storage::IWalletRepository as _;
 use crate::storage::WalletKeyStatus;
-use crate::storage::WalletStorage as _;
 use crate::utils::aead::UuidNonceCodec;
 use crate::utils::aead::WALLET_KEY_ENCRYPTION_SCHEME;
 use crate::Error;

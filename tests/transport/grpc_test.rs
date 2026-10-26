@@ -64,7 +64,6 @@ fn exposes_only_domain_authorized_sdk_routes() {
         (Method::GET, "/approvals"),
         (Method::GET, "/approvals/approval-1"),
         (Method::POST, "/approvals/approval-1/decision"),
-        (Method::POST, "/offers/resolve"),
         (Method::POST, "/prices/resolve"),
         (Method::POST, "/payee/challenges"),
         (Method::POST, "/payee/verify"),
@@ -77,6 +76,7 @@ fn exposes_only_domain_authorized_sdk_routes() {
     }
 
     for (method, path) in [
+        (Method::POST, "/offers/resolve"),
         (Method::GET, "/admin/clients"),
         (Method::POST, "/admin/prices"),
         (Method::PUT, "/admin/prices/price-1"),

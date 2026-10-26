@@ -18,7 +18,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, MethodRouter},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
@@ -56,24 +56,14 @@ impl ApiController {
             .route("/payee/challenges", post(Self::create_challenge))
             .route("/payee/verify", post(Self::verify_payment))
             .route("/payee/settle", post(Self::settle_payment));
-        Self::price_routes(routes, post(Self::resolve_offer), get(Self::list_offers))
-            .route("/admin/prices", post(Self::create_price))
+        routes
+            .route("/prices/resolve", post(Self::resolve_price))
+            .route("/admin/prices", get(Self::list_prices).post(Self::create_price))
             .route(
                 "/admin/prices/{id}",
                 get(Self::get_price).put(Self::update_price).delete(Self::delete_price),
             )
             .with_state(api)
-    }
-
-    fn price_routes<S>(router: Router<S>, resolve: MethodRouter<S>, list: MethodRouter<S>) -> Router<S>
-    where
-        S: Clone + Send + Sync + 'static,
-    {
-        router
-            .route("/prices/resolve", resolve.clone())
-            .route("/offers/resolve", resolve)
-            .route("/admin/prices", list.clone())
-            .route("/admin/offers", list)
     }
 
     async fn list_clients(
@@ -155,13 +145,13 @@ impl ApiController {
         ))
     }
 
-    async fn list_offers(
+    async fn list_prices(
         State(api): State<Arc<PaymentApi>>,
         _principal: CallerPrincipal,
         Query(query): Query<ScenarioPageQuery>,
     ) -> std::result::Result<Json<Page<PaymentPrice>>, ApiError> {
         Ok(Json(
-            api.offers
+            api.prices
                 .list_for_scenario(&query.scenario_id, query.page.page()?)
                 .await?,
         ))
@@ -176,7 +166,7 @@ impl ApiController {
             .authorize(principal.as_str(), &request.0.scenario_id)
             .await?;
         let price = request.0.into_domain(PaymentApi::unix_time()?);
-        Ok((StatusCode::CREATED, Json(api.offers.register(&price).await?)))
+        Ok((StatusCode::CREATED, Json(api.prices.register(&price).await?)))
     }
 
     async fn authorized_price(
@@ -185,7 +175,7 @@ impl ApiController {
         id: &str,
     ) -> std::result::Result<PaymentPrice, ApiError> {
         let price = api
-            .offers
+            .prices
             .get(id)
             .await?
             .ok_or_else(|| Error::NotFound(format!("payment price {id}")))?;
@@ -209,7 +199,7 @@ impl ApiController {
     ) -> std::result::Result<Json<PaymentPrice>, ApiError> {
         let stored = Self::authorized_price(&api, principal.as_str(), &id).await?;
         let (price, expected) = request.into_domain(&id, &stored, PaymentApi::unix_time()?)?;
-        Ok(Json(api.offers.update(&price, expected).await?))
+        Ok(Json(api.prices.update(&price, expected).await?))
     }
 
     async fn delete_price(
@@ -219,7 +209,7 @@ impl ApiController {
         Query(request): Query<DeletePriceRequest>,
     ) -> std::result::Result<StatusCode, ApiError> {
         Self::authorized_price(&api, principal.as_str(), &id).await?;
-        api.offers.delete(&id, request.expected_updated_at).await?;
+        api.prices.delete(&id, request.expected_updated_at).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -339,12 +329,12 @@ impl ApiController {
         ))
     }
 
-    async fn resolve_offer(
+    async fn resolve_price(
         State(api): State<Arc<PaymentApi>>,
         principal: CallerPrincipal,
         Json(request): Json<ResolvePriceRequest>,
     ) -> std::result::Result<Json<PaymentPrice>, ApiError> {
-        Ok(Json(api.resolve_offer(principal.as_str(), &request).await?))
+        Ok(Json(api.resolve_price(principal.as_str(), &request).await?))
     }
 
     async fn create_challenge(

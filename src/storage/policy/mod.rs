@@ -42,9 +42,6 @@ pub trait IPolicyRepository: Send + Sync {
 #[path = "../../../tests/storage/policy/mod_test.rs"]
 mod tests;
 
-/// Compatibility import for the single repository contract.
-pub use IPolicyRepository as PolicyStorage;
-
 mod validation {
     use crate::{model::PaymentPolicy, Error, Result};
 

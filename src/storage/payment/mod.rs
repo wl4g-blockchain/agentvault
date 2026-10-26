@@ -107,7 +107,7 @@ pub struct ChallengeIssuanceGuard {
     pub principal: String,
     pub client: PaymentClient,
     pub scenario: PaymentScenario,
-    pub offer: PaymentPrice,
+    pub price: PaymentPrice,
     pub policy: PaymentPolicy,
     pub wallet: PaymentWallet,
     pub origin: String,
@@ -263,7 +263,7 @@ pub trait IIntentRepository: Send + Sync {
     /// Atomically records an inbound intent, reserves the policy's inbound
     /// sales/receipt budget, and appends its immutable challenge event.
     /// The transaction must lock/reload and revalidate the guard's client,
-    /// scenario, offer, policy, policy-wallet membership, and wallet enabled
+    /// scenario, price, policy, policy-wallet membership, and wallet enabled
     /// state, ownership, revision/content, resource/origin,
     /// price/asset/protocol, directional limits, current inbound usage, and
     /// canonical recipient. Replays are accepted only when the stored request
@@ -421,9 +421,6 @@ impl PaymentQuery {
 #[path = "../../../tests/storage/payment/mod_test.rs"]
 mod tests;
 
-/// Compatibility import for the single repository contract.
-pub use IIntentRepository as PaymentStorage;
-
 mod validation {
     use crate::{
         model::{
@@ -493,7 +490,7 @@ mod validation {
         ) -> bool {
             intent.direction == direction
                 && challenge.scenario_id == intent.scenario_id
-                && challenge.offer_id == intent.offer_id
+                && challenge.price_id == intent.price_id
                 && challenge.resource == intent.resource
                 && challenge.protocol == intent.protocol
                 && challenge.asset == intent.asset

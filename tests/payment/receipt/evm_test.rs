@@ -1,7 +1,7 @@
 use super::*;
 
-fn query() -> EvmTransferQuery {
-    EvmTransferQuery {
+fn query() -> TransferQuery {
+    TransferQuery {
         network: "eip155:8453".to_owned(),
         transaction: format!("0x{}", "11".repeat(32)),
         token_contract: format!("0x{}", "22".repeat(20)),
@@ -11,7 +11,7 @@ fn query() -> EvmTransferQuery {
     }
 }
 
-fn transfer_log(query: &EvmTransferQuery, index: &str) -> RpcLog {
+fn transfer_log(query: &TransferQuery, index: &str) -> RpcLog {
     RpcLog {
         address: query.token_contract.clone(),
         topics: vec![

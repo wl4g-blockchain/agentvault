@@ -14,13 +14,12 @@ COLLECTION_BY_KIND = {
     "Wallet": "wallets",
     "Scenario": "scenarios",
     "Policy": "policies",
-    "Price": "offers",
-    "Price": "offers",
+    "Price": "prices",
     "Approver": "approvers",
 }
 
 _CANONICAL_MARKETPULSE_ORIGIN = "http://127.0.0.1:8081"
-_MARKETPULSE_OFFER = "offer-realtime-news"
+_MARKETPULSE_PRICE = "price-realtime-news"
 
 
 class ConsoleResourceFixture:
@@ -82,7 +81,7 @@ class ConsoleResourceFixture:
         origin = ConsoleResourceFixture._normalized_origin(marketpulse_origin)
         documents = ConsoleResourceFixture._resource_documents(path)
         policy_count = 0
-        offer_count = 0
+        price_count = 0
         for document in documents:
             data = document["data"]
             if document["kind"] == "Policy":
@@ -90,12 +89,12 @@ class ConsoleResourceFixture:
                     raise ValueError("canonical Policy allowed_origins drifted from the expected E2E origin")
                 data["allowed_origins"] = [origin]
                 policy_count += 1
-            elif document["kind"] in {"Price", "Price"} and document["metadata"]["name"] == _MARKETPULSE_OFFER:
+            elif document["kind"] == "Price" and document["metadata"]["name"] == _MARKETPULSE_PRICE:
                 if data.get("resource") != f"{_CANONICAL_MARKETPULSE_ORIGIN}/mcp":
                     raise ValueError("canonical MarketPulse Price resource drifted from the expected E2E URL")
                 data["resource"] = f"{origin}/mcp"
-                offer_count += 1
-        if policy_count == 0 or offer_count != 1:
+                price_count += 1
+        if policy_count == 0 or price_count != 1:
             raise ValueError("canonical fixture must contain Policies and exactly one MarketPulse Price")
         return yaml.safe_dump_all(
             documents,
@@ -121,7 +120,3 @@ class ConsoleResourceFixture:
             resource["enabled"] = metadata["status"] == "active"
             collections[collection].append(resource)
         return collections
-
-
-render_agentvault_resources = ConsoleResourceFixture.render_agentvault_resources
-load_agentvault_resources = ConsoleResourceFixture.load_agentvault_resources

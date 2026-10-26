@@ -31,6 +31,3 @@ pub trait IEventRepository: Send + Sync {
 #[cfg(test)]
 #[path = "../../../tests/storage/event/mod_test.rs"]
 mod tests;
-
-/// Compatibility import for the single repository contract.
-pub use IEventRepository as EventStorage;

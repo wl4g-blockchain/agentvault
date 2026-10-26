@@ -43,7 +43,7 @@ from .model import (
     SubmitApprovalDecisionRequest,
     VerifyPaymentRequest,
 )
-from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware, settled_payment
+from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware
 from .payer import HttpxPayerMiddleware, PayerMiddleware
 from .model.a2a import A2ACall
 from .payer.a2a import A2APayerMiddleware

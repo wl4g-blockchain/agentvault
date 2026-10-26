@@ -16,7 +16,7 @@ export class A2APaymentCall {
 
 /** TaskStore adapter; financial authority remains in the payee orchestration core. */
 export class A2APayeeMiddleware {
-  private static readonly scope = ['agentvault.payment.run_id', 'agentvault.payment.scenario_id', 'agentvault.payment.offer_id'] as const;
+  private static readonly scope = ['agentvault.payment.run_id', 'agentvault.payment.scenario_id', 'agentvault.payment.price_id'] as const;
   constructor(private readonly core: PayeeMiddleware, private readonly protocols: ProtocolRegistry) {}
 
   agentCard(card: AgentCard): AgentCard {
@@ -44,7 +44,7 @@ export class A2APayeeMiddleware {
     }
     task = structuredClone(task);
     task.metadata ??= {};
-    const values = [operation.runId, operation.scenarioId, operation.offerId];
+    const values = [operation.runId, operation.scenarioId, operation.priceId];
     for (const [index, key] of A2APayeeMiddleware.scope.entries()) {
       if ((key in task.metadata && task.metadata[key] !== values[index]) || (!(key in task.metadata) && credential !== undefined)) throw new Error('A2A task belongs to another payment scope');
       task.metadata[key] = values[index];

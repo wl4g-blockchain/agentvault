@@ -12,7 +12,7 @@ impl $repository {
             .map_err(|field| Error::InvalidRequest(format!("invalid payment intent {field}")))?;
         Self::validate_intent_authority(connection, intent).await?;
         sqlx::query(
-            "INSERT INTO pay_intent (id, scenario_id, run_id, wallet_id, policy_id, offer_id, direction, protocol, \
+            "INSERT INTO pay_intent (id, scenario_id, run_id, wallet_id, policy_id, price_id, direction, protocol, \
      network, asset, token_contract, asset_decimals, recipient, amount, settled_amount, resource, \
      challenge_hash, credential_hash, request_hash, status, reservation_status, \
      reserved_amount, tx_hash, settlement_ref, next_reconcile_at, reconcile_attempts, lease_owner, \
@@ -25,7 +25,7 @@ impl $repository {
         .bind(&intent.run_id)
         .bind(&intent.wallet_id)
         .bind(&intent.policy_id)
-        .bind(&intent.offer_id)
+        .bind(&intent.price_id)
         .bind(intent.direction.as_str())
         .bind(&intent.protocol)
         .bind(&intent.asset.network)

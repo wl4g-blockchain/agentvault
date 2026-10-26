@@ -22,15 +22,15 @@ pub struct SettlementProviderRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettlementProviderResult {
-    #[serde(default, alias = "isValid")]
+    #[serde(default)]
     pub valid: bool,
-    #[serde(default, alias = "success")]
+    #[serde(default)]
     pub settled: bool,
     #[serde(default)]
     pub payer: Option<String>,
-    #[serde(default, alias = "transactionHash")]
+    #[serde(default)]
     pub transaction: Option<String>,
     #[serde(default)]
     pub settlement_ref: Option<String>,
@@ -94,7 +94,7 @@ fn asset_identity_matches(observed: &AssetIdentity, expected: &AssetIdentity) ->
 pub struct IssuePaymentChallenge {
     pub scenario_id: String,
     pub run_id: String,
-    pub offer_id: String,
+    pub price_id: String,
     pub resource: String,
     pub origin: String,
     pub protocol: String,

@@ -48,7 +48,7 @@ macro_rules! payment_authority {
                 client_id: &str,
                 scenario_id: &str,
                 policy_id: &str,
-                offer_id: Option<&str>,
+                price_id: Option<&str>,
                 wallet_id: &str,
             ) -> Result<()> {
                 let client: Option<String> =
@@ -73,19 +73,19 @@ macro_rules! payment_authority {
                     return Err(Error::Forbidden);
                 }
                 Self::lock_policy_wallet(connection, policy_id, wallet_id).await?;
-                if let Some(offer_id) = offer_id {
+                if let Some(price_id) = price_id {
                     let present: Option<String> = sqlx::query_scalar(concat!(
                         "SELECT id FROM pay_price WHERE id = $1 AND policy_id = $2 AND wallet_id = $3",
                         $share
                     ))
-                    .bind(offer_id)
+                    .bind(price_id)
                     .bind(policy_id)
                     .bind(wallet_id)
                     .fetch_optional(connection)
                     .await
-                    .map_err(|error| BaseRepository::storage_error("lock payment offer", error))?;
+                    .map_err(|error| BaseRepository::storage_error("lock payment price", error))?;
                     if present.is_none() {
-                        return Err(crate::Error::conflict("payment offer authority no longer exists"));
+                        return Err(crate::Error::conflict("payment price authority no longer exists"));
                     }
                 }
                 Ok(())
@@ -279,12 +279,12 @@ macro_rules! payment_authority {
                     || intent.status != PaymentStatus::Created
                     || intent.reservation_status != ReservationStatus::Reserved
                     || intent.reserved_amount != intent.amount
-                    || intent.offer_id.as_deref() != Some(guard.offer.id.as_str())
+                    || intent.price_id.as_deref() != Some(guard.price.id.as_str())
                     || intent.policy_id.as_deref() != Some(guard.policy.id.as_str())
                     || intent.wallet_id.as_deref() != Some(guard.wallet.wallet.id.as_str())
                     || intent.challenge_hash.as_deref() != Some(challenge.challenge_hash.as_str())
                     || challenge.scenario_id != intent.scenario_id
-                    || challenge.offer_id != intent.offer_id
+                    || challenge.price_id != intent.price_id
                     || challenge.resource != intent.resource
                     || challenge.protocol != intent.protocol
                     || challenge.asset != intent.asset
@@ -302,7 +302,7 @@ macro_rules! payment_authority {
                     &guard.client.id,
                     &guard.scenario.id,
                     &guard.policy.id,
-                    Some(&guard.offer.id),
+                    Some(&guard.price.id),
                     &guard.wallet.wallet.id,
                 )
                 .await?;
@@ -322,12 +322,12 @@ macro_rules! payment_authority {
                 )
                 .await?
                 .ok_or(Error::Forbidden)?;
-                let offer = BaseRepository::select_by_connection::<crate::model::PaymentPrice>(
+                let price = BaseRepository::select_by_connection::<crate::model::PaymentPrice>(
                     connection,
-                    crate::storage::EntityQuery::new().eq("id", &guard.offer.id),
+                    crate::storage::EntityQuery::new().eq("id", &guard.price.id),
                 )
                 .await?
-                .ok_or_else(|| crate::Error::conflict("payment offer no longer exists"))?;
+                .ok_or_else(|| crate::Error::conflict("payment price no longer exists"))?;
                 let policy = PolicyRepository::load_policy_connection(connection, &guard.policy.id)
                     .await?
                     .ok_or_else(|| crate::Error::conflict("payment policy no longer exists"))?;
@@ -337,21 +337,21 @@ macro_rules! payment_authority {
                 let canonical_wallet = wallet
                     .clone()
                     .canonicalized_for_payment_network(&intent.asset.network)
-                    .map_err(|_| Error::PolicyDenied("offer recipient wallet is invalid for its network".to_owned()))?;
+                    .map_err(|_| Error::PolicyDenied("price recipient wallet is invalid for its network".to_owned()))?;
                 if client != guard.client
                     || scenario != guard.scenario
-                    || offer != guard.offer
+                    || price != guard.price
                     || policy != guard.policy
                     || wallet != guard.wallet
                     || !client.authenticates(&guard.principal)
                     || !scenario.enabled
-                    || !offer.enabled
+                    || !price.enabled
                     || !policy.enabled
                     || !wallet.enabled
                     || policy.scenario_id != scenario.id
-                    || offer.scenario_id != scenario.id
-                    || offer.policy_id != policy.id
-                    || offer.wallet_id != wallet.wallet.id
+                    || price.scenario_id != scenario.id
+                    || price.policy_id != policy.id
+                    || price.wallet_id != wallet.wallet.id
                     || !policy.allows_wallet(&wallet.wallet.id)
                     || !policy.allows_direction(PaymentDirection::Inbound)
                     || !policy.allows_protocol(&intent.protocol)

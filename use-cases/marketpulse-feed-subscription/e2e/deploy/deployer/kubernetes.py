@@ -25,7 +25,7 @@ from common.context import VerificationContext
 from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
 from common.project import CONFIG_ROOT, E2E_ROOT, REPOSITORY_ROOT
-from common.resource_import import render_agentvault_resources
+from common.resource_import import ConsoleResourceFixture
 from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
@@ -847,7 +847,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 raise ValueError(f"unsupported payee language: {payee_language}")
             payee_name = self._payee_name(payee_language)
             marketpulse_origin = f"http://{payee_name}.{PAYEE_NAMESPACE}.svc.cluster.local:8081"
-            resource_manifest = render_agentvault_resources(resource_fixture, marketpulse_origin)
+            resource_manifest = ConsoleResourceFixture.render_agentvault_resources(resource_fixture, marketpulse_origin)
         self._apply_config_map(
             AGENTVAULT_NAMESPACE,
             "agentvault-e2e-resources",

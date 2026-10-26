@@ -175,7 +175,7 @@ pub(crate) fn pending_inbound_intent(protocol: &str) -> PaymentIntent {
         run_id: "run-1".to_owned(),
         wallet_id: Some("wallet-1".to_owned()),
         policy_id: Some("policy-1".to_owned()),
-        offer_id: Some("offer-1".to_owned()),
+        price_id: Some("price-1".to_owned()),
         direction: PaymentDirection::Inbound,
         protocol: protocol.to_owned(),
         asset: AssetIdentity {

@@ -17,7 +17,7 @@ type PayeeOperation struct {
 func (operation PayeeOperation) Validate() error {
 	for name, value := range map[string]string{
 		"scenario_id": operation.ScenarioID, "run_id": operation.RunID,
-		"offer_id": operation.PriceID,
+		"price_id": operation.PriceID,
 		"resource": operation.Resource, "origin": operation.Origin,
 		"protocol": operation.Protocol, "request_hash": operation.RequestHash,
 	} {
@@ -57,7 +57,7 @@ type PaymentPrice struct {
 
 type CreateChallengeRequest struct {
 	OperationContext
-	PriceID     string `json:"offer_id"`
+	PriceID     string `json:"price_id"`
 	Resource    string `json:"resource"`
 	Origin      string `json:"origin"`
 	Protocol    string `json:"protocol"`

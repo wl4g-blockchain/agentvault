@@ -1,7 +1,7 @@
 //! Outbox persistence for `postgres`.
 
 use crate::{
-    storage::{postgres::BasePostgresRepository, OutboxLeaseRequest, OutboxMessage, OutboxStorage},
+    storage::{postgres::PostgresRepository, IOutboxRepository, OutboxLeaseRequest, OutboxMessage},
     Error, Result,
 };
 use async_trait::async_trait;
@@ -9,11 +9,11 @@ use sqlx::{postgres::PgRow, PgConnection};
 
 #[derive(Clone)]
 pub struct OutboxPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 
 #[async_trait]
-impl OutboxStorage for OutboxPostgresRepository {
+impl IOutboxRepository for OutboxPostgresRepository {
     async fn claim(&self, request: &OutboxLeaseRequest) -> Result<Vec<OutboxMessage>> {
         if request.owner.trim().is_empty() || request.lease_until <= request.now || request.limit == 0 {
             return Err(Error::InvalidRequest("invalid outbox lease request".to_owned()));
@@ -44,7 +44,7 @@ impl OutboxStorage for OutboxPostgresRepository {
                     .bind(request.class.as_str())
                     .fetch_all(&mut *connection)
                     .await
-                    .map_err(|error| BasePostgresRepository::storage_error("claim due outbox messages", error))?;
+                    .map_err(|error| PostgresRepository::storage_error("claim due outbox messages", error))?;
                     let mut messages = rows.iter().map(Self::decode_row).collect::<Result<Vec<_>>>()?;
                     messages.sort_by(|left, right| {
                         (left.available_at, left.created_at, left.id.as_str()).cmp(&(
@@ -84,7 +84,7 @@ impl OutboxStorage for OutboxPostgresRepository {
         .bind(error)
         .execute(self.base.pool())
         .await
-        .map_err(|source| BasePostgresRepository::storage_error("reschedule outbox message", source))?;
+        .map_err(|source| PostgresRepository::storage_error("reschedule outbox message", source))?;
         Self::ensure_transitioned(result.rows_affected())
     }
 
@@ -99,19 +99,19 @@ impl OutboxStorage for OutboxPostgresRepository {
         .bind(error)
         .execute(self.base.pool())
         .await
-        .map_err(|source| BasePostgresRepository::storage_error("mark outbox message dead-letter", source))?;
+        .map_err(|source| PostgresRepository::storage_error("mark outbox message dead-letter", source))?;
         Self::ensure_transitioned(result.rows_affected())
     }
 }
 
 impl OutboxPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 
     pub(crate) async fn insert_outbox(connection: &mut PgConnection, message: &OutboxMessage) -> Result<()> {
         OutboxStorageRules::validate_message(message)?;
-        let payload = BasePostgresRepository::encode_json(&message.payload, "pay_outbox.payload")?;
+        let payload = PostgresRepository::encode_json(&message.payload, "pay_outbox.payload")?;
         let inserted = sqlx::query(
             "INSERT INTO pay_outbox (id, aggregate_type, aggregate_id, event_type, destination, \
      run_id, payload, status, attempt_count, available_at, lease_owner, lease_expires_at, \
@@ -149,7 +149,7 @@ impl OutboxPostgresRepository {
 .bind(&message.run_id)
 .fetch_all(&mut *connection)
 .await
-.map_err(|error| BasePostgresRepository::storage_error("find outbox replay", error))?;
+.map_err(|error| PostgresRepository::storage_error("find outbox replay", error))?;
         if existing.len() == 1 && OutboxStorageRules::same_logical_message(&Self::decode_row(&existing[0])?, message) {
             Ok(())
         } else {
@@ -172,7 +172,7 @@ impl OutboxPostgresRepository {
             .bind(owner)
             .execute(storage.base.pool())
             .await
-            .map_err(|source| BasePostgresRepository::storage_error(operation, source))?;
+            .map_err(|source| PostgresRepository::storage_error(operation, source))?;
         Self::ensure_transitioned(result.rows_affected())
     }
 
@@ -193,27 +193,24 @@ impl OutboxPostgresRepository {
 
     pub(crate) fn decode_row(row: &PgRow) -> Result<OutboxMessage> {
         Ok(OutboxMessage {
-            id: BasePostgresRepository::field(row, "id")?,
-            aggregate_type: BasePostgresRepository::field(row, "aggregate_type")?,
-            aggregate_id: BasePostgresRepository::field(row, "aggregate_id")?,
-            event_type: BasePostgresRepository::field(row, "event_type")?,
-            destination: BasePostgresRepository::field(row, "destination")?,
-            run_id: BasePostgresRepository::field(row, "run_id")?,
-            payload: BasePostgresRepository::decode_json(
-                BasePostgresRepository::field(row, "payload")?,
-                "pay_outbox.payload",
-            )?,
-            status: PaymentStorageCodec::outbox_status(&BasePostgresRepository::field::<String>(row, "status")?)?,
-            attempt_count: BasePostgresRepository::decode_u32(
-                BasePostgresRepository::field(row, "attempt_count")?,
+            id: PostgresRepository::field(row, "id")?,
+            aggregate_type: PostgresRepository::field(row, "aggregate_type")?,
+            aggregate_id: PostgresRepository::field(row, "aggregate_id")?,
+            event_type: PostgresRepository::field(row, "event_type")?,
+            destination: PostgresRepository::field(row, "destination")?,
+            run_id: PostgresRepository::field(row, "run_id")?,
+            payload: PostgresRepository::decode_json(PostgresRepository::field(row, "payload")?, "pay_outbox.payload")?,
+            status: PaymentStorageCodec::outbox_status(&PostgresRepository::field::<String>(row, "status")?)?,
+            attempt_count: PostgresRepository::decode_u32(
+                PostgresRepository::field(row, "attempt_count")?,
                 "pay_outbox.attempt_count",
             )?,
-            available_at: BasePostgresRepository::field(row, "available_at")?,
-            lease_owner: BasePostgresRepository::field(row, "lease_owner")?,
-            lease_expires_at: BasePostgresRepository::field(row, "lease_expires_at")?,
-            last_error: BasePostgresRepository::field(row, "last_error")?,
-            created_at: BasePostgresRepository::field(row, "created_at")?,
-            delivered_at: BasePostgresRepository::field(row, "delivered_at")?,
+            available_at: PostgresRepository::field(row, "available_at")?,
+            lease_owner: PostgresRepository::field(row, "lease_owner")?,
+            lease_expires_at: PostgresRepository::field(row, "lease_expires_at")?,
+            last_error: PostgresRepository::field(row, "last_error")?,
+            created_at: PostgresRepository::field(row, "created_at")?,
+            delivered_at: PostgresRepository::field(row, "delivered_at")?,
         })
     }
 }

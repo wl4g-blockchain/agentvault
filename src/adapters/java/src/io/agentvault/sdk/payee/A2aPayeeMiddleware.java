@@ -28,7 +28,7 @@ public final class A2aPayeeMiddleware {
             List.of(
                     "agentvault.payment.run_id",
                     "agentvault.payment.scenario_id",
-                    "agentvault.payment.offer_id");
+                    "agentvault.payment.price_id");
     private final PayeeMiddleware core;
     private final ProtocolRegistry protocols;
 
@@ -60,7 +60,7 @@ public final class A2aPayeeMiddleware {
             byte[] body,
             String runId,
             String scenario,
-            String offer,
+            String price,
             String protocol,
             TaskStore store,
             Map<String, String> headers) {
@@ -102,7 +102,7 @@ public final class A2aPayeeMiddleware {
         var value = A2a.object(A2a.JSON.valueToTree(task));
         if (!value.hasNonNull("metadata")) value.putObject("metadata");
         var meta = A2a.object(value.get("metadata"));
-        var values = List.of(runId, scenario, offer);
+        var values = List.of(runId, scenario, price);
         for (int i = 0; i < SCOPE.size(); i++) {
             String key = SCOPE.get(i);
             if ((meta.has(key) && !values.get(i).equals(meta.get(key).asText()))

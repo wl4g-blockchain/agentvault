@@ -48,6 +48,3 @@ pub trait IScenarioRepository: Send + Sync {
 #[cfg(test)]
 #[path = "../../../tests/storage/scenario/mod_test.rs"]
 mod tests;
-
-/// Compatibility import for the single repository contract.
-pub use IScenarioRepository as ScenarioStorage;

@@ -161,7 +161,7 @@ pub trait WalletPaymentSigner: Send + Sync {
 
 /// Atomic persistence boundary for outbound signing.
 #[async_trait]
-pub trait SigningStorage: Send + Sync {
+pub trait ISigningRepository: Send + Sync {
     /// Loads an intent through `expected_principal -> enabled client -> owned
     /// scenario`. `None` is reserved for the explicitly configured open HTTP
     /// edge; the handler replaces it with the persisted client principal
@@ -248,7 +248,7 @@ mod validation {
                 || intent.expires_at != Some(challenge.expires_at)
                 || intent.challenge_hash.as_deref() != Some(challenge.challenge_hash.as_str())
                 || challenge.scenario_id != intent.scenario_id
-                || challenge.offer_id.is_some()
+                || challenge.price_id.is_some()
                 || challenge.resource != intent.resource
                 || challenge.protocol != intent.protocol
                 || challenge.asset != intent.asset

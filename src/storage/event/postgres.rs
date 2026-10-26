@@ -2,7 +2,7 @@
 
 use crate::{
     model::{PaymentEvent, PaymentEventType},
-    storage::{postgres::BasePostgresRepository, EventStorage, IdempotentWrite, Page, PageRequest},
+    storage::{postgres::PostgresRepository, IEventRepository, IdempotentWrite, Page, PageRequest},
     Error, Result,
 };
 use async_trait::async_trait;
@@ -10,11 +10,11 @@ use sqlx::{postgres::PgRow, PgConnection};
 
 #[derive(Clone)]
 pub struct EventPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 
 #[async_trait]
-impl EventStorage for EventPostgresRepository {
+impl IEventRepository for EventPostgresRepository {
     async fn append(&self, event: &PaymentEvent) -> Result<IdempotentWrite<PaymentEvent>> {
         let event = event.clone();
         self.base
@@ -58,7 +58,7 @@ impl EventStorage for EventPostgresRepository {
 }
 
 impl EventPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 
@@ -89,7 +89,7 @@ impl EventPostgresRepository {
         .bind(i64::from(event.attempt_no))
         .fetch_all(&mut *connection)
         .await
-        .map_err(|error| BasePostgresRepository::storage_error("find payment event replay", error))?;
+        .map_err(|error| PostgresRepository::storage_error("find payment event replay", error))?;
         if existing.len() != 1 {
             return Err(crate::Error::conflict(
                 "payment event identifiers collide with multiple rows",
@@ -106,8 +106,7 @@ impl EventPostgresRepository {
     }
 
     pub(crate) fn decode_row(row: &PgRow) -> Result<PaymentEvent> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BasePostgresRepository::storage_error("decode event entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| PostgresRepository::storage_error("decode event entity", error))
     }
 }
 

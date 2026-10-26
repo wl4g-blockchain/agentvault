@@ -127,17 +127,26 @@ fn resource_timestamps_advance_monotonically() {
 }
 
 #[test]
-fn price_commands_keep_offer_spelling_as_a_compatibility_alias() {
-    for resource in ["price", "offer"] {
-        let cli = Cli::try_parse_from(["agentvault", "console", "get", resource, "price-1"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Console {
-                operation: Some(ConsoleCommand::Get(GetArgs {
-                    resource: ConsoleResource::Price,
-                    ..
-                }))
-            }
-        ));
-    }
+fn price_commands_require_the_canonical_resource_name() {
+    let cli = Cli::try_parse_from(["agentvault", "console", "get", "price", "price-1"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Command::Console {
+            operation: Some(ConsoleCommand::Get(GetArgs {
+                resource: ConsoleResource::Price,
+                ..
+            }))
+        }
+    ));
+    assert!(Cli::try_parse_from(["agentvault", "console", "get", "offer", "price-1"]).is_err());
+    assert!(Cli::try_parse_from([
+        "agentvault",
+        "console",
+        "set-enabled",
+        "offer",
+        "price-1",
+        "--enabled",
+        "true"
+    ])
+    .is_err());
 }

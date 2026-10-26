@@ -38,7 +38,7 @@ export interface DeliveryState {
   response?: string;
 }
 
-export class FeedSQLiteStorage {
+export class FeedSqliteRepository {
   private readonly database: DatabaseSync;
 
   constructor(path: string) {

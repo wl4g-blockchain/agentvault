@@ -28,6 +28,3 @@ pub use wallet::Wallet;
 #[cfg(test)]
 #[path = "../../../tests/model/domain/mod_test.rs"]
 mod tests;
-
-/// Compatibility name for existing callers; pricing is stored by `PaymentPrice`.
-pub type PaymentPrice = PaymentPrice;

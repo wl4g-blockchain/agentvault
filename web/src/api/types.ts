@@ -20,7 +20,7 @@ export type PaymentIntent = {
   run_id: string
   wallet_id?: string
   policy_id?: string
-  offer_id?: string
+  price_id?: string
   direction: PaymentDirection
   protocol: string
   asset: AssetIdentity
@@ -257,7 +257,7 @@ export type ApiCapabilities = {
   balanceLookup: true
   pendingApprovalRead: true
   approvalDecision: true
-  offerResolution: true
+  priceResolution: true
   managementRead: true
   managementMutation: true
   paymentListing: true

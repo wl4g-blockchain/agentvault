@@ -23,7 +23,7 @@ class MarketPulseServerTest(unittest.TestCase):
             "AGENTVAULT_MQTT_TIMEOUT_SECONDS": "1",
             "MARKETPULSE_DATABASE": str(Path(directory) / "marketpulse.sqlite3"),
             "MARKETPULSE_SCENARIO_ID": "scenario-test",
-            "MARKETPULSE_OFFER_ID": "offer-test",
+            "MARKETPULSE_PRICE_ID": "price-test",
             "MARKETPULSE_RESOURCE_URL": "http://127.0.0.1:18081/mcp",
             "MARKETPULSE_ORIGIN": "http://127.0.0.1:18081",
         }, clear=False):

@@ -3,8 +3,8 @@
 use crate::{
     model::{PaymentPolicy, PaymentScenario},
     storage::{
-        policy::postgres::PolicyPostgresRepository, postgres::BasePostgresRepository, IdempotentWrite, Page,
-        PageRequest, ScenarioConfiguration, ScenarioStorage,
+        policy::postgres::PolicyPostgresRepository, postgres::PostgresRepository, IScenarioRepository, IdempotentWrite,
+        Page, PageRequest, ScenarioConfiguration,
     },
     Error, Result,
 };
@@ -13,11 +13,11 @@ use sqlx::postgres::PgRow;
 
 #[derive(Clone)]
 pub struct ScenarioPostgresRepository {
-    base: BasePostgresRepository,
+    base: PostgresRepository,
 }
 
 #[async_trait]
-impl ScenarioStorage for ScenarioPostgresRepository {
+impl IScenarioRepository for ScenarioPostgresRepository {
     async fn register(&self, scenario: &PaymentScenario) -> Result<IdempotentWrite<PaymentScenario>> {
         scenario
             .validate()
@@ -64,7 +64,7 @@ impl ScenarioStorage for ScenarioPostgresRepository {
                             .fetch_one(&mut *connection)
                             .await
                             .map_err(|error| {
-                                BasePostgresRepository::storage_error("load registered payment scenario", error)
+                                PostgresRepository::storage_error("load registered payment scenario", error)
                             })?;
                         Self::decode_row(&row)?
                     };
@@ -146,7 +146,7 @@ impl ScenarioStorage for ScenarioPostgresRepository {
 }
 
 impl ScenarioPostgresRepository {
-    pub(crate) fn new(base: BasePostgresRepository) -> Self {
+    pub(crate) fn new(base: PostgresRepository) -> Self {
         Self { base }
     }
 
@@ -173,8 +173,7 @@ impl ScenarioPostgresRepository {
     }
 
     pub(crate) fn decode_row(row: &PgRow) -> Result<PaymentScenario> {
-        sqlx::FromRow::from_row(row)
-            .map_err(|error| BasePostgresRepository::storage_error("decode scenario entity", error))
+        sqlx::FromRow::from_row(row).map_err(|error| PostgresRepository::storage_error("decode scenario entity", error))
     }
 }
 

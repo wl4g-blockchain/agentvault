@@ -35,7 +35,7 @@ struct Vault {
 }
 impl Vault {
     fn intent(&self, inbound: bool, settled: bool) -> Value {
-        json!({"id":if inbound{"in-1"}else{"out-1"},"scenario_id":"scenario","run_id":"run-1","offer_id":"offer","wallet_id":"wallet","policy_id":"policy",
+        json!({"id":if inbound{"in-1"}else{"out-1"},"scenario_id":"scenario","run_id":"run-1","price_id":"price","wallet_id":"wallet","policy_id":"policy",
             "direction":if inbound{"inbound"}else{"outbound"},"protocol":self.protocol,"asset":{"network":"eip155:42431","asset":"USDC","decimals":6},
             "recipient":"0x1111111111111111111111111111111111111111","amount":"1000","settled_amount":if settled{"1000"}else{"0"},
             "resource":if inbound{"a2a://feed".into()}else{format!("{}/a2a",self.origin.lock().unwrap())},"challenge_hash":"challenge-1",
@@ -43,7 +43,7 @@ impl Vault {
             "status":if settled{"settled"}else if inbound{"pending_settlement"}else{"signed"},"reservation_status":if inbound{"unreserved"}else{"reserved"},"reserved_amount":if inbound{"0"}else{"1000"},"created_at":1,"updated_at":2})
     }
     fn challenge(&self) -> Value {
-        let mut value = json!({"scenario_id":"scenario","offer_id":"offer","resource":"a2a://feed","protocol":self.protocol,
+        let mut value = json!({"scenario_id":"scenario","price_id":"price","resource":"a2a://feed","protocol":self.protocol,
             "asset":{"network":"eip155:42431","asset":"USDC","decimals":6},"amount":"1000","recipient":"0x1111111111111111111111111111111111111111",
             "nonce":"challenge-0123456789abcdef","challenge_hash":"challenge-1","expires_at":2_000_000_060_u64});
         value["payload"] = if self.protocol == "x402" {
@@ -145,7 +145,7 @@ async fn run_a2a_cases(message_level: bool) {
                 method: Method::POST,
                 path: "/a2a".into(),
                 scenario_id: "scenario".into(),
-                offer_id: "offer".into(),
+                price_id: "price".into(),
                 resource: "a2a://feed".into(),
                 origin: "https://merchant.test".into(),
                 protocol: protocol.into(),

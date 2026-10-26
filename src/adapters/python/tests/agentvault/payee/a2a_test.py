@@ -55,7 +55,7 @@ class A2APayeeMiddlewareTest(unittest.IsolatedAsyncioTestCase):
                         await send({'type': 'http.response.start', 'status': 200, 'headers': [(b'content-type', b'application/json')]})
                         await send({'type': 'http.response.body', 'body': json.dumps(response).encode()})
 
-                    protected = payee.fast(app, [FastPayeeRoute('POST', '/a2a', 'scenario', 'offer',
+                    protected = payee.fast(app, [FastPayeeRoute('POST', '/a2a', 'scenario', 'price',
                         'mcp://marketpulse/realtime', 'https://marketpulse.example', protocol, a2a_task_store=store)])
                     async with httpx.AsyncClient(transport=httpx.ASGITransport(protected)) as http:
                         client = payer.standard(client=http)
@@ -80,7 +80,7 @@ class A2APayeeMiddlewareTest(unittest.IsolatedAsyncioTestCase):
         await store.save(Task(id='task-1', context_id='context-1', status=TaskStatus(state='submitted'),
             metadata={'agentvault.payment.run_id': 'other-run'}))
         core = PayeeMiddleware(_McpPayeeTransport('x402', protocol), PayeeConfig())
-        operation = PayeeOperation('scenario', 'run-1', 'offer', 'feed', 'https://merchant.test', 'x402', 'request-hash')
+        operation = PayeeOperation('scenario', 'run-1', 'price', 'feed', 'https://merchant.test', 'x402', 'request-hash')
         with self.assertRaisesRegex(ValueError, 'payment scope'):
             await core.a2a().prepare(json.dumps(carrier['request']).encode(), operation, store,
                 {'x-a2a-extensions': carrier['x402_extension']})

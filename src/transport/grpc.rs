@@ -255,7 +255,6 @@ impl GrpcEnvelopeService {
         match (method, path) {
             (&Method::POST, "/payments/authorize") => Some("/api/v1/payments/authorize"),
             (&Method::POST, "/prices/resolve") => Some("/api/v1/prices/resolve"),
-            (&Method::POST, "/offers/resolve") => Some("/api/v1/offers/resolve"),
             (&Method::POST, "/payee/challenges") => Some("/api/v1/payee/challenges"),
             (&Method::POST, "/payee/verify") => Some("/api/v1/payee/verify"),
             (&Method::POST, "/payee/settle") => Some("/api/v1/payee/settle"),

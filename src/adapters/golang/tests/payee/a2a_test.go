@@ -49,7 +49,7 @@ func testA2ABothRoles(t *testing.T, ginMode bool) {
 					}
 					executor := &a2aTestExecutor{}
 					native := a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(executor, a2asrv.WithTaskStore(store)))
-					route := payee.StandardPayeeRoute{Method: "POST", Path: "/a2a", ScenarioID: "scenario", PriceID: "offer",
+					route := payee.StandardPayeeRoute{Method: "POST", Path: "/a2a", ScenarioID: "scenario", PriceID: "price",
 						Resource: "mcp://tool/marketpulse.realtime", Origin: "https://marketpulse.example", Protocol: name, A2ATaskStore: store}
 					business := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if r.Header.Get("Authorization") != "Bearer app-secret" {

@@ -60,7 +60,7 @@ impl MqttSettings {
         [
             MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/authorize")),
             MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/outbound-response")),
-            MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/resolve-offer")),
+            MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/resolve-price")),
             MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/create-challenge")),
             MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/verify-payment")),
             MqttSettings::shared_subscription_filter(consumer_group, &format!("{prefix}/+/commands/settle-payment")),

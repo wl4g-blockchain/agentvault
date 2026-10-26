@@ -11,7 +11,7 @@ const REQUEST_SPAN_ID = /^(?!0{16}$)[0-9a-f]{16}$/;
 const TRACEPARENT = /^00-((?!0{32}$)[0-9a-f]{32})-((?!0{16}$)[0-9a-f]{16})-([0-9a-f]{2})$/;
 
 interface WireResponse {
-  type: 'payment.authorization_result' | 'payment.outbound_response_result' | 'payment.offer_resolved' |
+  type: 'payment.authorization_result' | 'payment.outbound_response_result' | 'payment.price_resolved' |
     'payment.challenge_created' | 'payment.verification_result' | 'payment.settlement_result' | 'payment.error';
   version: 1;
   requestSpanId: string;
@@ -247,10 +247,10 @@ export class MqttVaultTransport implements VaultTransport {
       messageType: string;
       responseType: WireResponse['type'];
     }> = {
-      '/api/v1/offers/resolve': {
-        command: 'resolve-offer',
-        messageType: 'payment.resolve_offer',
-        responseType: 'payment.offer_resolved',
+      '/api/v1/prices/resolve': {
+        command: 'resolve-price',
+        messageType: 'payment.resolve_price',
+        responseType: 'payment.price_resolved',
       },
       '/api/v1/payee/challenges': {
         command: 'create-challenge',

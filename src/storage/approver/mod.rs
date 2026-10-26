@@ -36,6 +36,3 @@ pub trait IApproverRepository: Send + Sync {
 #[cfg(test)]
 #[path = "../../../tests/storage/approver/mod_test.rs"]
 mod tests;
-
-/// Compatibility import for the single repository contract.
-pub use IApproverRepository as ApproverStorage;

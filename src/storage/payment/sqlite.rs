@@ -6,7 +6,7 @@ use crate::{
         outbox::sqlite::OutboxSqliteRepository as OutboxRepository,
         policy::sqlite::PolicySqliteRepository as PolicyRepository,
         scenario::sqlite::ScenarioSqliteRepository as ScenarioRepository,
-        sqlite::{dynamic_sqlite as dynamic_query, BaseSqliteRepository as BaseRepository},
+        sqlite::{dynamic_sqlite as dynamic_query, SqliteRepository as BaseRepository},
         wallet::sqlite::WalletSqliteRepository as WalletRepository,
     },
     utils::storage::SqliteAmountCodec as AmountCodec,

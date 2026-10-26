@@ -13,7 +13,7 @@ use crate::storage::OutboundSigningIdentity;
 use crate::storage::OutboundSigningRead;
 use crate::storage::PersistedSignedPayment;
 use crate::storage::SigningGuard;
-use crate::storage::SigningStorage;
+use crate::storage::ISigningRepository;
 use crate::storage::SigningWrite;
 use crate::utils::secure_material::SealedSensitiveMaterial;
 use crate::Error;
@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use sqlx::Row as _;
 
 #[async_trait]
-impl SigningStorage for $repository {
+impl ISigningRepository for $repository {
     async fn load_for_principal(
         &self,
         expected_principal: Option<&str>,

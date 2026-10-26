@@ -14,9 +14,9 @@ use crate::{
     },
     protocol::x402::X402Evm,
     storage::{
-        ChallengeIssuanceGuard, ChallengeWrite, EventStorage, IdempotentWrite, OutboxMessage, OutboxStatus,
-        PaymentProgressWrite, PaymentStorage, PaymentWallet, PolicyStorage, PriceStorage, SettlementWrite,
-        VerificationWrite, WalletStorage,
+        ChallengeIssuanceGuard, ChallengeWrite, IEventRepository, IIntentRepository, IPolicyRepository,
+        IPriceRepository, IWalletRepository, IdempotentWrite, OutboxMessage, OutboxStatus, PaymentProgressWrite,
+        PaymentWallet, SettlementWrite, VerificationWrite,
     },
     utils::secure_material::{SealedSensitiveMaterial, SensitiveMaterialProtector},
     Error, Result,
@@ -37,11 +37,11 @@ pub(crate) use facts::SettlementFacts;
 /// All business identity is derived from the authenticated principal.
 pub struct SettlementCoordinator {
     scenarios: Arc<ScenarioHandler>,
-    offers: Arc<dyn PriceStorage>,
-    policies: Arc<dyn PolicyStorage>,
-    wallets: Arc<dyn WalletStorage>,
-    payments: Arc<dyn PaymentStorage>,
-    events: Arc<dyn EventStorage>,
+    prices: Arc<dyn IPriceRepository>,
+    policies: Arc<dyn IPolicyRepository>,
+    wallets: Arc<dyn IWalletRepository>,
+    payments: Arc<dyn IIntentRepository>,
+    events: Arc<dyn IEventRepository>,
     protocols: Arc<ProtocolRegistry>,
     providers: Arc<SettlementProviderRegistry>,
     material_protector: Arc<dyn SensitiveMaterialProtector>,
@@ -52,11 +52,11 @@ pub struct SettlementCoordinator {
 /// Collaborators used by the payee settlement application service.
 pub struct SettlementDependencies {
     pub scenarios: Arc<ScenarioHandler>,
-    pub offers: Arc<dyn PriceStorage>,
-    pub policies: Arc<dyn PolicyStorage>,
-    pub wallets: Arc<dyn WalletStorage>,
-    pub payments: Arc<dyn PaymentStorage>,
-    pub events: Arc<dyn EventStorage>,
+    pub prices: Arc<dyn IPriceRepository>,
+    pub policies: Arc<dyn IPolicyRepository>,
+    pub wallets: Arc<dyn IWalletRepository>,
+    pub payments: Arc<dyn IIntentRepository>,
+    pub events: Arc<dyn IEventRepository>,
     pub protocols: Arc<ProtocolRegistry>,
     pub providers: Arc<SettlementProviderRegistry>,
     pub material_protector: Arc<dyn SensitiveMaterialProtector>,
@@ -65,7 +65,7 @@ pub struct SettlementDependencies {
 
 struct PreparedInboundChallenge {
     access: AccessContext,
-    offer: PaymentPrice,
+    price: PaymentPrice,
     policy: PaymentPolicy,
     wallet: PaymentWallet,
     challenge: PaymentChallenge,
@@ -88,7 +88,7 @@ impl SettlementCoordinator {
         }
         Ok(Self {
             scenarios: dependencies.scenarios,
-            offers: dependencies.offers,
+            prices: dependencies.prices,
             policies: dependencies.policies,
             wallets: dependencies.wallets,
             payments: dependencies.payments,

@@ -241,7 +241,7 @@ fn mpp_preserves_bearer_and_never_uses_x402_wire_headers() {
 
     let challenge: PaymentChallenge = serde_json::from_value(json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "https://merchant.example/tool",
         "protocol": "mpp",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
@@ -266,7 +266,7 @@ fn protocol_receipts_use_distinct_wire_formats() {
     let mut payment: SettledIncomingPayment = serde_json::from_value(json!({
         "intent": {
             "id": "intent", "scenario_id": "scenario", "run_id": "run",
-            "wallet_id": "wallet", "policy_id": "policy", "offer_id": "offer",
+            "wallet_id": "wallet", "policy_id": "policy", "price_id": "price",
             "direction": "inbound", "protocol": "mpp",
             "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
             "recipient": "0x1111111111111111111111111111111111111111",

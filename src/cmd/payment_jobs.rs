@@ -4,15 +4,15 @@ use crate::{
     job::ReconciliationJob, job::WalletBalanceSyncJob, model::AssetIdentity, payment::MerchantEvidenceRecorder,
     payment::PaymentEvidenceRouter, payment::ReconciliationConfig as JobReconciliationConfig,
     payment::ReconciliationEvidenceSource, payment::SettlementCoordinator, payment::WalletBalanceSource,
-    payment::WalletBalanceSynchronizer, storage::ApprovalStorage, storage::IStorage, storage::PaymentStorage,
-    storage::WalletBalanceStorage, storage::WalletStorage,
+    payment::WalletBalanceSynchronizer, storage::IApprovalRepository, storage::IIntentRepository, storage::IRepository,
+    storage::IWalletBalanceRepository, storage::IWalletRepository,
 };
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::sync::Arc;
 
 pub(crate) struct StorageReadinessProbe {
-    pub(crate) storage: Arc<dyn IStorage>,
+    pub(crate) storage: Arc<dyn IRepository>,
 }
 
 #[async_trait]
@@ -28,7 +28,7 @@ impl ReadinessProbe for StorageReadinessProbe {
 
 pub(crate) struct PaymentRuntimeResources {
     pub(crate) cache: Arc<dyn ICache>,
-    pub(crate) storage: Arc<dyn IStorage>,
+    pub(crate) storage: Arc<dyn IRepository>,
 }
 
 #[async_trait]
@@ -173,7 +173,7 @@ pub(crate) struct RuntimeJobFactory;
 impl RuntimeJobFactory {
     pub(crate) fn build_reconciliation(
         config: &AppConfig,
-        payments: Arc<dyn PaymentStorage>,
+        payments: Arc<dyn IIntentRepository>,
         settlement: Arc<SettlementCoordinator>,
         outbound_evidence: Arc<MerchantEvidenceRecorder>,
     ) -> anyhow::Result<Option<ReconciliationComponent>> {
@@ -203,8 +203,8 @@ impl RuntimeJobFactory {
 
     pub(crate) fn build_wallet_balance_sync(
         config: &AppConfig,
-        wallets: Arc<dyn WalletStorage>,
-        wallet_balances: Arc<dyn WalletBalanceStorage>,
+        wallets: Arc<dyn IWalletRepository>,
+        wallet_balances: Arc<dyn IWalletBalanceRepository>,
         sources: Arc<dyn WalletBalanceSource>,
         metrics: AgentVaultMetrics,
     ) -> anyhow::Result<Option<WalletBalanceSyncComponent>> {
@@ -256,7 +256,7 @@ impl RuntimeJobFactory {
 
     pub(crate) fn build_approval_expiration(
         config: &AppConfig,
-        approvals: Arc<dyn ApprovalStorage>,
+        approvals: Arc<dyn IApprovalRepository>,
     ) -> anyhow::Result<ApprovalExpirationComponent> {
         let settings = &config.agentvault.approval;
         Ok(ApprovalExpirationComponent {

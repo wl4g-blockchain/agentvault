@@ -8,6 +8,6 @@ final class PayeeTest {
     @Test void payeeOperationRejectsAnUnsafeRunId() {
         assertThrows(IllegalArgumentException.class,
                 () -> new Payee.PayeeOperation(
-                        "scenario", "bad/run", "offer", "resource", "origin", "x402", "hash", null));
+                        "scenario", "bad/run", "price", "resource", "origin", "x402", "hash", null));
     }
 }

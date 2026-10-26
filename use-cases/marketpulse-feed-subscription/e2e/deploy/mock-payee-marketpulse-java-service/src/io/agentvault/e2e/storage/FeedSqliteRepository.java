@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class FeedSQLiteStorage implements AutoCloseable {
+public final class FeedSqliteRepository implements AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String[][] ACTORS = {
         {"Donald Trump", "United States president"}, {"Marco Rubio", "United States secretary of state"},
@@ -38,7 +38,7 @@ public final class FeedSQLiteStorage implements AutoCloseable {
 
     private final Connection connection;
 
-    public FeedSQLiteStorage(String path) {
+    public FeedSqliteRepository(String path) {
         if (path == null || path.isBlank() || ":memory:".equals(path)) {
             throw new IllegalArgumentException("MARKETPULSE_DATABASE must be persistent");
         }

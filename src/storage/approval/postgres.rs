@@ -3,7 +3,7 @@ use crate::{
         event::postgres::EventPostgresRepository as EventRepository,
         outbox::postgres::OutboxPostgresRepository as OutboxRepository,
         payment::postgres::PaymentPostgresRepository as PaymentRepository,
-        postgres::{dynamic_postgres as dynamic_query, BasePostgresRepository as BaseRepository},
+        postgres::{dynamic_postgres as dynamic_query, PostgresRepository as BaseRepository},
     },
     utils::storage::PostgresAmountCodec as AmountCodec,
 };

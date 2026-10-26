@@ -19,7 +19,7 @@ import (
 type Server struct {
 	bind    string
 	engine  *gin.Engine
-	storage *storage.FeedSQLiteStorage
+	storage *storage.FeedSqliteRepository
 	vault   *agentvault.AgentVault
 }
 
@@ -30,7 +30,7 @@ func NewServerFromEnv() (*Server, error) {
 		return nil, err
 	}
 	completed := false
-	var database *storage.FeedSQLiteStorage
+	var database *storage.FeedSqliteRepository
 	defer func() {
 		if !completed {
 			if database != nil {
@@ -47,7 +47,7 @@ func NewServerFromEnv() (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	database, err = storage.NewFeedSQLiteStorage(databasePath)
+	database, err = storage.NewFeedSqliteRepository(databasePath)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func mcpRoute() (payee.GinPayeeRoute, error) {
 	if err != nil {
 		return payee.GinPayeeRoute{}, err
 	}
-	offerID, err := required("MARKETPULSE_OFFER_ID")
+	priceID, err := required("MARKETPULSE_PRICE_ID")
 	if err != nil {
 		return payee.GinPayeeRoute{}, err
 	}
@@ -86,7 +86,7 @@ func mcpRoute() (payee.GinPayeeRoute, error) {
 	if err != nil {
 		return payee.GinPayeeRoute{}, err
 	}
-	return payee.NewMCPToolRoute("/mcp", "marketpulse.realtime_news", scenarioID, offerID, resourceURL, origin), nil
+	return payee.NewMCPToolRoute("/mcp", "marketpulse.realtime_news", scenarioID, priceID, resourceURL, origin), nil
 }
 
 // Run starts the HTTP listener. The /mcp endpoint is the only payment-protected route.

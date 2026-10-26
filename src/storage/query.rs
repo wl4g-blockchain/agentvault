@@ -172,21 +172,21 @@ macro_rules! entity_repository_queries {
                 E: crate::storage::RepositoryEntity + Send + Unpin,
                 for<'row> E: sqlx::FromRow<'row, $row>,
             {
-                <Self as crate::storage::IGenericStorage>::select::<E>(&filters, false)?
+                <Self as crate::storage::RepositorySql>::select::<E>(&filters, false)?
                     .build_query_as::<E>()
                     .fetch_optional(self.pool())
                     .await
                     .map_err(|error| Self::storage_error("select entity", error))
             }
             pub(crate) async fn select_by_connection<E>(
-                connection: &mut <<Self as crate::storage::IGenericStorage>::Database as sqlx::Database>::Connection,
+                connection: &mut <<Self as crate::storage::RepositorySql>::Database as sqlx::Database>::Connection,
                 filters: crate::storage::EntityQuery,
             ) -> crate::Result<Option<E>>
             where
                 E: crate::storage::RepositoryEntity + Send + Unpin,
                 for<'row> E: sqlx::FromRow<'row, $row>,
             {
-                <Self as crate::storage::IGenericStorage>::select::<E>(&filters, false)?
+                <Self as crate::storage::RepositorySql>::select::<E>(&filters, false)?
                     .build_query_as::<E>()
                     .fetch_optional(connection)
                     .await
@@ -200,7 +200,7 @@ macro_rules! entity_repository_queries {
                 E: crate::storage::RepositoryEntity + Send + Unpin,
                 for<'row> E: sqlx::FromRow<'row, $row>,
             {
-                let rows = <Self as crate::storage::IGenericStorage>::select::<E>(&filters.limit(2, 0), false)?
+                let rows = <Self as crate::storage::RepositorySql>::select::<E>(&filters.limit(2, 0), false)?
                     .build_query_as::<E>()
                     .fetch_all(self.pool())
                     .await
@@ -239,7 +239,7 @@ macro_rules! entity_repository_queries {
                         if let Some(inserted) = inserted {
                             return Ok(crate::storage::IdempotentWrite::Inserted(inserted));
                         }
-                        let existing = <Self as crate::storage::IGenericStorage>::select::<E>(&identity, false)?
+                        let existing = <Self as crate::storage::RepositorySql>::select::<E>(&identity, false)?
                             .push($share)
                             .build_query_as::<E>()
                             .fetch_one(&mut *connection)
@@ -267,12 +267,12 @@ macro_rules! entity_repository_queries {
             {
                 let (limit, offset) = Self::page_bounds(page)?;
                 filters = filters.limit(limit, offset);
-                let total: i64 = <Self as crate::storage::IGenericStorage>::select::<E>(&filters, true)?
+                let total: i64 = <Self as crate::storage::RepositorySql>::select::<E>(&filters, true)?
                     .build_query_scalar()
                     .fetch_one(self.pool())
                     .await
                     .map_err(|error| Self::storage_error("count entities", error))?;
-                let items = <Self as crate::storage::IGenericStorage>::select::<E>(&filters, false)?
+                let items = <Self as crate::storage::RepositorySql>::select::<E>(&filters, false)?
                     .build_query_as::<E>()
                     .fetch_all(self.pool())
                     .await
@@ -287,7 +287,7 @@ macro_rules! entity_repository_queries {
                 E: crate::storage::RepositoryEntity + Send + Unpin,
                 for<'row> E: sqlx::FromRow<'row, $row>,
             {
-                <Self as crate::storage::IGenericStorage>::insert(entity, false)?
+                <Self as crate::storage::RepositorySql>::insert(entity, false)?
                     .push(" RETURNING *")
                     .build_query_as::<E>()
                     .fetch_one(self.pool())
@@ -303,7 +303,7 @@ macro_rules! entity_repository_queries {
                 E: crate::storage::RepositoryEntity + Send + Unpin,
                 for<'row> E: sqlx::FromRow<'row, $row>,
             {
-                <Self as crate::storage::IGenericStorage>::update::<E>(changes, &filters)?
+                <Self as crate::storage::RepositorySql>::update::<E>(changes, &filters)?
                     .push(" RETURNING *")
                     .build_query_as::<E>()
                     .fetch_optional(self.pool())
@@ -314,9 +314,6 @@ macro_rules! entity_repository_queries {
     };
 }
 pub(crate) use entity_repository_queries;
-
-/// Compatibility import for callers constructing an aggregate SQL statement.
-pub use RepositorySql as IGenericStorage;
 
 /// An entity-declared identity; positional components follow `RepositoryEntity::KEYS`.
 #[derive(Clone)]

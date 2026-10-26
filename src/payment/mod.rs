@@ -43,8 +43,8 @@ pub use provider::{
     ExternalSettlementProvider, HttpSettlementProvider, SettlementProviderConfig, SettlementProviderRegistry,
 };
 pub use receipt::{
-    EvmAuthorizationSource, EvmEvidenceSource, EvmReceiptRegistry, EvmReceiptSource, EvmRpcReceiptConfig,
-    EvmRpcReceiptSource, ReceiptRegistry, ReceiptSource, SolanaRpcReceiptConfig, SolanaRpcReceiptSource,
+    EvmAuthorizationSource, EvmEvidenceSource, EvmRpcReceiptConfig, EvmRpcReceiptSource, ReceiptRegistry,
+    ReceiptSource, SolanaRpcReceiptConfig, SolanaRpcReceiptSource,
 };
 pub use reconciliation::{PaymentReconciler, ReconciliationConfig};
 pub use recovery::{

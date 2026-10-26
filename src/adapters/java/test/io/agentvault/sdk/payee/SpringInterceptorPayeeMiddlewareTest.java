@@ -25,14 +25,14 @@ final class SpringInterceptorPayeeMiddlewareTest {
         VaultTransport transport = new NoopTransport();
         var core = new PayeeMiddleware(transport, PayeeConfig.defaults());
         assertNotNull(core.spring(List.of(SpringInterceptorPayeeMiddleware.Route.mcpTool(
-                "/mcp", "marketpulse.realtime_news", "scenario-1", "offer-1",
+                "/mcp", "marketpulse.realtime_news", "scenario-1", "price-1",
                 "mcp://marketpulse/realtime", "https://marketpulse.test"))));
     }
 
     @Test void bypassesAFreeToolOnTheSharedMcpRoute() throws Exception {
         var core = new PayeeMiddleware(new NoopTransport(), PayeeConfig.defaults());
         var filter = core.spring(List.of(SpringInterceptorPayeeMiddleware.Route.mcpTool(
-                "/mcp", "marketpulse.realtime_news", "scenario-1", "offer-1",
+                "/mcp", "marketpulse.realtime_news", "scenario-1", "price-1",
                 "mcp://marketpulse/realtime", "https://marketpulse.test")));
         var request = new MockHttpServletRequest("POST", "/mcp");
         request.setContent(("{\"method\":\"tools/call\",\"params\":{\"name\":"
@@ -46,7 +46,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
     @Test void rejectsDuplicatedPaymentCredentialsBeforeVault() throws Exception {
         var core = new PayeeMiddleware(new NoopTransport(), PayeeConfig.defaults());
         var filter = core.spring(List.of(SpringInterceptorPayeeMiddleware.Route.mcpTool(
-                "/mcp", "marketpulse.realtime_news", "scenario-1", "offer-1",
+                "/mcp", "marketpulse.realtime_news", "scenario-1", "price-1",
                 "mcp://marketpulse/realtime", "https://marketpulse.test")));
         var request = new MockHttpServletRequest("POST", "/mcp");
         request.addHeader("x-run-id", "run-1");
@@ -73,7 +73,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
             var core = new PayeeMiddleware(transport, PayeeConfig.defaults());
             var filter = core.spring(List.of(
                     SpringInterceptorPayeeMiddleware.Route.mcpToolWithProtocol(
-                            "/mcp", "marketpulse.realtime", "scenario", "offer-1",
+                            "/mcp", "marketpulse.realtime", "scenario", "price-1",
                             "mcp://tool/marketpulse.realtime", "https://merchant.test", protocol)));
 
             ObjectNode call = mcpCall();
@@ -168,7 +168,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
         var transport = new PayeeTransport("mpp", contract, false);
         var filter = new PayeeMiddleware(transport, PayeeConfig.defaults()).spring(List.of(
                 SpringInterceptorPayeeMiddleware.Route.mcpToolWithProtocol(
-                        "/mcp", "marketpulse.realtime", "scenario", "offer-1",
+                        "/mcp", "marketpulse.realtime", "scenario", "price-1",
                         "mcp://tool/marketpulse.realtime", "https://merchant.test", "mpp")));
         ObjectNode paidCall = mcpCall();
         ((ObjectNode) paidCall.path("params"))
@@ -191,7 +191,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
         var filter = new PayeeMiddleware(
                 new PayeeTransport("x402", contract, true), PayeeConfig.defaults()).spring(List.of(
                         SpringInterceptorPayeeMiddleware.Route.mcpTool(
-                                "/mcp", "marketpulse.realtime", "scenario", "offer-1",
+                                "/mcp", "marketpulse.realtime", "scenario", "price-1",
                                 "mcp://tool/marketpulse.realtime", "https://merchant.test")));
         ObjectNode paidCall = mcpCall();
         ((ObjectNode) paidCall.path("params")).set("_meta", contract.path("credential_meta"));
@@ -258,7 +258,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
                     requestHashes.add(request.path("request_hash").asText());
                     ObjectNode challenge = JSON.createObjectNode();
                     challenge.put("scenario_id", "scenario");
-                    challenge.put("offer_id", "offer-1");
+                    challenge.put("price_id", "price-1");
                     challenge.put("resource", "mcp://tool/marketpulse.realtime");
                     challenge.put("protocol", protocol);
                     challenge.putObject("asset").put("network", "eip155:42431")
@@ -320,7 +320,7 @@ final class SpringInterceptorPayeeMiddlewareTest {
             value.put("run_id", "run-1");
             value.put("wallet_id", "wallet-1");
             value.put("policy_id", "policy-1");
-            value.put("offer_id", "offer-1");
+            value.put("price_id", "price-1");
             value.put("direction", "inbound");
             value.put("protocol", protocol);
             value.putObject("asset").put("network", "eip155:42431")

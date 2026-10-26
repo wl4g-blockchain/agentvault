@@ -10,7 +10,7 @@ impl ResourceImporter {
         ResourceImporter::unique(&batch.wallets, |item| item.id.as_str(), "wallet id")?;
         ResourceImporter::unique(&batch.scenarios, |item| item.id.as_str(), "scenario id")?;
         ResourceImporter::unique(&batch.policies, |item| item.id.as_str(), "policy id")?;
-        ResourceImporter::unique(&batch.offers, |item| item.id.as_str(), "offer id")?;
+        ResourceImporter::unique(&batch.prices, |item| item.id.as_str(), "price id")?;
         let mut approvers = BTreeSet::new();
         for approver in &batch.approvers {
             if !approvers.insert((&approver.scenario_id, &approver.auth_principal)) {
@@ -34,8 +34,8 @@ impl ResourceImporter {
                 ));
             }
         }
-        for offer in &batch.offers {
-            ResourceImporter::unique_sorted_strings(&offer.protocols, "offer protocol")?;
+        for price in &batch.prices {
+            ResourceImporter::unique_sorted_strings(&price.protocols, "price protocol")?;
         }
         Ok(())
     }
@@ -45,7 +45,7 @@ impl ResourceImporter {
         batch.wallets.sort_by(|left, right| left.id.cmp(&right.id));
         batch.scenarios.sort_by(|left, right| left.id.cmp(&right.id));
         batch.policies.sort_by(|left, right| left.id.cmp(&right.id));
-        batch.offers.sort_by(|left, right| left.id.cmp(&right.id));
+        batch.prices.sort_by(|left, right| left.id.cmp(&right.id));
         batch.approvers.sort_by(|left, right| {
             (&left.scenario_id, &left.auth_principal).cmp(&(&right.scenario_id, &right.auth_principal))
         });
@@ -64,8 +64,8 @@ impl ResourceImporter {
                 ))
             });
         }
-        for offer in &mut batch.offers {
-            offer.protocols.sort();
+        for price in &mut batch.prices {
+            price.protocols.sort();
         }
     }
 
@@ -159,7 +159,7 @@ impl ResourceImporter {
         left == &normalized
     }
 
-    pub(crate) fn same_offer(left: &PaymentPrice, right: &PaymentPrice) -> bool {
+    pub(crate) fn same_price(left: &PaymentPrice, right: &PaymentPrice) -> bool {
         let mut normalized = right.clone();
         normalized.created_at = left.created_at;
         normalized.updated_at = left.updated_at;

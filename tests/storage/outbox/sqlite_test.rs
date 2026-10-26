@@ -1,10 +1,10 @@
 use crate::config::SqliteStorageConfig;
 use crate::storage::outbox::sqlite::OutboxSqliteRepository;
 use crate::storage::sqlite::tests::*;
-use crate::storage::sqlite::SqliteStorage;
+use crate::storage::sqlite::SqliteRepository;
+use crate::storage::IOutboxRepository as _;
 use crate::storage::OutboxDeliveryClass;
 use crate::storage::OutboxLeaseRequest;
-use crate::storage::OutboxStorage as _;
 use std::time::Duration;
 
 #[tokio::test]
@@ -51,7 +51,7 @@ async fn outbox_class_claim_does_not_lease_foreign_rows_and_replays_after_restar
     assert_eq!(untouched, (0, None));
 
     drop(storage);
-    let reopened = SqliteStorage::connect(&SqliteStorageConfig {
+    let reopened = SqliteRepository::connect(&SqliteStorageConfig {
         database_file,
         max_connections: 4,
         busy_timeout: Duration::from_secs(5),

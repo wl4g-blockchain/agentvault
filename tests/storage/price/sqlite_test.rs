@@ -3,11 +3,11 @@ use crate::storage::sqlite::tests::storage;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn preserves_offer_contract_through_composed_repository() {
+async fn preserves_price_contract_through_composed_repository() {
     let (_directory, storage) = storage().await;
     RepositoryFixture::create(Arc::new(storage))
         .await
-        .offer_contract()
+        .price_contract()
         .await;
 }
 

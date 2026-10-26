@@ -1,6 +1,6 @@
 use crate::{
-    model::PaymentEventDelivery, model::PaymentEventDispatchRun, storage::OutboxDeliveryClass,
-    storage::OutboxLeaseRequest, storage::OutboxMessage, storage::OutboxStorage, Error, Result,
+    model::PaymentEventDelivery, model::PaymentEventDispatchRun, storage::IOutboxRepository,
+    storage::OutboxDeliveryClass, storage::OutboxLeaseRequest, storage::OutboxMessage, Error, Result,
 };
 use async_trait::async_trait;
 use std::{future::Future, sync::Arc, time::Duration};
@@ -70,7 +70,7 @@ pub trait PaymentEventSink: Send + Sync {
 /// Class-filtered, at-least-once dispatcher for non-approval payment events.
 /// A runtime may start it only after installing a concrete idempotent sink.
 pub struct PaymentEventDispatcher {
-    storage: Arc<dyn OutboxStorage>,
+    storage: Arc<dyn IOutboxRepository>,
     sink: Arc<dyn PaymentEventSink>,
     config: PaymentEventDispatcherConfig,
     lease_seconds: i64,
@@ -86,7 +86,7 @@ impl PaymentEventDispatcher {
     ///
     /// Returns a configuration error when worker limits are invalid.
     pub fn new(
-        storage: Arc<dyn OutboxStorage>,
+        storage: Arc<dyn IOutboxRepository>,
         sink: Arc<dyn PaymentEventSink>,
         config: PaymentEventDispatcherConfig,
     ) -> Result<Self> {

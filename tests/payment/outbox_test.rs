@@ -6,14 +6,14 @@ use super::*;
 use crate::storage::OutboxStatus;
 
 #[derive(Default)]
-struct FakeStorage {
+struct FakeRepository {
     messages: Mutex<Vec<OutboxMessage>>,
     requests: Mutex<Vec<OutboxLeaseRequest>>,
     transitions: Mutex<Vec<String>>,
 }
 
 #[async_trait]
-impl OutboxStorage for FakeStorage {
+impl IOutboxRepository for FakeRepository {
     async fn claim(&self, request: &OutboxLeaseRequest) -> Result<Vec<OutboxMessage>> {
         self.requests.lock().unwrap().push(request.clone());
         Ok(self.messages.lock().unwrap().clone())
@@ -87,7 +87,7 @@ fn message(id: &str, event_type: &str, attempt_count: u32) -> OutboxMessage {
 
 #[tokio::test]
 async fn claims_only_payment_class_and_persists_each_sink_disposition() {
-    let storage = Arc::new(FakeStorage::default());
+    let storage = Arc::new(FakeRepository::default());
     storage.messages.lock().unwrap().extend([
         message("delivered", "settled", 1),
         message("retry", "retry", 1),
@@ -118,7 +118,7 @@ async fn claims_only_payment_class_and_persists_each_sink_disposition() {
 
 #[tokio::test]
 async fn foreign_class_from_adapter_fails_without_acknowledgement() {
-    let storage = Arc::new(FakeStorage::default());
+    let storage = Arc::new(FakeRepository::default());
     let mut foreign = message("approval", "approval_required", 1);
     foreign.destination = "client:client-1.approvals".to_owned();
     storage.messages.lock().unwrap().push(foreign);
@@ -132,7 +132,7 @@ async fn foreign_class_from_adapter_fails_without_acknowledgement() {
 fn validates_configuration_and_classifies_destinations_exactly() {
     let mut invalid = config();
     invalid.max_attempts = 0;
-    assert!(PaymentEventDispatcher::new(Arc::new(FakeStorage::default()), Arc::new(TestSink), invalid).is_err());
+    assert!(PaymentEventDispatcher::new(Arc::new(FakeRepository::default()), Arc::new(TestSink), invalid).is_err());
 
     let approval = OutboxMessage {
         destination: "client:client-1.approvals".to_owned(),

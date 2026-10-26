@@ -479,7 +479,7 @@ impl MqttOperation {
             });
         }
         let payee = match request.path.as_str() {
-            paths::RESOLVE_OFFER => Some(("resolve-offer", "payment.resolve_offer", "payment.offer_resolved")),
+            paths::RESOLVE_PRICE => Some(("resolve-price", "payment.resolve_price", "payment.price_resolved")),
             paths::CREATE_CHALLENGE => Some((
                 "create-challenge",
                 "payment.create_challenge",

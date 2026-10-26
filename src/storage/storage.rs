@@ -4,25 +4,23 @@ use crate::config::StorageConfig;
 use crate::config::StorageProvider;
 use crate::config::WalletKeyRingConfig;
 use crate::storage::postgres::PostgresRepository;
-use crate::storage::postgres::PostgresStorage;
 use crate::storage::sqlite::SqliteRepository;
-use crate::storage::sqlite::SqliteStorage;
-use crate::storage::ApprovalStorage;
-use crate::storage::ApproverStorage;
-use crate::storage::ClientStorage;
 use crate::storage::EntityQuery;
-use crate::storage::EventStorage;
-use crate::storage::LedgerStorage;
-use crate::storage::OutboxStorage;
-use crate::storage::PaymentStorage;
-use crate::storage::PolicyStorage;
-use crate::storage::PriceStorage;
-use crate::storage::ScenarioStorage;
-use crate::storage::SigningStorage;
-use crate::storage::WalletBalanceStorage;
+use crate::storage::IApprovalRepository;
+use crate::storage::IApproverRepository;
+use crate::storage::IClientRepository;
+use crate::storage::IEventRepository;
+use crate::storage::IIntentRepository;
+use crate::storage::ILedgerRepository;
+use crate::storage::IOutboxRepository;
+use crate::storage::IPolicyRepository;
+use crate::storage::IPriceRepository;
+use crate::storage::IScenarioRepository;
+use crate::storage::ISigningRepository;
+use crate::storage::IWalletBalanceRepository;
+use crate::storage::IWalletRepository;
 use crate::storage::WalletKeyManager;
 use crate::storage::WalletPaymentSigner;
-use crate::storage::WalletStorage;
 use crate::utils::secret::SecretReader;
 use crate::Result;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -33,23 +31,23 @@ const MAX_STORAGE_URL_BYTES: usize = 16 * 1024;
 
 /// Provider-neutral handles for every durable payment domain port.
 ///
-/// The composition root obtains these handles only from [`IStorage::ports`];
+/// The composition root obtains these handles only from [`IRepository::ports`];
 /// handlers never instantiate or downcast a SQL adapter.
 #[derive(Clone)]
 pub struct StoragePorts {
-    pub clients: Arc<dyn ClientStorage>,
-    pub scenarios: Arc<dyn ScenarioStorage>,
-    pub approvers: Arc<dyn ApproverStorage>,
-    pub policies: Arc<dyn PolicyStorage>,
-    pub offers: Arc<dyn PriceStorage>,
-    pub wallets: Arc<dyn WalletStorage>,
-    pub wallet_balances: Arc<dyn WalletBalanceStorage>,
-    pub payments: Arc<dyn PaymentStorage>,
-    pub approvals: Arc<dyn ApprovalStorage>,
-    pub events: Arc<dyn EventStorage>,
-    pub ledger: Arc<dyn LedgerStorage>,
-    pub outbox: Arc<dyn OutboxStorage>,
-    pub signing: Arc<dyn SigningStorage>,
+    pub clients: Arc<dyn IClientRepository>,
+    pub scenarios: Arc<dyn IScenarioRepository>,
+    pub approvers: Arc<dyn IApproverRepository>,
+    pub policies: Arc<dyn IPolicyRepository>,
+    pub prices: Arc<dyn IPriceRepository>,
+    pub wallets: Arc<dyn IWalletRepository>,
+    pub wallet_balances: Arc<dyn IWalletBalanceRepository>,
+    pub payments: Arc<dyn IIntentRepository>,
+    pub approvals: Arc<dyn IApprovalRepository>,
+    pub events: Arc<dyn IEventRepository>,
+    pub ledger: Arc<dyn ILedgerRepository>,
+    pub outbox: Arc<dyn IOutboxRepository>,
+    pub signing: Arc<dyn ISigningRepository>,
 }
 
 /// Unique lifecycle and domain contract implemented by every SQL provider.
@@ -57,7 +55,7 @@ pub struct StoragePorts {
 /// Providers are constructed and consumed exclusively through
 /// [`StorageFactory`]. The returned domain ports all share the same pool and
 /// transaction authority.
-pub trait IStorage: Send + Sync {
+pub trait IRepository: Send + Sync {
     fn provider(&self) -> StorageProvider;
 
     fn init(&self) -> StorageLifecycleFuture;
@@ -108,13 +106,13 @@ impl StorageFactory {
     ///
     /// Returns an error when configuration, secrets, or provider initialization
     /// fails.
-    pub async fn create(&self, config: &StorageConfig) -> Result<Arc<dyn IStorage>> {
-        let component: Arc<dyn IStorage> = match config.provider {
-            StorageProvider::Sqlite => Arc::new(SqliteStorage::from_config(&config.sqlite)?),
+    pub async fn create(&self, config: &StorageConfig) -> Result<Arc<dyn IRepository>> {
+        let component: Arc<dyn IRepository> = match config.provider {
+            StorageProvider::Sqlite => Arc::new(SqliteRepository::from_config(&config.sqlite)?),
             StorageProvider::Postgres => {
                 let url =
                     SecretReader::read_ref(&config.postgres.url, "PostgreSQL payment URL", MAX_STORAGE_URL_BYTES)?;
-                Arc::new(PostgresStorage::from_config(
+                Arc::new(PostgresRepository::from_config(
                     &url,
                     config.postgres.max_connections,
                     config.postgres.connect_timeout,
@@ -163,7 +161,7 @@ pub enum IdempotentWrite<T> {
 #[path = "../../tests/storage/storage_test.rs"]
 mod wallet_tests;
 
-impl crate::storage::IStorage for PostgresStorage {
+impl crate::storage::IRepository for PostgresRepository {
     fn provider(&self) -> crate::config::StorageProvider {
         crate::config::StorageProvider::Postgres
     }
@@ -210,7 +208,7 @@ impl crate::storage::IStorage for PostgresStorage {
             policies: Arc::new(crate::storage::policy::postgres::PolicyPostgresRepository::new(
                 (*self).clone(),
             )),
-            offers: Arc::new(crate::storage::price::postgres::PricePostgresRepository::new(
+            prices: Arc::new(crate::storage::price::postgres::PricePostgresRepository::new(
                 (*self).clone(),
             )),
             wallets: Arc::new(crate::storage::wallet::postgres::WalletPostgresRepository::new(
@@ -259,7 +257,7 @@ impl crate::storage::IStorage for PostgresStorage {
     }
 }
 
-impl crate::storage::IStorage for SqliteStorage {
+impl crate::storage::IRepository for SqliteRepository {
     fn provider(&self) -> crate::config::StorageProvider {
         crate::config::StorageProvider::Sqlite
     }
@@ -306,7 +304,7 @@ impl crate::storage::IStorage for SqliteStorage {
             policies: Arc::new(crate::storage::policy::sqlite::PolicySqliteRepository::new(
                 (*self).clone(),
             )),
-            offers: Arc::new(crate::storage::price::sqlite::PriceSqliteRepository::new(
+            prices: Arc::new(crate::storage::price::sqlite::PriceSqliteRepository::new(
                 (*self).clone(),
             )),
             wallets: Arc::new(crate::storage::wallet::sqlite::WalletSqliteRepository::new(
@@ -419,7 +417,7 @@ impl StorageSchema {
     }
 }
 
-impl SqliteStorage {
+impl SqliteRepository {
     pub(crate) fn from_config(config: &crate::config::SqliteStorageConfig) -> Result<Self> {
         Self::new(&config.database_file, config.max_connections, config.busy_timeout)
     }
@@ -428,7 +426,7 @@ impl SqliteStorage {
 impl PostgresRepository {
     #[cfg(test)]
     pub(crate) async fn connect(url: &str, max_connections: u32, connect_timeout: std::time::Duration) -> Result<Self> {
-        use crate::storage::IStorage as _;
+        use crate::storage::IRepository as _;
 
         let storage = Self::from_config(url, max_connections, connect_timeout)?;
         storage.init().await?;
@@ -445,7 +443,7 @@ impl PostgresRepository {
 impl SqliteRepository {
     #[cfg(test)]
     pub(crate) async fn connect(config: &crate::config::SqliteStorageConfig) -> Result<Self> {
-        use crate::storage::IStorage as _;
+        use crate::storage::IRepository as _;
 
         let storage = Self::from_config(config)?;
         storage.init().await?;

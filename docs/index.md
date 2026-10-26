@@ -65,7 +65,7 @@ Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC
 
 `run_id` 在 SDK、HTTP/gRPC/MQTT wire、Intent、Outbox 和业务交付中保持不变，授权轮询、网络超时、重发、Verify、Settle 及交付恢复都复用它；不再存在第二个公开的业务幂等字段。同一 Scenario 下，同 `run_id` 且同请求指纹返回原结果；同 `run_id` 但不同指纹必须冲突并 Fail Closed。
 
-可观测标识与业务标识严格分离：交易 Run 的生命周期大于单段 Trace，同一 `run_id` 可跨进程重启、人工审批和对账形成多个 `trace_id`；每次 HTTP/gRPC/MQTT/Provider 调用或重试创建新的 `span_id`，并通过 W3C `traceparent` 传递父子关系。系统禁止定义额外的独立关联标识。异步 wire 中兼容字段 `requestSpanId` 必须与 `traceparent` 的 producer Span ID 完全相同，用于响应 Topic 并由响应回显；它不是新 ID，不得持久化、参与业务唯一约束或恢复查询，只允许作为 MQTT QoS 重投递的短生命周期回复缓存键。消费响应创建新 Span，重试保持 `run_id`、递增 `attempt_no` 并取得新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 只把 `run_id` 映射为该协议头，不创建新身份。
+可观测标识与业务标识严格分离：交易 Run 的生命周期大于单段 Trace，同一 `run_id` 可跨进程重启、人工审批和对账形成多个 `trace_id`；每次 HTTP/gRPC/MQTT/Provider 调用或重试创建新的 `span_id`，并通过 W3C `traceparent` 传递父子关系。系统禁止定义额外的独立关联标识。异步 wire 中字段 `requestSpanId` 必须与 `traceparent` 的 producer Span ID 完全相同，用于响应 Topic 并由响应回显；它不是新 ID，不得持久化、参与业务唯一约束或恢复查询，只允许作为 MQTT QoS 重投递的短生命周期回复缓存键。消费响应创建新 Span，重试保持 `run_id`、递增 `attempt_no` 并取得新 Span。若外部 Provider 协议硬性要求 HTTP `Idempotency-Key`，Adapter 只把 `run_id` 映射为该协议头，不创建新身份。
 
 OUTBOUND 时 AgentVault 把 Scenario 下所有匹配的 Policy-Wallet membership 视为候选钱包池。协议、资产、Origin、Recipient 或方向不匹配的 membership 不进入候选；Wallet 停用、缺少本地 Active Key、算法/规范地址不兼容 Challenge 网络或预算拒绝则保留为可审计的拒绝结果。系统按“可直接授权、需审批、拒绝”分组，在同组内优先选择当日已花费加预留最少的 Wallet，并以请求哈希做稳定散列决胜。选择结果写入 Intent 作为内部审计事实；幂等重放始终返回同一结果。候选数量有界，最终 membership、网络兼容性、Key Version、Policy 快照与双层预算在 SQL 锁内再次校验，因此并发选择不能绕过限额。多个匹配 Policy 是替代授权（OR）；需要叠加限制时应合并为一个 Policy，避免用重叠 Policy 表达交集语义。链上余额会在每次签名前再次 Fail Closed 检查；它不是负载均衡权重，也不会把同一个 Intent 静默改绑到另一 Wallet。
 
@@ -136,13 +136,13 @@ Go、Rust、Python、TypeScript 测试统一放在组件的 `tests/` 下；Java 
 
 `controller/api.rs` 注册业务 HTTP 路由及独立的管理路由，后者由 `apm::ManagementServer` 绑定 `mgmt.host/port`；业务写路由不会出现在管理监听器。`GrpcController`、`MqttController` 仅监听/订阅并调用专用通信组件，认证上下文由 `controller/principal_context.rs` 处理。Unix socket 控制器及 `agentvault.transport.local` 配置已移除，旧配置会明确报错。
 
-资源定价的主实体为 `PaymentPrice`，主路由为 `/prices/resolve` 和 `/admin/prices`，导入主 kind 为 `Price`。已有 `PaymentPrice` 类型别名、`Price` 导入 kind、旧 offers 查询路由和 `offer_id` wire 字段保留兼容，以维持既有重试、审批和 A2A Task 绑定。
+资源定价的唯一实体为 `PaymentPrice`，解析和管理路由分别为 `/prices/resolve` 和 `/admin/prices`，导入 kind 仅支持 `Price`。支付 DTO、Intent 以及 A2A Task scope 统一使用 `price_id`；旧命名、路由和字段不会被接受。
 
 Price 管理路由位于业务 API（默认前缀 `/api/v1`）：`POST /admin/prices` 的 JSON body 复用导入 `Price` 的 spec 字段，创建时间和 revision 由服务端生成；`GET /admin/prices/{id}` 查询单条。`PUT /admin/prices/{id}` 接受 `{"price": <Price spec>, "expected_updated_at": <读取时的 revision>}`，保留 id、scenario、policy 和创建时间。`DELETE /admin/prices/{id}?expected_updated_at=<revision>` 仅删除未被 Intent 引用的价格。所有写入先验证调用 Principal 对持久化 Scenario 的权限；更新、删除使用 CAS，过期 revision 返回 409，数据库外键拒绝删除历史支付引用的价格。管理监听器及 gRPC/MQTT 不暴露这些管理写路由。
 
 ## 5. 持久化与一致性
 
-SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` 初始化，再在同一数据库事务内应用声明的升级步骤；schema parity test 校验表、列、索引和版本。`002_price.ddl.sql` 将原 `pay_price` 原位改名为 `pay_price`，保留 Intent 外键、历史 Event/Ledger 和资源 ID。版本历史保留为 `[1, 2]`，重复启动不重放迁移，未知或缺失的版本链拒绝启动。八个支付核心表与七个支撑表如下：
+SQLite 与 PostgreSQL 从对应的 `001_init.ddl.sql`、`001_init.dml.sql` 在同一数据库事务内初始化 canonical schema，当前版本历史为 `[1]`。初始 schema 直接定义 `pay_price` 及 `pay_intent.price_id`，不保留项目内部旧格式迁移。通用 Repository 的版本迁移机制供未来升级使用；重复启动不重放初始化，未知或缺失的版本链拒绝启动。八个支付核心表与七个支撑表如下：
 
 | 分类 | 表 | 职责 |
 |---|---|---|
@@ -217,19 +217,21 @@ Credential 语义指纹在同一支付方向内全局唯一：任何 INBOUND Cre
 
 `PaymentProtocol` 把 wire Challenge/Credential 转换为统一领域对象，并负责协议语义指纹与签名计划。完整 Payer 能力包括 x402 v2 / EVM / USDC / exact / EIP-3009，以及 MPP 0.15.1 的 Tempo `charge`：Adapter 从权威 Challenge 构造受约束的 type-0x76 交易和 EIP-712 digest，仍由既有 Wallet/Policy/预算/审批链路签名，再生成官方 Credential；Payee 通过固定外部 Provider 的 verify/settle 获取可信链上证据。MPP session、split、fee-payer、machine-token 与 delegated-key 仍显式 Unsupported，不能伪装成 charge。协议库可用时直接封装官方 crate；业务内核不复制协议栈。AgentVault x402 Payee profile 会随 402 返回 `payment-expires-at`（规范十进制 Unix 秒）；Payer 必须原样回传这个绝对时间，使审批轮询和进程重试解析出同一个 Challenge Hash。Adapter 会同时按 x402 `maxTimeoutSeconds` 校验它，缺失、过期或超出窗口均 Fail Closed，而不是以本机当前时间重新生成过期点。
 
-x402 Provider 只接受 v2 结构：HTTP 优先解析规范 Base64 `PAYMENT-REQUIRED`，兼容原 JSON body；头与 body 同时声明但内容不同即拒绝。MCP Tool Call 支持错误 Tool Result 中的 `structuredContent` 与文本 JSON，两者冲突同样拒绝；付款重试使用 `x402/payment`，成功证据使用 `x402/payment-response`。MPP Provider 使用官方 `mpp` crate 的 HTTP Challenge/Credential/Receipt 与 MCP PaymentError/`org.paymentauth/credential`/`org.paymentauth/receipt` 类型；仅选择允许列表中的 Tempo `charge`，非付款认证 Challenge 不会误判。`Payment-Authorization` 只有在对端 Challenge 明确要求时使用，`Authorization: Payment` 不得覆盖已有业务 Bearer。所有协议付款 `_meta` 在调用业务 Handler 前剥离，其他 `_meta` 原样保留。
+x402 Provider 只接受 v2 结构：HTTP 优先解析规范 Base64 `PAYMENT-REQUIRED`，也支持规范 JSON body；头与 body 同时声明但内容不同即拒绝。MCP Tool Call 支持错误 Tool Result 中的 `structuredContent` 与文本 JSON，两者冲突同样拒绝；付款重试使用 `x402/payment`，成功证据使用 `x402/payment-response`。MPP Provider 使用官方 `mpp` crate 的 HTTP Challenge/Credential/Receipt 与 MCP PaymentError/`org.paymentauth/credential`/`org.paymentauth/receipt` 类型；仅选择允许列表中的 Tempo `charge`，非付款认证 Challenge 不会误判。`Payment-Authorization` 只有在对端 Challenge 明确要求时使用，`Authorization: Payment` 不得覆盖已有业务 Bearer。所有协议付款 `_meta` 在调用业务 Handler 前剥离，其他 `_meta` 原样保留。
+
+SDK 向 Vault 上报商户回执时，`POST /payments/{intent_id}/outbound-response` 的唯一请求格式为 `{"scenario_id":"…","run_id":"…","protocol":"x402|mpp","evidence":{"header_name":"…","header_value":"…"}}`。商户回执仍只是链上查询线索，不能直接入账。通用 HTTP Settlement Provider 统一返回 `valid`、`settled`、`transaction` 等字段；x402 Facilitator 的官方 `isValid` / `success` wire 由专用协议组件和官方类型解析，不由通用 DTO 猜测或容忍旧字段。
 
 Rust、Go、Python、TypeScript 的 x402 Provider 直接组合各自官方 v2 SDK；五语言 MPP Provider 同样优先组合官方/上游库模型。当前上游 Java x402 模块仍是仅本地安装的 `1.0.0-SNAPSHOT` v1（`X-PAYMENT` 与 v1 body），不能作为 v2 类型依赖，因此 Java 只保留受共享夹具约束的薄 v2 wire 投影，钱包签名、协议权威校验和结算仍由使用官方 Rust 类型的 Vault 执行；在上游提供兼容的 Java v2 类型后再替换该投影，禁止以 v1 库伪装 v2 支持。
 
 Facilitator/Provider 始终是进程外依赖。HTTP adapter 固定 Base URL 和相对路径、禁止跨 Authority Redirect、限制响应体与超时，并校验返回的资产和结算证据。Provider 跟随所属 Payee 协议配置；共享 `chains` 注册表由运营方固定链类型与 RPC，Challenge 不能选择 Provider 或 RPC。
 
-五 SDK 的 HTTP/MCP 编排也用于 A2A 0.3 非流式 `message/send`：x402 v2 使用官方 A2A extension 的 Task/Message metadata，MPP 使用原生 JSON-RPC 根 `_meta` 与支付错误码。调用方显式启用付款；收款方组合应用已有 TaskStore 并绑定 task/context/run/scenario/offer，不维护另一份任务数据库。AgentCard 声明与请求/响应扩展协商、稳定请求摘要、Bearer 保留和结算后业务失败回执均有五语言验收。接入方法及明确的 Unsupported 边界见 [SDK 文档](../src/adapters/README.md#a2a-automatic-payments)。`runner.py -s a2a` 产出 SDK 边界报告，受控 Vault 测试不能替代 `full` / `mpp-tempo` / `x402-solana` 的实链会计证据。
+五 SDK 的 HTTP/MCP 编排也用于 A2A 0.3 非流式 `message/send`：x402 v2 使用官方 A2A extension 的 Task/Message metadata，MPP 使用原生 JSON-RPC 根 `_meta` 与支付错误码。调用方显式启用付款；收款方组合应用已有 TaskStore 并绑定 task/context/run/scenario/price，不维护另一份任务数据库。AgentCard 声明与请求/响应扩展协商、稳定请求摘要、Bearer 保留和结算后业务失败回执均有五语言验收。接入方法及明确的 Unsupported 边界见 [SDK 文档](../src/adapters/README.md#a2a-automatic-payments)。`runner.py -s a2a` 产出 SDK 边界报告，受控 Vault 测试不能替代 `full` / `mpp-tempo` / `x402-solana` 的实链会计证据。
 
 ## 9. Cache、密钥与可观测性
 
 `server:`、`mgmt:`、`logging:`、`storage:` 与 `cache:` 是主 YAML 的顶层通用能力；唯一业务根是 `agentvault:`。`agentvault.payer` 与 `agentvault.payee` 分别配置出站和入站协议，不能通过一个共享开关隐式同时启用。Facilitator/MPP Provider 只属于 `payee`，`agentvault.chains` 则由两个方向共享并通过 `family` 支持不同链实现。
 `storage/storage.rs` 定义唯一的 `IGenericRepository<E>` 六个可执行 CRUD 方法和 `StorageFactory`；领域 Port 定义在各领域模块并保留根路径重导出。
-`postgres.rs` / `sqlite.rs` 分别实现 `PostgresRepository` / `SqliteRepository`（旧 `Base*` 名称为兼容别名），
+`postgres.rs` / `sqlite.rs` 分别实现 `PostgresRepository` / `SqliteRepository`，
 仅负责连接池、通用参数绑定、外部传入的 Schema 迁移与事务边界，不引用支付表名、支付状态或领域仓储。
 `repository_entity!` 直接包裹唯一 Entity 声明，在编译期生成列元数据（含 `sqlx(rename/flatten/json)` 映射），
 行解码复用 SQLx `FromRow`；默认 CRUD 使用预编译参数绑定，不通过 Serde/JSON 反射实体。JSON 序列化只用于实际 JSON 列。
