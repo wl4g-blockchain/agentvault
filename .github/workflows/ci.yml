@@ -440,8 +440,9 @@ jobs:
           curl --fail --silent --show-error --location https://get.k3s.io \
             --output "${RUNNER_TEMP}/install-k3s.sh"
           sudo env INSTALL_K3S_VERSION=v1.35.4+k3s1 INSTALL_K3S_SYMLINK=force \
-            sh "${RUNNER_TEMP}/install-k3s.sh" server --disable=traefik --disable=servicelb
-          sudo k3s kubectl wait --for=condition=Ready node --all --timeout=120s
+            sh "${RUNNER_TEMP}/install-k3s.sh" server --node-name=agentvault-ci --disable=traefik --disable=servicelb
+          sudo k3s kubectl wait --for=create node/agentvault-ci --timeout=120s
+          sudo k3s kubectl wait --for=condition=Ready node/agentvault-ci --timeout=120s
           sudo k3s kubectl --namespace kube-system wait --for=create deployment/local-path-provisioner --timeout=120s
           sudo k3s kubectl --namespace kube-system rollout status deployment/local-path-provisioner --timeout=120s
 
