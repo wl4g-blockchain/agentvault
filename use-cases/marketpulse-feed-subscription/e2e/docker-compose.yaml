@@ -2,21 +2,21 @@
 # Independent containers share Anvil's network namespace so the production
 # loopback-only safeguards remain enabled; a real deployment must use TLS.
 x-agentvault-environment: &agentvault-environment
-  AGENTVAULT_STORAGE_POSTGRES_URL: postgres://agentvault:${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}@127.0.0.1:5432/agentvault
-  AGENTVAULT_WALLET_KEK_V1: ${E2E_AGENTVAULT_WALLET_KEK:-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE}
-  AGENTVAULT_RECOVERY_KEY_V1: ${E2E_AGENTVAULT_RECOVERY_KEY:-AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI}
-  AGENTVAULT_APPROVAL_JWT_KEY_V1: ${E2E_AGENTVAULT_APPROVAL_KEY:-AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM}
-  AGENTVAULT_MQTT_PASSWORD: ${E2E_AGENTVAULT_MQTT_PASSWORD:-agentvault-e2e-vault}
-  AGENTVAULT_QUANTSTREAM_RUST_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
-  AGENTVAULT_QUANTSTREAM_RUST_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
-  AGENTVAULT_QUANTSTREAM_GO_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
-  AGENTVAULT_QUANTSTREAM_GO_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
-  AGENTVAULT_QUANTSTREAM_PYTHON_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
-  AGENTVAULT_QUANTSTREAM_PYTHON_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
-  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
-  AGENTVAULT_QUANTSTREAM_TYPESCRIPT_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
-  AGENTVAULT_QUANTSTREAM_JAVA_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
-  AGENTVAULT_QUANTSTREAM_JAVA_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
+  HELPER_SECRET_STORAGE_POSTGRES_URL: postgres://agentvault:${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}@127.0.0.1:5432/agentvault
+  HELPER_SECRET_WALLET_KEK_V1: ${E2E_AGENTVAULT_WALLET_KEK:-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE}
+  HELPER_SECRET_RECOVERY_KEY_V1: ${E2E_AGENTVAULT_RECOVERY_KEY:-AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI}
+  HELPER_SECRET_APPROVAL_JWT_KEY_V1: ${E2E_AGENTVAULT_APPROVAL_KEY:-AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM}
+  HELPER_SECRET_MQTT_PASSWORD: ${E2E_AGENTVAULT_MQTT_PASSWORD:-agentvault-e2e-vault}
+  HELPER_SECRET_QUANTSTREAM_RUST_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_PRIMARY_PAYER_PRIVATE_KEY:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+  HELPER_SECRET_QUANTSTREAM_RUST_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_RUST_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000002}
+  HELPER_SECRET_QUANTSTREAM_GO_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000003}
+  HELPER_SECRET_QUANTSTREAM_GO_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_GO_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000004}
+  HELPER_SECRET_QUANTSTREAM_PYTHON_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000005}
+  HELPER_SECRET_QUANTSTREAM_PYTHON_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_PYTHON_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000006}
+  HELPER_SECRET_QUANTSTREAM_TYPESCRIPT_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000007}
+  HELPER_SECRET_QUANTSTREAM_TYPESCRIPT_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_TYPESCRIPT_SECONDARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000008}
+  HELPER_SECRET_QUANTSTREAM_JAVA_PRIMARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_PRIMARY_PAYER_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000009}
+  HELPER_SECRET_QUANTSTREAM_JAVA_SECONDARY_WALLET_PRIVATE_KEY: ${E2E_QUANTSTREAM_JAVA_SECONDARY_PAYER_PRIVATE_KEY:-000000000000000000000000000000000000000000000000000000000000000a}
   RUST_LOG: ${E2E_AGENTVAULT_LOG:-info}
 
 x-quantstream-environment: &quantstream-environment
@@ -48,7 +48,7 @@ x-marketpulse-environment: &marketpulse-environment
   AGENTVAULT_MQTT_CLIENT_ID: ${E2E_MARKETPULSE_MQTT_CLIENT_ID:-client-marketpulse}
   AGENTVAULT_MQTT_TIMEOUT_SECONDS: ${E2E_MARKETPULSE_MQTT_TIMEOUT_SECONDS:-15}
   MARKETPULSE_SCENARIO_ID: ${E2E_MARKETPULSE_SCENARIO_ID:-scenario-marketpulse-feed}
-  MARKETPULSE_OFFER_ID: ${E2E_MARKETPULSE_OFFER_ID:-offer-realtime-news}
+  MARKETPULSE_PRICE_ID: ${E2E_MARKETPULSE_PRICE_ID:-price-realtime-news}
   MARKETPULSE_RESOURCE_URL: ${E2E_MARKETPULSE_RESOURCE_URL:-http://127.0.0.1:8081/mcp}
   MARKETPULSE_ORIGIN: ${E2E_MARKETPULSE_ORIGIN:-http://127.0.0.1:8081}
   MARKETPULSE_DATABASE: ${E2E_MARKETPULSE_DATABASE:-/var/lib/marketpulse/marketpulse.sqlite3}
@@ -80,8 +80,8 @@ x-agentvault-build: &agentvault-build
   network: host
   args:
     <<: *agentvault-build-proxy-args
-    BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
-    RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+    BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
+    RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
 
 services:
   # Network namespace anchor and EVM node. Host bindings for colocated E2E
@@ -308,16 +308,16 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  agentvault-provision:
+  agentvault-import:
     profiles: ["apps"]
     image: ${E2E_AGENTVAULT_IMAGE:-agentvault-e2e:local}
     build: *agentvault-build
     network_mode: service:anvil
-    command: ["--config", "/etc/agentvault/e2e.yaml", "provision", "--manifest", "/etc/agentvault/provision.json"]
+    command: ["--config", "/etc/agentvault/e2e.yaml", "console", "import", "/etc/agentvault/resources.yaml"]
     environment: *agentvault-environment
     volumes:
       - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
-      - ./common/contract/scenario.json:/etc/agentvault/provision.json:ro
+      - ./config/agentvault/init.import.yaml:/etc/agentvault/resources.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -335,7 +335,7 @@ services:
     volumes:
       - ${E2E_AGENTVAULT_CONFIG_PATH:-./reports/.runtime/agentvault.yaml}:/etc/agentvault/e2e.yaml:ro
     depends_on:
-      agentvault-provision:
+      agentvault-import:
         condition: service_completed_successfully
       emqx:
         condition: service_healthy
@@ -360,7 +360,7 @@ services:
       network: host
       args:
         <<: *marketpulse-build-proxy-args
-        E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
         E2E_MARKETPULSE_RUST_RUNTIME_IMAGE: ${E2E_MARKETPULSE_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment: *marketpulse-environment
@@ -481,7 +481,7 @@ services:
     image: ${E2E_QUANTSTREAM_UI_IMAGE:-quantstream-admin-ui-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-ui/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ui/Dockerfile
       network: host
       args:
         <<: *quantstream-ui-build-proxy-args
@@ -518,11 +518,11 @@ services:
     image: ${E2E_QUANTSTREAM_RUST_IMAGE:-quantstream-ingestor-rust-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-rust/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-rust/Dockerfile
       network: host
       args:
         <<: *quantstream-build-proxy-args
-        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm}
+        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
         E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
     network_mode: service:anvil
     environment:
@@ -541,7 +541,7 @@ services:
     image: ${E2E_QUANTSTREAM_GOLANG_IMAGE:-quantstream-ingestor-go-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-golang/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-golang/Dockerfile
       network: host
       args:
         <<: *quantstream-build-proxy-args
@@ -564,7 +564,7 @@ services:
     image: ${E2E_QUANTSTREAM_PYTHON_IMAGE:-quantstream-ingestor-python-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-python/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-python/Dockerfile
       network: host
       args:
         <<: *quantstream-build-proxy-args
@@ -587,7 +587,7 @@ services:
     image: ${E2E_QUANTSTREAM_TYPESCRIPT_IMAGE:-quantstream-ingestor-typescript-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-typescript/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-typescript/Dockerfile
       network: host
       args:
         <<: *quantstream-build-proxy-args
@@ -610,7 +610,7 @@ services:
     image: ${E2E_QUANTSTREAM_JAVA_IMAGE:-quantstream-ingestor-java-e2e:local}
     build:
       context: ../../..
-      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ingest-service-java/Dockerfile
+      dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-java/Dockerfile
       network: host
       args:
         <<: *quantstream-build-proxy-args

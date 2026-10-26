@@ -1,5 +1,6 @@
-{{- $middleware := index .Values "authguard-middleware" -}}
-{{- if and .Values.routes.enabled $middleware.enabled }}
+{{- $authguard := .Values.authguard -}}
+{{- $backend := .Values.agentvault.backend -}}
+{{- if and $backend.route.enabled $authguard.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -9,20 +10,20 @@ metadata:
     authguard.io/protected: "true"
 spec:
   parentRefs:
-    - { name: {{ .Values.routes.gatewayName }}, sectionName: {{ .Values.routes.sectionName }} }
-  {{- with .Values.routes.hostnames }}
+    - { name: {{ $backend.route.gatewayName }}, sectionName: {{ $backend.route.sectionName }} }
+  {{- with $backend.route.hostnames }}
   hostnames: {{ toYaml . | nindent 4 }}
   {{- end }}
   rules:
     - matches: [{ path: { type: PathPrefix, value: /api/v1/ } }]
-      backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ .Values.service.apiPort }} }]
-    {{- if .Values.runtime.grpc.enabled }}
+      backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ $backend.service.apiPort }} }]
+    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
     - matches: [{ path: { type: PathPrefix, value: /agentvault.transport.v1.PaymentTransport/ } }]
-      backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ .Values.service.grpcPort }} }]
+      backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ $backend.service.grpcPort }} }]
     {{- end }}
     - matches: [{ path: { type: PathPrefix, value: /agentvault-management/ } }]
       filters:
         - type: URLRewrite
           urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: / } }
-      backendRefs: [{ name: {{ include "agentvault.fullname" . }}-management, port: {{ .Values.service.managementPort }} }]
+      backendRefs: [{ name: {{ include "agentvault.fullname" . }}-management, port: {{ $backend.service.managementPort }} }]
 {{- end }}

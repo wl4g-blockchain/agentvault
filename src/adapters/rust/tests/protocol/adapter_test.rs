@@ -16,7 +16,7 @@ struct TestAdapter;
 #[test]
 fn shared_fixture_covers_both_transports_protocols_and_roles() {
     let fixture: Value =
-        serde_json::from_str(&std::fs::read_to_string("../fixtures/payment_protocol_http.json").expect("fixture"))
+        serde_json::from_str(&std::fs::read_to_string("../tests/payment_protocol_http.json").expect("fixture"))
             .expect("fixture JSON");
     assert_eq!(fixture["schema"], "agentvault.sdk.protocol-http.v1");
     let registry = PaymentProtocolFactory::new()
@@ -87,7 +87,7 @@ fn shared_fixture_covers_both_transports_protocols_and_roles() {
 #[test]
 fn shared_mcp_fixture_uses_protocol_native_models() {
     let fixture: Value =
-        serde_json::from_str(&std::fs::read_to_string("../fixtures/payment_protocol_mcp.json").expect("MCP fixture"))
+        serde_json::from_str(&std::fs::read_to_string("../tests/payment_protocol_mcp.json").expect("MCP fixture"))
             .expect("MCP fixture JSON");
     assert_eq!(fixture["schema"], "agentvault.sdk.protocol-mcp.v1");
     let registry = PaymentProtocolFactory::new()
@@ -241,7 +241,7 @@ fn mpp_preserves_bearer_and_never_uses_x402_wire_headers() {
 
     let challenge: PaymentChallenge = serde_json::from_value(json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "https://merchant.example/tool",
         "protocol": "mpp",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
@@ -266,7 +266,7 @@ fn protocol_receipts_use_distinct_wire_formats() {
     let mut payment: SettledIncomingPayment = serde_json::from_value(json!({
         "intent": {
             "id": "intent", "scenario_id": "scenario", "run_id": "run",
-            "wallet_id": "wallet", "policy_id": "policy", "offer_id": "offer",
+            "wallet_id": "wallet", "policy_id": "policy", "price_id": "price",
             "direction": "inbound", "protocol": "mpp",
             "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
             "recipient": "0x1111111111111111111111111111111111111111",

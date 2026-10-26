@@ -44,7 +44,7 @@ fn second_asset() -> AssetIdentity {
 }
 
 fn rehash(challenge: &mut PaymentChallenge) {
-    let hash = x402_challenge_hash(
+    let hash = X402Wire::challenge_hash(
         &challenge.resource,
         challenge.expires_at,
         &challenge.payload["payment_required"],
@@ -66,23 +66,23 @@ fn challenge_hash_is_stable_across_object_key_order() {
     .unwrap();
     let resource = "https://merchant.example/paid";
     let nonce = "11".repeat(32);
-    let first_hash = x402_challenge_hash(resource, 160, &first, &nonce).unwrap();
+    let first_hash = X402Wire::challenge_hash(resource, 160, &first, &nonce).unwrap();
     assert_eq!(
         first_hash,
-        x402_challenge_hash(resource, 160, &reordered, &nonce).unwrap()
+        X402Wire::challenge_hash(resource, 160, &reordered, &nonce).unwrap()
     );
 
     let mut tampered = reordered;
     tampered["accepts"][0]["amount"] = Value::String("1000001".to_owned());
     assert_ne!(
         first_hash,
-        x402_challenge_hash(resource, 160, &tampered, &nonce).unwrap()
+        X402Wire::challenge_hash(resource, 160, &tampered, &nonce).unwrap()
     );
     assert_ne!(
         first_hash,
-        x402_challenge_hash(resource, 160, &first, &"22".repeat(32)).unwrap()
+        X402Wire::challenge_hash(resource, 160, &first, &"22".repeat(32)).unwrap()
     );
-    assert!(x402_challenge_hash(resource, 160, &first, "not-a-nonce").is_err());
+    assert!(X402Wire::challenge_hash(resource, 160, &first, "not-a-nonce").is_err());
 }
 
 fn signed_payload(challenge: &PaymentChallenge) -> Value {
@@ -111,7 +111,7 @@ fn matching_intent(challenge: &PaymentChallenge) -> PaymentIntent {
         run_id: "run-1".to_owned(),
         wallet_id: Some("wallet-1".to_owned()),
         policy_id: Some("policy-1".to_owned()),
-        offer_id: None,
+        price_id: None,
         direction: crate::model::PaymentDirection::Outbound,
         protocol: X402_PROTOCOL.to_owned(),
         asset: challenge.asset.clone(),
@@ -148,9 +148,9 @@ async fn assert_integrity_rejected(adapter: &X402Adapter, challenge: &PaymentCha
     assert!(adapter.settle_payment(challenge, &credential).await.is_err());
 }
 
-fn offer() -> PaymentOffer {
-    PaymentOffer {
-        id: "offer-1".to_owned(),
+fn price() -> PaymentPrice {
+    PaymentPrice {
+        id: "price-1".to_owned(),
         scenario_id: "scenario-1".to_owned(),
         policy_id: "policy-1".to_owned(),
         resource: "https://merchant.example/paid".to_owned(),
@@ -173,7 +173,7 @@ fn offer() -> PaymentOffer {
 async fn http_provider_accepts_header_only_and_rejects_conflicting_body() {
     let adapter = adapter();
     let challenge = adapter
-        .build_challenge(&offer(), "0x2222222222222222222222222222222222222222", 100)
+        .build_challenge(&price(), "0x2222222222222222222222222222222222222222", 100)
         .await
         .unwrap();
     let wire = challenge.payload["payment_required"].clone();
@@ -181,12 +181,12 @@ async fn http_provider_accepts_header_only_and_rejects_conflicting_body() {
     let headers = BTreeMap::from([("PAYMENT-REQUIRED".to_owned(), encoded)]);
 
     assert_eq!(
-        adapter.decode_http_challenge(&offer().resource, &headers, "").unwrap(),
+        adapter.decode_http_challenge(&price().resource, &headers, "").unwrap(),
         Some(wire.clone())
     );
     assert_eq!(
         adapter
-            .decode_http_challenge(&offer().resource, &headers, &serde_json::to_string(&wire).unwrap())
+            .decode_http_challenge(&price().resource, &headers, &serde_json::to_string(&wire).unwrap())
             .unwrap(),
         Some(wire.clone())
     );
@@ -195,7 +195,7 @@ async fn http_provider_accepts_header_only_and_rejects_conflicting_body() {
     conflicting["accepts"][0]["amount"] = Value::String("1000001".to_owned());
     assert!(matches!(
         adapter.decode_http_challenge(
-            &offer().resource,
+            &price().resource,
             &headers,
             &serde_json::to_string(&conflicting).unwrap()
         ),
@@ -232,19 +232,19 @@ fn http_provider_decodes_only_official_x402_merchant_evidence() {
 }
 
 #[tokio::test]
-async fn challenge_binds_server_owned_offer_fields() {
+async fn challenge_binds_server_owned_price_fields() {
     let recipient = "0x2222222222222222222222222222222222222222";
-    let challenge = adapter().build_challenge(&offer(), recipient, 100).await.unwrap();
+    let challenge = adapter().build_challenge(&price(), recipient, 100).await.unwrap();
     assert_eq!(challenge.recipient, recipient);
     assert_eq!(challenge.amount, Amount::new(1_000_000));
-    assert_eq!(challenge.offer_id.as_deref(), Some("offer-1"));
+    assert_eq!(challenge.price_id.as_deref(), Some("price-1"));
     assert_eq!(challenge.nonce.len(), 64);
     assert_ne!(challenge.nonce, challenge.challenge_hash);
 
     let parsed = adapter()
         .parse_challenge(
             "payer-scenario",
-            &offer().resource,
+            &price().resource,
             &challenge.payload["payment_required"],
             100,
             Some(challenge.expires_at),
@@ -257,7 +257,7 @@ async fn challenge_binds_server_owned_offer_fields() {
     let replay = adapter()
         .parse_challenge(
             "payer-scenario",
-            &offer().resource,
+            &price().resource,
             &challenge.payload["payment_required"],
             101,
             Some(challenge.expires_at),
@@ -270,7 +270,7 @@ async fn challenge_binds_server_owned_offer_fields() {
     assert!(adapter()
         .parse_challenge(
             "payer-scenario",
-            &offer().resource,
+            &price().resource,
             &challenge.payload["payment_required"],
             101,
             None,
@@ -278,7 +278,7 @@ async fn challenge_binds_server_owned_offer_fields() {
         .await
         .is_err());
 
-    let second = adapter().build_challenge(&offer(), recipient, 100).await.unwrap();
+    let second = adapter().build_challenge(&price(), recipient, 100).await.unwrap();
     assert_eq!(
         second.payload["payment_required"],
         challenge.payload["payment_required"]
@@ -291,7 +291,7 @@ async fn challenge_binds_server_owned_offer_fields() {
     let tampered = adapter()
         .parse_challenge(
             "payer-scenario",
-            &offer().resource,
+            &price().resource,
             &tampered,
             100,
             Some(challenge.expires_at),
@@ -305,7 +305,7 @@ async fn challenge_binds_server_owned_offer_fields() {
 async fn official_client_nonce_is_accepted_and_globally_fingerprinted() {
     let adapter = adapter();
     let recipient = "0x2222222222222222222222222222222222222222";
-    let challenge = adapter.build_challenge(&offer(), recipient, 100).await.unwrap();
+    let challenge = adapter.build_challenge(&price(), recipient, 100).await.unwrap();
     assert!(challenge.payload["payment_required"].get("extensions").is_none());
 
     let first = adapter
@@ -329,11 +329,11 @@ async fn official_client_nonce_is_accepted_and_globally_fingerprinted() {
 async fn adapter_builds_and_verifies_an_intent_bound_eoa_signature() {
     let adapter = adapter();
     let challenge = adapter
-        .build_challenge(&offer(), "0x2222222222222222222222222222222222222222", 100)
+        .build_challenge(&price(), "0x2222222222222222222222222222222222222222", 100)
         .await
         .unwrap();
-    let key = crate::utils::crypto::generate_private_key();
-    let payer = crate::utils::crypto::address(&key).unwrap();
+    let key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let payer = crate::utils::crypto::WalletCrypto::address(&key).unwrap();
     let signing = adapter.prepare_signing(&challenge, &payer, 101).await.unwrap();
     assert_eq!(signing.digest.len(), 32);
     assert_eq!(
@@ -347,13 +347,13 @@ async fn adapter_builds_and_verifies_an_intent_bound_eoa_signature() {
             .len(),
         66
     );
-    let signature = crate::utils::crypto::sign_eip712_digest(&key, &signing.digest).unwrap();
+    let signature = crate::utils::crypto::WalletCrypto::sign_eip712_digest(&key, &signing.digest).unwrap();
     let credential = adapter.complete_signing(&challenge, signing, &signature).await.unwrap();
     assert_eq!(
         credential.credential_hash,
         adapter.credential_fingerprint(&challenge, &credential).unwrap()
     );
-    assert_eq!(verify_eip3009_signature(&credential.payload).unwrap(), payer);
+    assert_eq!(X402Evm::verify_signature(&credential.payload).unwrap(), payer);
     assert!(adapter.verify_credential(&challenge, &credential, 102).await.is_ok());
 }
 
@@ -361,7 +361,7 @@ async fn adapter_builds_and_verifies_an_intent_bound_eoa_signature() {
 async fn challenge_canonicalizes_checksum_recipient() {
     let mixed = "0xAbCdEf0123456789aBCDef0123456789AbCDef01";
     let canonical = "0xabcdef0123456789abcdef0123456789abcdef01";
-    let challenge = adapter().build_challenge(&offer(), mixed, 100).await.unwrap();
+    let challenge = adapter().build_challenge(&price(), mixed, 100).await.unwrap();
     assert_eq!(challenge.recipient, canonical);
     let wire_recipient = challenge.payload["selected"]["payTo"].as_str().unwrap();
     assert_eq!(
@@ -372,10 +372,10 @@ async fn challenge_canonicalizes_checksum_recipient() {
     let parsed = adapter()
         .parse_challenge(
             "payer-scenario",
-            &offer().resource,
+            &price().resource,
             &json!({
                 "x402Version": 2,
-                "resource": {"url": offer().resource},
+                "resource": {"url": price().resource},
                 "accepts": [{
                     "scheme": "exact",
                     "network": "eip155:8453",
@@ -398,7 +398,7 @@ async fn challenge_canonicalizes_checksum_recipient() {
 async fn every_entrypoint_rejects_forged_outer_or_stored_wire() {
     let adapter = adapter_with_two_assets();
     let challenge = adapter
-        .build_challenge(&offer(), "0x2222222222222222222222222222222222222222", 100)
+        .build_challenge(&price(), "0x2222222222222222222222222222222222222222", 100)
         .await
         .unwrap();
 
@@ -463,7 +463,7 @@ async fn every_entrypoint_rejects_forged_outer_or_stored_wire() {
 async fn replay_fingerprint_uses_eip3009_identity_not_json_spelling() {
     let adapter = adapter();
     let challenge = adapter
-        .build_challenge(&offer(), "0x2222222222222222222222222222222222222222", 100)
+        .build_challenge(&price(), "0x2222222222222222222222222222222222222222", 100)
         .await
         .unwrap();
     let nonce = format!("0x{}", "42".repeat(32));
@@ -592,7 +592,7 @@ impl LiveSolanaClock {
     }
 }
 
-impl crate::handler::job::UnixClock for LiveSolanaClock {
+impl crate::utils::clock::UnixClock for LiveSolanaClock {
     fn now(&self) -> crate::Result<i64> {
         Ok(self.0.load(std::sync::atomic::Ordering::SeqCst))
     }
@@ -613,21 +613,21 @@ fn live_solana_storage_config(database: &std::path::Path, kek_env: &str) -> crat
     config
 }
 
-async fn provision_live_solana_storage(
+async fn import_live_solana_storage(
     config: &crate::config::AppConfig,
     manifest_path: &std::path::Path,
     manifest: &Value,
-) -> std::sync::Arc<crate::storage::sqlite::SqliteStorage> {
+) -> std::sync::Arc<crate::storage::sqlite::SqliteRepository> {
     std::fs::write(
         manifest_path,
-        serde_json::to_vec(manifest).expect("encode live Solana provisioning manifest"),
+        crate::payment::ResourceImporter::encode_test_resource_documents(manifest),
     )
-    .expect("write live Solana provisioning manifest");
-    crate::handler::provision_from_path(config, manifest_path)
+    .expect("write live Solana resource documents");
+    crate::payment::ResourceImporter::import_from_paths(config, &[manifest_path.to_path_buf()])
         .await
-        .expect("provision live Solana Vault storage");
+        .expect("import live Solana Vault resources");
     std::sync::Arc::new(
-        crate::storage::sqlite::SqliteStorage::connect(&config.storage.sqlite)
+        crate::storage::sqlite::SqliteRepository::connect(&config.storage.sqlite)
             .await
             .expect("open live Solana Vault storage"),
     )
@@ -791,8 +791,8 @@ async fn live_solana_x402_v2_official_facilitator_conserves_spl_and_lamports() {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let challenge = adapter
         .build_challenge(
-            &PaymentOffer {
-                id: "offer-x402-solana-live".to_owned(),
+            &PaymentPrice {
+                id: "price-x402-solana-live".to_owned(),
                 scenario_id: "scenario-x402-solana-live".to_owned(),
                 policy_id: "policy-x402-solana-live".to_owned(),
                 resource: "https://marketpulse.local/solana".to_owned(),
@@ -825,7 +825,7 @@ async fn live_solana_x402_v2_official_facilitator_conserves_spl_and_lamports() {
         .await
         .expect("Vault prepares official Solana x402 transaction");
     let payer_key_bytes: Vec<u8> = serde_json::from_str(&fixture.payer_keypair).expect("payer keypair JSON");
-    let signature = crate::utils::crypto::sign_solana_message(&payer_key_bytes[..32], &signing.digest)
+    let signature = crate::utils::crypto::WalletCrypto::sign_solana_message(&payer_key_bytes[..32], &signing.digest)
         .expect("Vault custody primitive signs intent-bound Solana message");
     let credential = adapter
         .complete_signing(&challenge, signing, &signature)
@@ -957,23 +957,45 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     use solana_signer::Signer as _;
     use x402_types::{proto::v2::SettleResponse, util::b64::Base64Bytes};
 
-    use crate::{
-        apm::AgentVaultMetrics,
-        handler::{
-            job::{PaymentEvidenceRouter, ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob},
-            IssuePaymentChallenge, OutboundEvidenceDependencies, OutboundEvidenceHandler, OutboundSigningDependencies,
-            OutboundSigningHandler, PaymentHandler, ReceiptRegistry, ReceiptSource, RecordOutboundPaymentResponse,
-            ScenarioHandler, SettleIncomingPayment, SettlementDependencies, SettlementHandler,
-            SettlementProviderConfig, SettlementProviderRegistry, SignAuthorizedPayment, SolanaRpcBalanceSource,
-            SolanaRpcReceiptConfig, SolanaRpcReceiptSource, VerifyIncomingPayment, X402FacilitatorProvider,
-        },
-        model::{wallet::WalletSelectionStrategy, PaymentAuthorizationResult, PaymentEventType, PaymentStatus},
-        protocol::PaymentProtocolFactory,
-        storage::{
-            sqlite::SqliteWalletKeyRepository, EventStorage, LedgerQuery, LedgerStorage, PageRequest, PaymentStorage,
-        },
-        utils::secure_material::{Aes256GcmMaterialProtector, SensitiveMaterialProtector},
-    };
+    use crate::apm::AgentVaultMetrics;
+    use crate::handler::ScenarioHandler;
+    use crate::job::ReconciliationJob;
+    use crate::model::wallet::WalletSelectionStrategy;
+    use crate::model::IssuePaymentChallenge;
+    use crate::model::PaymentAuthorizationResult;
+    use crate::model::PaymentEventType;
+    use crate::model::PaymentStatus;
+    use crate::model::RecordOutboundPaymentResponse;
+    use crate::model::SettleIncomingPayment;
+    use crate::model::SignAuthorizedPayment;
+    use crate::model::VerifyIncomingPayment;
+    use crate::payment::MerchantEvidenceRecorder;
+    use crate::payment::OutboundEvidenceDependencies;
+    use crate::payment::OutboundSigner;
+    use crate::payment::OutboundSigningDependencies;
+    use crate::payment::PaymentAuthorizer;
+    use crate::payment::PaymentEvidenceRouter;
+    use crate::payment::ReceiptRegistry;
+    use crate::payment::ReceiptSource;
+    use crate::payment::ReconciliationConfig;
+    use crate::payment::ReconciliationEvidenceSource;
+    use crate::payment::SettlementCoordinator;
+    use crate::payment::SettlementDependencies;
+    use crate::payment::SettlementProviderConfig;
+    use crate::payment::SettlementProviderRegistry;
+    use crate::payment::SolanaRpcBalanceSource;
+    use crate::payment::SolanaRpcReceiptConfig;
+    use crate::payment::SolanaRpcReceiptSource;
+    use crate::payment::X402FacilitatorProvider;
+    use crate::protocol::PaymentProtocolFactory;
+    use crate::storage::wallet::sqlite::SqliteWalletKeyRepository;
+    use crate::storage::IEventRepository;
+    use crate::storage::IIntentRepository;
+    use crate::storage::ILedgerRepository;
+    use crate::storage::LedgerQuery;
+    use crate::storage::PageRequest;
+    use crate::utils::secure_material::Aes256GcmMaterialProtector;
+    use crate::utils::secure_material::SensitiveMaterialProtector;
 
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let fixture = LiveSolanaFixture::from_env();
@@ -1051,19 +1073,19 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
             "allowed_origins": ["https://marketpulse.local"],
             "inbound_limits": {"max_per_payment": "10000000", "max_per_day": "100000000", "approval_enabled": false}
         }],
-        "offers": [{
-            "id": "offer-x402-solana-handler-live", "scenario_id": scenario_id,
+        "prices": [{
+            "id": "price-x402-solana-handler-live", "scenario_id": scenario_id,
             "policy_id": "payee-policy", "resource": resource, "protocols": ["x402"],
             "asset": policy_asset, "amount": "1000000", "wallet_id": "payee-wallet"
         }]
     });
-    let payer_storage = provision_live_solana_storage(
+    let payer_storage = import_live_solana_storage(
         &payer_config,
         &temporary.path().join("payer-manifest.json"),
         &payer_manifest,
     )
     .await;
-    let payee_storage = provision_live_solana_storage(
+    let payee_storage = import_live_solana_storage(
         &payee_config,
         &temporary.path().join("payee-manifest.json"),
         &payee_manifest,
@@ -1088,8 +1110,16 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
             .build()
             .expect("payee protocol registry"),
     );
-    let payer_scenarios = Arc::new(ScenarioHandler::new(payer_storage.clone(), payer_storage.clone()));
-    let payee_scenarios = Arc::new(ScenarioHandler::new(payee_storage.clone(), payee_storage.clone()));
+    let payer_ports = crate::storage::IRepository::ports(payer_storage.clone());
+    let payee_ports = crate::storage::IRepository::ports(payee_storage.clone());
+    let payer_scenarios = Arc::new(ScenarioHandler::new(
+        payer_ports.clients.clone(),
+        payer_ports.scenarios.clone(),
+    ));
+    let payee_scenarios = Arc::new(ScenarioHandler::new(
+        payee_ports.clients.clone(),
+        payee_ports.scenarios.clone(),
+    ));
     let protector: Arc<dyn SensitiveMaterialProtector> = Arc::new(
         Aes256GcmMaterialProtector::new(
             "live-solana-recovery-v1",
@@ -1097,10 +1127,10 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
         )
         .expect("recovery protector"),
     );
-    let payer_handler = PaymentHandler::new(
+    let payer_handler = PaymentAuthorizer::new(
         payer_scenarios.clone(),
-        payer_storage.clone(),
-        payer_storage.clone(),
+        payer_ports.policies.clone(),
+        payer_ports.payments.clone(),
         payer_protocols.clone(),
         30,
         WalletSelectionStrategy::LeastSpent,
@@ -1123,8 +1153,8 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
         )
         .expect("Solana balance source"),
     );
-    let signing_handler = OutboundSigningHandler::new(OutboundSigningDependencies {
-        storage: payer_storage.clone(),
+    let signing_handler = OutboundSigner::new(OutboundSigningDependencies {
+        storage: payer_ports.signing.clone(),
         protocols: payer_protocols.clone(),
         balances: balance_source,
         signer,
@@ -1132,7 +1162,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     });
 
     let (facilitator_url, broadcasts, server) = start_live_solana_facilitator(&fixture).await;
-    let facilitator_provider: Arc<dyn crate::handler::ExternalSettlementProvider> = Arc::new(
+    let facilitator_provider: Arc<dyn crate::payment::ExternalSettlementProvider> = Arc::new(
         X402FacilitatorProvider::new(
             &SettlementProviderConfig {
                 base_url: facilitator_url,
@@ -1173,19 +1203,19 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     let receipt_registry = Arc::new(
         ReceiptRegistry::from_sources(
             [(network.clone(), receipt_source)],
-            std::iter::empty::<(String, Arc<dyn crate::handler::EvmAuthorizationSource>)>(),
+            std::iter::empty::<(String, Arc<dyn crate::payment::EvmAuthorizationSource>)>(),
         )
         .expect("mixed-chain receipt registry"),
     );
     let payee_handler = Arc::new(
-        SettlementHandler::new(
+        SettlementCoordinator::new(
             SettlementDependencies {
                 scenarios: payee_scenarios,
-                offers: payee_storage.clone(),
-                policies: payee_storage.clone(),
-                wallets: payee_storage.clone(),
-                payments: payee_storage.clone(),
-                events: payee_storage.clone(),
+                prices: payee_ports.prices.clone(),
+                policies: payee_ports.policies.clone(),
+                wallets: payee_ports.wallets.clone(),
+                payments: payee_ports.payments.clone(),
+                events: payee_ports.events.clone(),
                 protocols: payee_protocols,
                 providers,
                 material_protector: protector.clone(),
@@ -1205,7 +1235,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
             &IssuePaymentChallenge {
                 scenario_id: scenario_id.to_owned(),
                 run_id: run_id.to_owned(),
-                offer_id: "offer-x402-solana-handler-live".to_owned(),
+                price_id: "price-x402-solana-handler-live".to_owned(),
                 resource: resource.to_owned(),
                 origin: "https://marketpulse.local".to_owned(),
                 protocol: X402_PROTOCOL.to_owned(),
@@ -1230,7 +1260,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     let authorization = payer_handler
         .authorize(
             "principal:solana-payer",
-            &crate::handler::AuthorizePayment {
+            &crate::model::AuthorizePayment {
                 scenario_id: scenario_id.to_owned(),
                 run_id: run_id.to_owned(),
                 challenge: challenge.clone(),
@@ -1257,6 +1287,16 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     assert_eq!(signed.intent.status, PaymentStatus::Signed);
     assert_eq!(signed.intent.run_id, run_id);
 
+    // Only the native payload crosses HTTP/MCP/A2A. As in PayeeMiddleware,
+    // bind the received payload to the payee's durable challenge; the payer's
+    // private challenge identity is not part of the x402 wire protocol.
+    assert_ne!(signed.credential.challenge_hash, issued.challenge_hash);
+    let incoming = PaymentCredential {
+        protocol: X402_PROTOCOL.to_owned(),
+        challenge_hash: issued.challenge_hash.clone(),
+        credential_hash: "untrusted".to_owned(),
+        payload: signed.credential.payload,
+    };
     let verification = payee_handler
         .verify_payment(
             "principal:solana-payee",
@@ -1265,7 +1305,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
                 run_id: run_id.to_owned(),
                 challenge_hash: issued.challenge_hash,
                 request_hash,
-                credential: signed.credential,
+                credential: incoming,
             },
             now.saturating_add(3),
         )
@@ -1309,10 +1349,10 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     };
     let response_header =
         Base64Bytes::encode(serde_json::to_vec(&merchant_response).expect("settle response JSON")).to_string();
-    let outbound = Arc::new(OutboundEvidenceHandler::new(OutboundEvidenceDependencies {
+    let outbound = Arc::new(MerchantEvidenceRecorder::new(OutboundEvidenceDependencies {
         scenarios: payer_scenarios,
-        payments: payer_storage.clone(),
-        events: payer_storage.clone(),
+        payments: payer_ports.payments.clone(),
+        events: payer_ports.events.clone(),
         protocols: payer_protocols,
         material_protector: protector,
         receipts: receipt_registry,
@@ -1340,7 +1380,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
         Arc::new(PaymentEvidenceRouter::new(provider_evidence, outbound));
     let reconciliation_clock = Arc::new(LiveSolanaClock::new(now.saturating_add(20)));
     let job = ReconciliationJob::with_clock(
-        payer_storage.clone(),
+        payer_ports.payments.clone(),
         evidence,
         reconciliation_clock.clone(),
         ReconciliationConfig {
@@ -1365,7 +1405,7 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
         reconciled.settled, 1,
         "unexpected reconciliation result: {reconciled:?}"
     );
-    let payer_intent = PaymentStorage::get(payer_storage.as_ref(), &intent_id)
+    let payer_intent = IIntentRepository::get(payer_ports.payments.as_ref(), &intent_id)
         .await
         .expect("load payer intent")
         .expect("payer intent exists");
@@ -1373,8 +1413,8 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     assert_eq!(payer_intent.run_id, run_id);
     assert_eq!(payer_intent.tx_hash.as_deref(), Some(transaction.as_str()));
 
-    let payer_ledger = LedgerStorage::list(
-        payer_storage.as_ref(),
+    let payer_ledger = ILedgerRepository::list(
+        payer_ports.ledger.as_ref(),
         &LedgerQuery {
             intent_id: Some(intent_id.clone()),
             ..LedgerQuery::default()
@@ -1382,8 +1422,8 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     )
     .await
     .expect("payer ledger");
-    let payee_ledger = LedgerStorage::list(
-        payee_storage.as_ref(),
+    let payee_ledger = ILedgerRepository::list(
+        payee_ports.ledger.as_ref(),
         &LedgerQuery {
             intent_id: Some(settled.intent.id.clone()),
             ..LedgerQuery::default()
@@ -1395,15 +1435,15 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     assert_eq!(payee_ledger.total, 1);
     assert_eq!(payer_ledger.items[0].tx_hash.as_deref(), Some(transaction.as_str()));
     assert_eq!(payee_ledger.items[0].tx_hash.as_deref(), Some(transaction.as_str()));
-    let payer_events = EventStorage::list_for_intent(
-        payer_storage.as_ref(),
+    let payer_events = IEventRepository::list_for_intent(
+        payer_ports.events.as_ref(),
         &intent_id,
         PageRequest { offset: 0, limit: 100 },
     )
     .await
     .expect("payer events");
-    let payee_events = EventStorage::list_for_intent(
-        payee_storage.as_ref(),
+    let payee_events = IEventRepository::list_for_intent(
+        payee_ports.events.as_ref(),
         &settled.intent.id,
         PageRequest { offset: 0, limit: 100 },
     )

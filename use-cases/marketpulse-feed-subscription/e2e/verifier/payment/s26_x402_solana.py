@@ -4,7 +4,7 @@ import json
 import re
 
 from common.context import VerificationContext
-from common.deploy import create_deployer
+from deploy.deployer import create_deployer
 
 
 EVIDENCE_PATTERN = re.compile(r"X402_SOLANA_EVIDENCE=(\{[^\n]+\})")

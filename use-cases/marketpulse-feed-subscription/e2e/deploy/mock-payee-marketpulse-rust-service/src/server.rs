@@ -10,7 +10,7 @@ use crate::{
     handler::feed::{mcp, FeedHandler},
     required_env,
     route::feed::FeedRouter,
-    storage::feed::FeedSQLiteStorage,
+    storage::feed::FeedSqliteRepository,
 };
 
 /// Owns the Axum listener, MCP endpoint, SDK middleware and component lifecycle.
@@ -34,11 +34,11 @@ impl MarketPulseServer {
             "/mcp",
             "marketpulse.realtime_news",
             required_env("MARKETPULSE_SCENARIO_ID")?,
-            required_env("MARKETPULSE_OFFER_ID")?,
+            required_env("MARKETPULSE_PRICE_ID")?,
             required_env("MARKETPULSE_RESOURCE_URL")?,
             required_env("MARKETPULSE_ORIGIN")?,
         )]);
-        let storage = FeedSQLiteStorage::open(&required_env("MARKETPULSE_DATABASE")?)?;
+        let storage = FeedSqliteRepository::open(&required_env("MARKETPULSE_DATABASE")?)?;
         let allow_failure = env::var("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION").is_ok_and(|value| value == "true");
         let handler = FeedHandler::new(storage, allow_failure);
         let mcp = Router::new()

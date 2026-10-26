@@ -12,13 +12,13 @@ from fastapi import FastAPI, Response
 
 from app.handler.feed import FeedHandler
 from app.route.feed import FeedRouter
-from app.storage.feed import FeedSQLiteStorage
+from app.storage.feed import FeedSqliteRepository
 
 
 class MarketPulseServer:
     """Owns the FastAPI listener, MCP endpoint, SDK middleware and lifecycle."""
 
-    def __init__(self, application: FastAPI, storage: FeedSQLiteStorage,
+    def __init__(self, application: FastAPI, storage: FeedSqliteRepository,
                  vault: AgentVault, host: str, port: int) -> None:
         self.application = application
         self._storage = storage
@@ -31,7 +31,7 @@ class MarketPulseServer:
         host, port = _parse_bind(_required("MARKETPULSE_BIND"))
         vault = _payee_vault()
         payee = vault.payee()
-        storage = FeedSQLiteStorage(_required("MARKETPULSE_DATABASE"))
+        storage = FeedSqliteRepository(_required("MARKETPULSE_DATABASE"))
         handler = FeedHandler(storage, os.environ.get("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION") == "true")
 
         @asynccontextmanager
@@ -52,7 +52,7 @@ class MarketPulseServer:
                 "/mcp",
                 "marketpulse.realtime_news",
                 _required("MARKETPULSE_SCENARIO_ID"),
-                _required("MARKETPULSE_OFFER_ID"),
+                _required("MARKETPULSE_PRICE_ID"),
                 _required("MARKETPULSE_RESOURCE_URL"),
                 _required("MARKETPULSE_ORIGIN"),
             )],

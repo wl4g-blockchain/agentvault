@@ -145,16 +145,18 @@ fi
 
 sync_kubernetes_secret
 
-values="secrets:
-  provider: gcp
-  kubernetes:
-    existingSecret: ${AGENTVAULT_SECRET_NAME}
-  gcp:
-    secretResourceName: projects/${GCP_PROJECT_ID}/secrets/${GCP_SECRET_ID}/versions/latest"
+values="agentvault:
+  backend:
+    secrets:
+      provider: gcp
+      kubernetes:
+        existingSecret: ${AGENTVAULT_SECRET_NAME}
+      gcp:
+        secretResourceName: projects/${GCP_PROJECT_ID}/secrets/${GCP_SECRET_ID}/versions/latest"
 if [[ "$ENABLE_WORKLOAD_IDENTITY" == true ]]; then
   values+="
-  serviceAccount:
-    annotations:
-      iam.gke.io/gcp-service-account: ${GCP_GSA_EMAIL}"
+      serviceAccount:
+        annotations:
+          iam.gke.io/gcp-service-account: ${GCP_GSA_EMAIL}"
 fi
 write_values_file "$GCP_VALUES_FILE" "$values"

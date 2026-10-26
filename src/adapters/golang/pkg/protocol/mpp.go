@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/a2a"
 	mpp "github.com/tempoxyz/mpp-go/pkg/mpp"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 )
@@ -23,6 +24,85 @@ const (
 )
 
 type MppAdapter struct{}
+
+// MPP uses its standard JSON-RPC root _meta binding, not x402 A2A metadata.
+func (adapter *MppAdapter) A2AExtension() string { return "" }
+
+func (adapter *MppAdapter) A2AChallenge(message map[string]any, limit int64) (*HTTPResponse, error) {
+	if message["error"] == nil {
+		return nil, nil
+	}
+	return adapter.MCPChallenge(message, limit)
+}
+
+func (adapter *MppAdapter) A2AApplyCredential(message map[string]any, credential model.PaymentCredential) error {
+	meta, err := (a2aWire{}).rootMetadata(message)
+	if err != nil {
+		return err
+	}
+	if _, exists := meta[mppCredentialMetaKey]; exists {
+		return errors.New("JSON-RPC root already contains MPP credential")
+	}
+	value, err := adapter.MCPCredential(credential)
+	if err != nil {
+		return err
+	}
+	meta[value.Key] = value.Value
+	return nil
+}
+
+func (adapter *MppAdapter) PresentedA2ACredential(message map[string]any, limit int64) (any, error) {
+	meta, err := (a2aWire{}).rootMetadata(message)
+	if err != nil {
+		return nil, err
+	}
+	// A2A is plain JSON-RPC. MCP params._meta is not a second credential channel.
+	params, _ := message["params"].(map[string]any)
+	if nested, ok := params["_meta"].(map[string]any); ok && nested[mppCredentialMetaKey] != nil {
+		return nil, errors.New("MPP A2A credential must use JSON-RPC root _meta")
+	}
+	return adapter.PresentedMCPCredential(meta, limit)
+}
+
+func (adapter *MppAdapter) A2AStripCredential(message map[string]any) error {
+	meta, err := (a2aWire{}).rootMetadata(message)
+	if err != nil {
+		return err
+	}
+	delete(meta, mppCredentialMetaKey)
+	return nil
+}
+
+func (adapter *MppAdapter) A2APaymentRequired(challenge *model.PaymentChallenge, _ *a2a.Task, rejected bool) (MCPPaymentRequired, error) {
+	if rejected {
+		return adapter.MCPPaymentRejected(challenge, "Payment verification failed")
+	}
+	return adapter.MCPPaymentRequired(challenge)
+}
+
+func (adapter *MppAdapter) A2AMerchantEvidence(message map[string]any, limit int64) (*MerchantEvidence, error) {
+	meta, err := (a2aWire{}).rootMetadata(message)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.MCPMerchantEvidence(meta, limit)
+}
+
+func (adapter *MppAdapter) A2AInjectReceipt(message map[string]any, challenge *model.PaymentChallenge, payment *model.SettledIncomingPayment, _ int64) error {
+	meta, err := (a2aWire{}).rootMetadata(message)
+	if err != nil {
+		return err
+	}
+	if _, exists := meta[mppReceiptMetaKey]; exists {
+		return errors.New("A2A handler attempted to supply MPP receipt")
+	}
+	value, err := adapter.MCPReceipt(challenge, payment)
+	if err != nil {
+		return err
+	}
+	meta[value.Key] = value.Value
+	return nil
+}
 
 type mppMCPErrorData struct {
 	HTTPStatus int             `json:"httpStatus"`

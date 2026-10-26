@@ -3,11 +3,13 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
+	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 )
 
@@ -39,6 +41,7 @@ type MCPPaymentRequired struct {
 type Adapter interface {
 	Name() string
 	CredentialHeaderNames() []string
+	MerchantEvidenceHeaderNames() []string
 	Credential(model.PaymentCredential) (model.HTTPCredential, error)
 	MerchantEvidence(map[string]string) (*MerchantEvidence, error)
 	PresentedCredential(map[string]string, int64) (any, error)
@@ -46,18 +49,11 @@ type Adapter interface {
 	Receipt(*model.SettledIncomingPayment) (HTTPResponse, error)
 }
 
-// EvidenceHeaderAdapter optionally declares protocol-owned HTTP settlement
-// headers. Keeping this as a capability interface preserves compatibility for
-// existing custom HTTP-only Adapter implementations.
-type EvidenceHeaderAdapter interface {
-	MerchantEvidenceHeaderNames() []string
-}
-
-// MCPAdapter is optional so existing custom HTTP-only providers remain wire
-// compatible. Built-in x402 and MPP providers implement this interface.
+// MCPAdapter provides native MCP wire mappings independently of Vault transport.
 type MCPAdapter interface {
 	Adapter
 	MCPRequestMetadataKey() string
+	MCPReceiptMetadataKey() string
 	MCPChallenge(any, int64) (*HTTPResponse, error)
 	MCPCredential(model.PaymentCredential) (MCPMetadata, error)
 	PresentedMCPCredential(any, int64) (any, error)
@@ -67,8 +63,64 @@ type MCPAdapter interface {
 	MCPMerchantEvidence(any, int64) (*MerchantEvidence, error)
 }
 
-type MCPReceiptKeyAdapter interface {
-	MCPReceiptMetadataKey() string
+// A2AAdapter projects non-streaming A2A 0.3 JSON-RPC messages onto the same
+// Vault contracts as HTTP and MCP. Task ownership remains with the host's A2A
+// TaskStore; payment providers own only their metadata.
+type A2AAdapter interface {
+	Adapter
+	A2AExtension() string
+	A2AChallenge(map[string]any, int64) (*HTTPResponse, error)
+	A2AApplyCredential(map[string]any, model.PaymentCredential) error
+	PresentedA2ACredential(map[string]any, int64) (any, error)
+	A2AStripCredential(map[string]any) error
+	A2APaymentRequired(*model.PaymentChallenge, *a2a.Task, bool) (MCPPaymentRequired, error)
+	A2AInjectReceipt(map[string]any, *model.PaymentChallenge, *model.SettledIncomingPayment, int64) error
+	A2AMerchantEvidence(map[string]any, int64) (*MerchantEvidence, error)
+}
+
+// a2aWire validates carrier objects with the official SDK while preserving
+// unrelated extension metadata in the original JSON-RPC envelope.
+type a2aWire struct{}
+
+func (a2aWire) requestMetadata(envelope map[string]any) (map[string]any, error) {
+	params, _ := envelope["params"].(map[string]any)
+	message, _ := params["message"].(map[string]any)
+	if envelope["method"] != "message/send" || message == nil {
+		return nil, errors.New("only A2A message/send is supported")
+	}
+	meta, ok := message["metadata"].(map[string]any)
+	if message["metadata"] != nil && !ok {
+		return nil, errors.New("A2A message metadata must be an object")
+	}
+	if meta == nil {
+		meta = map[string]any{}
+		message["metadata"] = meta
+	}
+	return meta, nil
+}
+
+func (a2aWire) rootMetadata(envelope map[string]any) (map[string]any, error) {
+	meta, ok := envelope["_meta"].(map[string]any)
+	if envelope["_meta"] != nil && !ok {
+		return nil, errors.New("JSON-RPC root _meta must be an object")
+	}
+	if meta == nil {
+		meta = map[string]any{}
+		envelope["_meta"] = meta
+	}
+	return meta, nil
+}
+
+func (a2aWire) task(value map[string]any, limit int64) (*a2a.Task, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > limit || value["kind"] != "task" {
+		return nil, errors.New("A2A requires a bounded Task response")
+	}
+	var task a2a.Task
+	if err := json.Unmarshal(encoded, &task); err != nil || task.ID == "" || task.ContextID == "" || task.Status.State == "" {
+		return nil, errors.New("A2A response has an invalid Task binding")
+	}
+	return &task, nil
 }
 
 // MCPRootRequestKeyAdapter declares the protocol credential key that may also
@@ -108,6 +160,71 @@ func (registry *Registry) MCP(name string) (MCPAdapter, error) {
 	return mcp, nil
 }
 
+func (registry *Registry) A2A(name string) (A2AAdapter, error) {
+	adapter, err := registry.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	a2a, ok := adapter.(A2AAdapter)
+	if !ok {
+		return nil, fmt.Errorf("payment protocol does not support A2A: %s", name)
+	}
+	return a2a, nil
+}
+
+func (registry *Registry) A2AChallenge(message map[string]any, limit int64) (A2AAdapter, *HTTPResponse, error) {
+	for _, name := range registry.priority {
+		adapter, err := registry.A2A(name)
+		if err != nil {
+			continue
+		}
+		challenge, err := adapter.A2AChallenge(message, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		if challenge != nil {
+			return adapter, challenge, nil
+		}
+	}
+	return nil, nil, nil
+}
+
+func (registry *Registry) PresentedA2ACredential(message map[string]any, limit int64) (string, any, error) {
+	var selected string
+	var payload any
+	for _, name := range registry.priority {
+		adapter, err := registry.A2A(name)
+		if err != nil {
+			continue
+		}
+		value, err := adapter.PresentedA2ACredential(message, limit)
+		if err != nil {
+			return "", nil, err
+		}
+		if value == nil {
+			continue
+		}
+		if selected != "" {
+			return "", nil, errors.New("multiple A2A payment credentials")
+		}
+		selected, payload = name, value
+	}
+	return selected, payload, nil
+}
+
+func (registry *Registry) StripA2ACredentials(message map[string]any) error {
+	for _, name := range registry.priority {
+		adapter, err := registry.A2A(name)
+		if err != nil {
+			continue
+		}
+		if err := adapter.A2AStripCredential(message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CredentialHeaderNames returns the case-insensitive union owned by enabled
 // protocol providers. Framework integrations use it only to preserve duplicate
 // detection; providers still decide whether a value is a payment credential.
@@ -143,11 +260,7 @@ func (registry *Registry) MerchantEvidenceHeaderNames() []string {
 		if err != nil {
 			continue
 		}
-		owner, ok := adapter.(EvidenceHeaderAdapter)
-		if !ok {
-			continue
-		}
-		for _, candidate := range owner.MerchantEvidenceHeaderNames() {
+		for _, candidate := range adapter.MerchantEvidenceHeaderNames() {
 			duplicate := false
 			for _, existing := range names {
 				if strings.EqualFold(existing, candidate) {
@@ -308,9 +421,7 @@ func (registry *Registry) MCPReceiptMetadataKeys() []string {
 	keys := make([]string, 0, len(registry.priority))
 	for _, name := range registry.priority {
 		if adapter, err := registry.MCP(name); err == nil {
-			if owner, ok := adapter.(MCPReceiptKeyAdapter); ok {
-				keys = append(keys, owner.MCPReceiptMetadataKey())
-			}
+			keys = append(keys, adapter.MCPReceiptMetadataKey())
 		}
 	}
 	return keys

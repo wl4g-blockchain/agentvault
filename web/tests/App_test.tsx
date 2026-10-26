@@ -14,6 +14,7 @@ describe('dashboard navigation', () => {
       ['Balances & ledger', '/balances'],
       ['Clients', '/clients'],
       ['Scenarios', '/scenarios'],
+      ['Wallets', '/wallets'],
       ['Runtime health', '/runtime'],
     ]
     expected.forEach(([name, href]) => expect(screen.getByRole('link', { name }).getAttribute('href')).toBe(href))

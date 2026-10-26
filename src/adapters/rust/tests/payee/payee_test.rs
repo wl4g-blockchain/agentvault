@@ -13,10 +13,10 @@ impl VaultTransport for RejectingTransport {
         self.0.lock().expect("paths").push(request.path.clone());
         let body = match request.path.as_str() {
             "/api/v1/payee/challenges" => {
-                br#"{"scenario_id":"scenario","offer_id":"offer","resource":"mcp://marketpulse/realtime","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"amount":"1000","recipient":"0x1","nonce":"nonce","challenge_hash":"challenge","expires_at":1,"payload":{"payment_required":{}}}"#.to_vec()
+                br#"{"scenario_id":"scenario","price_id":"price","resource":"mcp://marketpulse/realtime","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"amount":"1000","recipient":"0x1","nonce":"nonce","challenge_hash":"challenge","expires_at":1,"payload":{"payment_required":{}}}"#.to_vec()
             }
             "/api/v1/payee/verify" => {
-                br#"{"intent":{"id":"intent","scenario_id":"scenario","run_id":"run","offer_id":"offer","direction":"inbound","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"recipient":"0x1","amount":"1000","settled_amount":"0","resource":"mcp://marketpulse/realtime","challenge_hash":"challenge","request_hash":"request-hash","status":"pending_settlement","reservation_status":"reserved","reserved_amount":"1000","created_at":1,"updated_at":1},"valid":false}"#.to_vec()
+                br#"{"intent":{"id":"intent","scenario_id":"scenario","run_id":"run","price_id":"price","direction":"inbound","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"recipient":"0x1","amount":"1000","settled_amount":"0","resource":"mcp://marketpulse/realtime","challenge_hash":"challenge","request_hash":"request-hash","status":"pending_settlement","reservation_status":"reserved","reserved_amount":"1000","created_at":1,"updated_at":1},"valid":false}"#.to_vec()
             }
             other => return Err(TransportError::new(format!("unexpected Vault call: {other}"))),
         };
@@ -33,7 +33,7 @@ fn payee_reuses_the_run_across_all_phases() {
     let operation = PayeeOperation {
         scenario_id: "scenario".to_owned(),
         run_id: "run".to_owned(),
-        offer_id: "offer".to_owned(),
+        price_id: "price".to_owned(),
         resource: "mcp://marketpulse/realtime".to_owned(),
         origin: "https://marketpulse.example".to_owned(),
         protocol: "x402".to_owned(),
@@ -52,7 +52,7 @@ async fn payee_rejects_invalid_payment_before_settlement() {
         .protect(&PayeeOperation {
             scenario_id: "scenario".to_owned(),
             run_id: "run".to_owned(),
-            offer_id: "offer".to_owned(),
+            price_id: "price".to_owned(),
             resource: "mcp://marketpulse/realtime".to_owned(),
             origin: "https://marketpulse.example".to_owned(),
             protocol: "x402".to_owned(),

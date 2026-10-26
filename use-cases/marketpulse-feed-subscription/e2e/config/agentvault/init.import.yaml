@@ -1,0 +1,518 @@
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-marketpulse
+  status: active
+data:
+  name: MarketPulse Feed
+  auth_principal: principal-marketpulse
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-quantstream-rust
+  status: active
+data:
+  name: QuantStream Rust Ingestor
+  auth_principal: principal-quantstream-rust
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-quantstream-go
+  status: active
+data:
+  name: QuantStream Go Ingestor
+  auth_principal: principal-quantstream-go
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-quantstream-python
+  status: active
+data:
+  name: QuantStream Python Ingestor
+  auth_principal: principal-quantstream-python
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-quantstream-typescript
+  status: active
+data:
+  name: QuantStream TypeScript Ingestor
+  auth_principal: principal-quantstream-typescript
+---
+consoleVersion: core.agentvault.io/v1
+kind: Client
+metadata:
+  name: client-quantstream-java
+  status: active
+data:
+  name: QuantStream Java Ingestor
+  auth_principal: principal-quantstream-java
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-marketpulse-revenue
+  status: active
+data:
+  custody: external
+  algorithm: secp256k1
+  address: '0x3c44cdddB6a900fa2b585dd299e03d12fa4293bc'
+  public_key: ''
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-rust-primary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_RUST_PRIMARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-rust-secondary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_RUST_SECONDARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-go-primary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_GO_PRIMARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-go-secondary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_GO_SECONDARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-python-primary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_PYTHON_PRIMARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-python-secondary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_PYTHON_SECONDARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-typescript-primary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_TYPESCRIPT_PRIMARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-typescript-secondary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_TYPESCRIPT_SECONDARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-java-primary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_JAVA_PRIMARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Wallet
+metadata:
+  name: wallet-quantstream-java-secondary
+  status: active
+data:
+  custody: local
+  private_key_env: HELPER_SECRET_QUANTSTREAM_JAVA_SECONDARY_WALLET_PRIVATE_KEY
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  max_per_payment: '10000000'
+  max_per_day: '51000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-marketpulse-feed
+  status: active
+data:
+  client_id: client-marketpulse
+  name: MarketPulse paid real-time feed
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-quantstream-rust-market-ingestion
+  status: active
+data:
+  client_id: client-quantstream-rust
+  name: QuantStream Rust market news ingestion
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-quantstream-go-market-ingestion
+  status: active
+data:
+  client_id: client-quantstream-go
+  name: QuantStream Go market news ingestion
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-quantstream-python-market-ingestion
+  status: active
+data:
+  client_id: client-quantstream-python
+  name: QuantStream Python market news ingestion
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-quantstream-typescript-market-ingestion
+  status: active
+data:
+  client_id: client-quantstream-typescript
+  name: QuantStream TypeScript market news ingestion
+---
+consoleVersion: core.agentvault.io/v1
+kind: Scenario
+metadata:
+  name: scenario-quantstream-java-market-ingestion
+  status: active
+data:
+  client_id: client-quantstream-java
+  name: QuantStream Java market news ingestion
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-marketpulse-sales
+  status: active
+data:
+  scenario_id: scenario-marketpulse-feed
+  wallet_ids:
+  - wallet-marketpulse-revenue
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  inbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '10000000'
+    approval_enabled: false
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-quantstream-rust-market-data
+  status: active
+data:
+  scenario_id: scenario-quantstream-rust-market-ingestion
+  wallet_ids:
+  - wallet-quantstream-rust-primary
+  - wallet-quantstream-rust-secondary
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  outbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '1000000'
+    approval_threshold: '2000000'
+    approval_enabled: true
+    approval_overage: '50000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-quantstream-go-market-data
+  status: active
+data:
+  scenario_id: scenario-quantstream-go-market-ingestion
+  wallet_ids:
+  - wallet-quantstream-go-primary
+  - wallet-quantstream-go-secondary
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  outbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '1000000'
+    approval_threshold: '2000000'
+    approval_enabled: true
+    approval_overage: '50000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-quantstream-python-market-data
+  status: active
+data:
+  scenario_id: scenario-quantstream-python-market-ingestion
+  wallet_ids:
+  - wallet-quantstream-python-primary
+  - wallet-quantstream-python-secondary
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  outbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '1000000'
+    approval_threshold: '2000000'
+    approval_enabled: true
+    approval_overage: '50000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-quantstream-typescript-market-data
+  status: active
+data:
+  scenario_id: scenario-quantstream-typescript-market-ingestion
+  wallet_ids:
+  - wallet-quantstream-typescript-primary
+  - wallet-quantstream-typescript-secondary
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  outbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '1000000'
+    approval_threshold: '2000000'
+    approval_enabled: true
+    approval_overage: '50000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Policy
+metadata:
+  name: policy-quantstream-java-market-data
+  status: active
+data:
+  scenario_id: scenario-quantstream-java-market-ingestion
+  wallet_ids:
+  - wallet-quantstream-java-primary
+  - wallet-quantstream-java-secondary
+  protocols:
+  - x402
+  networks:
+  - eip155:31337
+  assets:
+  - network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  budget_unit:
+    asset: USDC
+    decimals: 6
+  allowed_recipients:
+  - '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+  allowed_origins:
+  - http://127.0.0.1:8081
+  outbound_limits:
+    max_per_payment: '1000000'
+    max_per_day: '1000000'
+    approval_threshold: '2000000'
+    approval_enabled: true
+    approval_overage: '50000000'
+---
+consoleVersion: core.agentvault.io/v1
+kind: Price
+metadata:
+  name: price-realtime-news
+  status: active
+data:
+  scenario_id: scenario-marketpulse-feed
+  policy_id: policy-marketpulse-sales
+  resource: http://127.0.0.1:8081/mcp
+  protocols:
+  - x402
+  asset:
+    network: eip155:31337
+    asset: USDC
+    token_contract: '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    decimals: 6
+  amount: '1000000'
+  wallet_id: wallet-marketpulse-revenue
+---
+consoleVersion: core.agentvault.io/v1
+kind: Approver
+metadata:
+  name: scenario-quantstream-rust-market-ingestion--principal-quantstream-rust-admin
+  status: active
+data:
+  scenario_id: scenario-quantstream-rust-market-ingestion
+  auth_principal: principal-quantstream-rust-admin
+---
+consoleVersion: core.agentvault.io/v1
+kind: Approver
+metadata:
+  name: scenario-quantstream-go-market-ingestion--principal-quantstream-go-admin
+  status: active
+data:
+  scenario_id: scenario-quantstream-go-market-ingestion
+  auth_principal: principal-quantstream-go-admin
+---
+consoleVersion: core.agentvault.io/v1
+kind: Approver
+metadata:
+  name: scenario-quantstream-python-market-ingestion--principal-quantstream-python-admin
+  status: active
+data:
+  scenario_id: scenario-quantstream-python-market-ingestion
+  auth_principal: principal-quantstream-python-admin
+---
+consoleVersion: core.agentvault.io/v1
+kind: Approver
+metadata:
+  name: scenario-quantstream-typescript-market-ingestion--principal-quantstream-typescript-admin
+  status: active
+data:
+  scenario_id: scenario-quantstream-typescript-market-ingestion
+  auth_principal: principal-quantstream-typescript-admin
+---
+consoleVersion: core.agentvault.io/v1
+kind: Approver
+metadata:
+  name: scenario-quantstream-java-market-ingestion--principal-quantstream-java-admin
+  status: active
+data:
+  scenario_id: scenario-quantstream-java-market-ingestion
+  auth_principal: principal-quantstream-java-admin

@@ -8,13 +8,13 @@ import {
   type PaymentReceipt,
 } from './base.js';
 
-export interface ResolveOfferRequest {
+export interface ResolvePriceRequest {
   scenarioId: string;
   resource: string;
   protocol?: string;
 }
 
-export interface PaymentOffer {
+export interface PaymentPrice {
   id: string;
   scenario_id: string;
   resource: string;
@@ -30,7 +30,7 @@ export interface PaymentOffer {
 export interface PayeeOperation {
   scenarioId: string;
   runId: string;
-  offerId: string;
+  priceId: string;
   resource: string;
   origin: string;
   protocol: string;
@@ -39,7 +39,7 @@ export interface PayeeOperation {
 }
 
 export interface CreateChallengeRequest extends OperationContext {
-  offer_id: string;
+  price_id: string;
   resource: string;
   origin: string;
   protocol: string;
@@ -85,7 +85,7 @@ export type ProtectionOutcome =
   | { outcome: 'payment_required'; challenge: PaymentChallenge }
   | { outcome: 'authorized'; challenge: PaymentChallenge; payment: SettledIncomingPayment };
 
-export function validateResolveOfferRequest(request: ResolveOfferRequest): void {
+export function validateResolvePriceRequest(request: ResolvePriceRequest): void {
   required('scenarioId', request.scenarioId);
   required('resource', request.resource);
   if (request.protocol !== undefined) required('protocol', request.protocol);
@@ -94,7 +94,7 @@ export function validateResolveOfferRequest(request: ResolveOfferRequest): void 
 export function validatePayeeOperation(operation: PayeeOperation): void {
   for (const [name, value] of [
     ['scenarioId', operation.scenarioId], ['runId', operation.runId],
-    ['offerId', operation.offerId],
+    ['priceId', operation.priceId],
     ['resource', operation.resource], ['origin', operation.origin],
     ['protocol', operation.protocol], ['requestHash', operation.requestHash],
   ]) {

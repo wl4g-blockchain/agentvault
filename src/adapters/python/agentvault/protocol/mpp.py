@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..model.a2a import A2ACall
+
 import base64
 import json
 from dataclasses import dataclass, replace
@@ -354,3 +356,36 @@ class MppAdapter(PaymentProtocol):
     @staticmethod
     def _header(headers: Mapping[str, str], wanted: str) -> str:
         return next((value for name, value in headers.items() if name.lower() == wanted), "")
+
+
+    def a2a_challenge(self, message: dict, limit: int) -> HttpResponse | None:
+        return self.mcp_challenge(message, limit) if message.get("error") is not None else None
+
+    def a2a_apply_credential(self, message: dict, credential: PaymentCredential) -> None:
+        meta = A2ACall.metadata(message, root=True)
+        value = self.mcp_credential(credential)
+        if value.key in meta:
+            raise ValueError("A2A request already contains an MPP credential")
+        meta[value.key] = value.value
+
+    def a2a_presented_credential(self, message: dict, limit: int) -> object | None:
+        key = self.mcp_request_metadata_key()
+        if key in message.get("params", {}).get("_meta", {}) or key in A2ACall.metadata(message):
+            raise ValueError("MPP A2A credentials require JSON-RPC root _meta")
+        return self.presented_mcp_credential(A2ACall.metadata(message, root=True), limit)
+
+    def a2a_strip_credential(self, message: dict) -> None:
+        A2ACall.metadata(message, root=True).pop(self.mcp_request_metadata_key(), None)
+
+    def a2a_payment_required(self, challenge: PaymentChallenge, task: object, rejected: bool) -> McpPaymentRequired:
+        return self.mcp_payment_rejected(challenge, "Payment verification failed") if rejected else self.mcp_payment_required(challenge)
+
+    def a2a_evidence(self, message: dict, limit: int) -> MerchantEvidence | None:
+        return self.mcp_merchant_evidence(A2ACall.metadata(message, root=True), limit)
+
+    def a2a_inject_receipt(self, message: dict, challenge: PaymentChallenge, payment: SettledIncomingPayment) -> None:
+        meta = A2ACall.metadata(message, root=True)
+        value = self.mcp_receipt(challenge, payment)
+        if value.key in meta:
+            raise ValueError("handler attempted to supply an MPP receipt")
+        meta[value.key] = value.value

@@ -28,7 +28,7 @@ export interface AssetIdentity {
 
 export interface PaymentChallenge {
   scenario_id: string;
-  offer_id?: string;
+  price_id?: string;
   resource: string;
   protocol: string;
   asset: AssetIdentity;
@@ -99,7 +99,7 @@ export interface PaymentIntent {
   run_id: string;
   wallet_id?: string;
   policy_id?: string;
-  offer_id?: string;
+  price_id?: string;
   direction: PaymentDirection;
   protocol: string;
   asset: AssetIdentity;

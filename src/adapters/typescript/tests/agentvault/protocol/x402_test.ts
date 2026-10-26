@@ -7,11 +7,11 @@ import { X402Adapter } from '../../../src/agentvault/protocol/x402.js';
 
 test('X402Adapter uses only native x402 challenge headers', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as { protocols: { x402: { challenge_response: { result: { structuredContent: unknown } } } } };
   const challenge: PaymentChallenge = {
-    scenario_id: 'scenario', offer_id: 'offer', resource: 'https://merchant.example/tool', protocol: 'x402',
+    scenario_id: 'scenario', price_id: 'price', resource: 'https://merchant.example/tool', protocol: 'x402',
     asset: { network: 'eip155:42431', asset: 'USDC', decimals: 6 }, amount: '1000',
     recipient: '0x1111111111111111111111111111111111111111', nonce: 'nonce',
     challenge_hash: 'challenge', expires_at: 2_000_000_000,
@@ -60,7 +60,7 @@ test('X402Adapter ignores unrelated tool errors and compares MCP challenges stru
 
 test('X402Adapter preserves chain-specific v2 payloads and rejects crossovers', () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/x402_v2_chain_payloads.json', import.meta.url),
+    new URL('../../../../tests/x402_v2_chain_payloads.json', import.meta.url),
     'utf8',
   )) as {
     cases: Record<string, { payment_payload: Record<string, unknown> }>;

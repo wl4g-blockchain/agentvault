@@ -11,11 +11,14 @@ import type {
   PaymentBalance,
   PaymentIntent,
   PaymentListInput,
-  PaymentOffer,
+  PaymentPrice,
   PaymentPage,
   PaymentReceipt,
   ScenarioConfiguration,
   ScenarioConfigurationInput,
+  CreateWalletInput,
+  Wallet,
+  WalletImportSession,
 } from './types'
 
 export const API_ROOT = '/api/v1'
@@ -27,7 +30,7 @@ export const capabilities: ApiCapabilities = {
   balanceLookup: true,
   pendingApprovalRead: true,
   approvalDecision: true,
-  offerResolution: true,
+  priceResolution: true,
   managementRead: true,
   managementMutation: true,
   paymentListing: true,
@@ -127,9 +130,9 @@ export const approvalApi = {
   },
 }
 
-export const offerApi = {
+export const priceApi = {
   resolve(scenarioId: string, resource: string, protocol?: string) {
-    return request<PaymentOffer>('/offers/resolve', {
+    return request<PaymentPrice>('/prices/resolve', {
       method: 'POST',
       body: JSON.stringify({
         scenario_id: scenarioId,
@@ -195,6 +198,19 @@ export const managementApi = {
 
   createScenario(input: ScenarioConfigurationInput) {
     return request<ScenarioConfiguration>('/admin/scenarios', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  createWalletImportSession() {
+    return request<WalletImportSession>('/admin/wallets/encryption-sessions', {
+      method: 'POST',
+    })
+  },
+
+  createWallet(input: CreateWalletInput) {
+    return request<Wallet>('/admin/wallets', {
       method: 'POST',
       body: JSON.stringify(input),
     })

@@ -1,12 +1,10 @@
 x-agentvault: &agentvault
-  image: ${AGENTVAULT_IMAGE:?set AGENTVAULT_IMAGE in .env}
+  image: ${HELPER_INTERNAL_AGENTVAULT_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_IMAGE in .env}
   build:
     context: ../..
     dockerfile: Dockerfile
   command: [--config, /etc/agentvault/agentvault.yaml, serve]
-  env_file: ["${AGENTVAULT_ENV_FILE:-.env}"]
-  environment:
-    RUST_LOG: ${RUST_LOG:-info}
+  env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
   volumes:
     - ./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro
   restart: unless-stopped
@@ -16,7 +14,7 @@ services:
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3
     environment:
       POSTGRESQL_USERNAME: agentvault
-      POSTGRESQL_PASSWORD: ${AGENTVAULT_POSTGRES_PASSWORD:?set AGENTVAULT_POSTGRES_PASSWORD in .env}
+      POSTGRESQL_PASSWORD: ${HELPER_SECRET_POSTGRES_PASSWORD:?set HELPER_SECRET_POSTGRES_PASSWORD in .env}
       POSTGRESQL_DATABASE: agentvault
     volumes: [agentvault-postgres-data:/bitnami/postgresql]
     healthcheck:
@@ -28,14 +26,14 @@ services:
 
   agentvault-redis:
     image: redis:7.2-alpine
-    command: [redis-server, --save, "", --appendonly, "no", --requirepass, "${AGENTVAULT_REDIS_PASSWORD:?set AGENTVAULT_REDIS_PASSWORD in .env}"]
+    command: [redis-server, --save, "", --appendonly, "no", --requirepass, "${HELPER_SECRET_REDIS_PASSWORD:?set HELPER_SECRET_REDIS_PASSWORD in .env}"]
     healthcheck:
-      test: [CMD-SHELL, 'redis-cli --no-auth-warning -a "$${AGENTVAULT_REDIS_PASSWORD}" ping | grep -q PONG']
+      test: [CMD-SHELL, 'redis-cli --no-auth-warning -a "$${HELPER_SECRET_REDIS_PASSWORD}" ping | grep -q PONG']
       interval: 5s
       timeout: 3s
       retries: 30
     environment:
-      AGENTVAULT_REDIS_PASSWORD: ${AGENTVAULT_REDIS_PASSWORD:?set AGENTVAULT_REDIS_PASSWORD in .env}
+      HELPER_SECRET_REDIS_PASSWORD: ${HELPER_SECRET_REDIS_PASSWORD:?set HELPER_SECRET_REDIS_PASSWORD in .env}
     restart: unless-stopped
 
   agentvault:
@@ -48,7 +46,7 @@ services:
       - 127.0.0.1:9091:9091
 
   agentvault-web:
-    image: ${AGENTVAULT_WEB_IMAGE:?set AGENTVAULT_WEB_IMAGE in .env}
+    image: ${HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE in .env}
     build: { context: ../../web, dockerfile: Dockerfile }
     expose: [8080]
     restart: unless-stopped
@@ -73,9 +71,9 @@ services:
     restart: unless-stopped
 
   authguard-authn:
-    image: ${AUTHGUARD_IMAGE:?set AUTHGUARD_IMAGE in .env}
+    image: ${HELPER_INTERNAL_AUTHGUARD_IMAGE:?set HELPER_INTERNAL_AUTHGUARD_IMAGE in .env}
     command: [--config, /etc/authguard/authguard.yaml, authn, --bind, 0.0.0.0:8082]
-    env_file: ["${AGENTVAULT_ENV_FILE:-.env}"]
+    env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
     environment: { AUTHGUARD__SERVER__SERVICE_NAME: authguard-authn }
     volumes: [./config/authguard.yaml:/etc/authguard/authguard.yaml:ro]
     depends_on:
@@ -85,9 +83,9 @@ services:
     restart: unless-stopped
 
   authguard-authz:
-    image: ${AUTHGUARD_IMAGE:?set AUTHGUARD_IMAGE in .env}
+    image: ${HELPER_INTERNAL_AUTHGUARD_IMAGE:?set HELPER_INTERNAL_AUTHGUARD_IMAGE in .env}
     command: [--config, /etc/authguard/authguard.yaml, authz]
-    env_file: ["${AGENTVAULT_ENV_FILE:-.env}"]
+    env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
     environment: { AUTHGUARD__SERVER__SERVICE_NAME: authguard-authz }
     volumes: [./config/authguard.yaml:/etc/authguard/authguard.yaml:ro]
     depends_on:
@@ -97,7 +95,7 @@ services:
     restart: unless-stopped
 
   authguard-web:
-    image: ${AUTHGUARD_WEB_IMAGE:?set AUTHGUARD_WEB_IMAGE in .env}
+    image: ${HELPER_INTERNAL_AUTHGUARD_WEB_IMAGE:?set HELPER_INTERNAL_AUTHGUARD_WEB_IMAGE in .env}
     expose: [8080]
     restart: unless-stopped
 

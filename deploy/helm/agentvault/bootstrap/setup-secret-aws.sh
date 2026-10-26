@@ -174,10 +174,12 @@ EOF
 fi
 
 sync_kubernetes_secret
-write_values_file "$AWS_VALUES_FILE" "secrets:
-  provider: aws
-  kubernetes:
-    existingSecret: ${AGENTVAULT_SECRET_NAME}
-  aws:
-    region: ${AWS_REGION_NAME}
-    secretName: ${AWS_SECRET_ID}"
+write_values_file "$AWS_VALUES_FILE" "agentvault:
+  backend:
+    secrets:
+      provider: aws
+      kubernetes:
+        existingSecret: ${AGENTVAULT_SECRET_NAME}
+      aws:
+        region: ${AWS_REGION_NAME}
+        secretName: ${AWS_SECRET_ID}"

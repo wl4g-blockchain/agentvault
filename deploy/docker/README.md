@@ -31,8 +31,11 @@ docker compose -p agentvault-open --env-file deploy/docker/.env \
   -f deploy/docker/docker-compose.open.yaml up -d
 ```
 
-The Payee-owned provider and shared `agentvault.chains` entries in
-`config/agentvault.yaml` are operator-owned examples and must be replaced for a real network. Chain nodes
+The Payee-owned provider and shared `agentvault.chains` entries in the single
+canonical [`etc/agentvault.yaml`](../../etc/agentvault.yaml) are operator-owned
+examples and must be replaced for a real network. `config/agentvault.yaml` is a
+symlink to that file; deployment-specific scalar and secret values belong in
+`.env`, not in a copied YAML document. Chain nodes
 and the official x402 Facilitator are deliberately not embedded here; the full
 disposable stack lives under `use-cases/marketpulse-feed-subscription/e2e`.
 
@@ -40,3 +43,10 @@ MQTT is disabled in this general-purpose stack. Enable it only after pointing
 AgentVault at a broker with password/TLS authentication and per-client topic
 ACLs. The E2E stack provisions and verifies that independent `client_id`
 boundary against EMQX; HTTP AuthGuard identity is never reused as MQTT trust.
+
+Unix-socket payment transport has been removed. On upgrade, delete the
+`agentvault.transport.local` subsection and any
+`AGENTVAULT__AGENTVAULT__TRANSPORT__LOCAL__*` environment overrides; strict typed
+configuration rejects those settings. Configure the existing gRPC or MQTT
+transport for SDK-to-Vault calls. HTTP administration and Envoy's TCP loopback
+forwarding retain their separate listener and authorization boundaries.

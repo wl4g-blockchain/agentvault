@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from common.deploy.base import FullFlowEvidence
+from deploy.deployer.base import FullFlowEvidence
 from common.payer_identity import PAYER_IDENTITIES, payer_identity
 
 

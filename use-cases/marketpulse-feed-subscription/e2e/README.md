@@ -12,7 +12,7 @@ two real business systems rather than a unit-test fixture:
   `/healthz` and `/metrics` endpoints; the server owns the paid MCP listener.
   Its MCP endpoint exposes
   `marketpulse.yesterday_news` for free and `marketpulse.realtime_news` for one
-  USDC. The paid tool resolves a server-owned Offer, emits x402 v2 402, asks
+  USDC. The paid tool resolves a server-owned Price, emits x402 v2 402, asks
   AgentVault to verify and settle through the external official Facilitator,
   and delivers data only after confirmed settlement.
 - **QuantStream** is a payer quantitative-ingestion platform. Five equivalent
@@ -65,8 +65,8 @@ override either identity.
 
 ## Limits and approval behavior
 
-The provisioning manifest expresses `Client 1:N Scenario`, `Scenario 1:N
-Policy`, and `Policy 1:N Wallet membership`. Production may share a Wallet
+The canonical console-resource fixture expresses `Client 1:N Scenario`,
+`Scenario 1:N Policy`, and `Policy 1:N Wallet membership`. Production may share a Wallet
 across Policies, but this matrix deliberately provisions five isolated Payer
 identities and ten distinct EOAs so cross-SDK leakage is observable. Among
 equally authorized candidates AgentVault prefers the lowest daily usage and
@@ -101,8 +101,14 @@ Flowgent Anvil, Solana, and Facilitator deployments:
 - `payee-{go,rust,python,java,typescript}`: exactly one payee backend.
 - `ingestor-{go,rust,python,java,typescript}`: exactly one payer backend.
 
-The five-language business matrix asserts x402 v2 / EVM / EIP-3009 against
-compiled E2EUSDC. The separate `mpp-tempo` scenario asserts a Vault-signed
+The `full` workflow and five-language business matrix assert x402 v2 / EVM /
+EIP-3009 against E2EUSDC deployed on local Anvil. The explicit `x402-evm` scenario
+runs that same complete workflow and all five verifiers: custody signing,
+external facilitator verify/settle, approval/recovery, two ERC-20 transfers,
+four inbound/outbound ledger rows, independent receipts, ten-wallet isolation,
+and exact facilitator native-gas conservation. It additionally writes
+`payment/x402-evm/evidence.json`; it does not create a second payment executor.
+The separate `mpp-tempo` scenario asserts a Vault-signed
 Tempo type-0x76 `charge`, external HTTP verify/settle, lost-response recovery,
 single broadcast, receipt binding, and pathUSD balance conservation including
 token-denominated gas. The explicit `x402-solana` scenario creates a real SPL
@@ -120,27 +126,36 @@ same official x402 body always maps to the same durable Challenge Hash.
 ```text
 marketpulse-feed-subscription/e2e/
 ├── deploy/
+│   ├── deployer/          # Docker/Kubernetes lifecycle and scoped cleanup
+│   ├── namespaces.yaml    # cluster-level E2E namespace manifest
+│   ├── agentvault-helm-shared/
+│   ├── mock-payee-marketpulse-config/
+│   ├── mock-payer-quantstream-config/
 │   ├── anvil/  solana/  facilitator/
 │   ├── mock-payee-marketpulse-{golang,rust,python,java,typescript}-service/
 │   │   └── {main/Application,server,route/feed,handler/feed,storage/feed}
-│   ├── mock-payer-quantstream-ingest-ui/src/
-│   ├── mock-payer-quantstream-ingest-service-golang/
+│   ├── mock-payer-quantstream-ui/src/
+│   ├── mock-payer-quantstream-service-golang/
 │   │   ├── main.go
 │   │   └── pkg/{route,handler,job,agent}/
-│   ├── mock-payer-quantstream-ingest-service-rust/
+│   ├── mock-payer-quantstream-service-rust/
 │   │   └── src/{lib.rs,main.rs,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-python/
+│   ├── mock-payer-quantstream-service-python/
 │   │   └── app/{main.py,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-java/
+│   ├── mock-payer-quantstream-service-java/
 │   │   └── src/io/agentvault/e2e/{Application.java,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-typescript/
+│   ├── mock-payer-quantstream-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # source-path-mirrored unit tests
-├── common/contract/       # provisioning and MQTT wire contracts
+├── common/                # Python-only case context and shared utilities
+├── config/                # AgentVault runtime and initialization configuration
+│   ├── agentvault/
+│   │   ├── values.yaml    # the single Helm/Kubernetes values source
+│   │   └── init.import.yaml # canonical console-resource import
 ├── verifier/              # structure and financial/business assertions
 ├── reports/               # generated layered reports
 ├── docker-compose.yaml
-└── runner.py              # standard-library layered orchestrator
+└── runner.py              # layered orchestrator with dependencies in requirements.txt
 ```
 
 The five payer services intentionally keep the same composition: thin
@@ -157,6 +172,7 @@ framework glue never implements payment logic.
 
 ```bash
 cd use-cases/marketpulse-feed-subscription/e2e
+python3 -m pip install --requirement requirements.txt
 
 python3 runner.py --list
 python3 runner.py -s structure
@@ -167,6 +183,7 @@ python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
 python3 runner.py -s mpp-tempo
 python3 runner.py -s x402-solana
+python3 runner.py -s x402-evm --payer-language rust --payee-language rust --cleanup-after-run
 python3 runner.py -s matrix --matrix-workers 2 # default simple: Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -194,7 +211,8 @@ volumes, global builder caches, or resources outside those namespaces.
 
 `--cleanup-after-run` remains intentionally narrower. The Docker backend removes
 only current Compose containers and volumes; the Kubernetes backend uninstalls
-only the current E2E Helm releases. Both preserve locally built images. Docker
+the current E2E Helm releases and removes the labelled business-evidence Jobs
+and PVCs in the declared E2E namespaces. Both preserve locally built images. Docker
 post-run cleanup never touches a separately deployed Kubernetes review environment.
 
 All ten language service images use separate builder and runtime stages. Rust
@@ -206,8 +224,19 @@ its static binary plus Alpine runtime.
 
 ## Kubernetes namespace contract
 
-`runner.py` exposes `--deployer docker|kubernetes`; Docker remains the CI
-default. The Kubernetes backend owns local-image build/import, Helm lifecycle,
+`runner.py` exposes `--deployer docker|kubernetes`; Docker is the CLI default.
+PR CI runs both backends in parallel on separate runners after the build gate,
+using the same immutable dirty AgentVault image. Each backend executes the eight
+Rust/Go × Rust/Go × MQTT/gRPC cases and publishes its own report artifact. The
+Kubernetes job creates a fresh, version-pinned K3s cluster and runs its cases
+serially (`--matrix-workers 1`); Docker keeps isolated concurrent workers. The
+final PR comment renders both Markdown summaries and reports success only when
+the build and both E2E jobs succeed.
+Matrix resume plans and checkpoints bind the backend and SDK scope. A Docker
+checkpoint cannot satisfy Kubernetes acceptance; older records without a backend
+must be replaced by a new run.
+
+The Kubernetes backend owns local-image build/import, Helm lifecycle,
 port forwards, payer Jobs, approval, and PostgreSQL/on-chain evidence. Matrix
 cases run serially on the shared cluster to prevent cross-case state leakage.
 The component Helm charts enforce a deployment boundary for Kubernetes consumers:
@@ -294,3 +323,16 @@ The shared five-SDK fixture separately covers both transports, both protocols,
 and both roles. MPP session/split/fee-payer/delegated methods and provider
 fee/refund/deposit/transfer/reversal matrices remain unsupported or require
 their own acceptance scenarios.
+
+
+### A2A SDK acceptance
+
+`python3 runner.py -s a2a --timeout 600` runs the five SDK A2A suites sequentially
+and saves `payment/a2a/evidence.json` plus native test logs. Install the SDKs'
+locked dependencies first (including `pip install -e 'src/adapters/python[test]'`
+from the repository root). Select a bounded `CARGO_TARGET_DIR` when disk space is
+limited. This scenario starts local HTTP adapters with controlled Vault ports;
+it does not deploy a chain or claim financial settlement. The existing
+`mpp-tempo`, `x402-solana` and `full` scenarios retain their independent chain,
+ledger and balance assertions. A2A currently covers non-streaming 0.3
+`message/send`, x402 v2 and native MPP JSON-RPC metadata in all five languages.

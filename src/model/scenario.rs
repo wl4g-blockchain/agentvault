@@ -1,40 +1,16 @@
-use serde::{Deserialize, Serialize};
+use super::{PaymentClient, PaymentScenario};
 
-/// A payment-isolated policy and wallet boundary owned by one client.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentScenario {
-    pub id: String,
-    pub client_id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
+/// Internal marker used only by transports explicitly configured without an
+/// `AuthGuard` identity boundary. Registration rejects this reserved value.
+pub(crate) const UNRESTRICTED_PRINCIPAL: &str = "agentvault:internal:unrestricted";
 
-impl PaymentScenario {
-    #[must_use]
-    pub fn belongs_to(&self, client_id: &str) -> bool {
-        self.client_id == client_id
-    }
-
-    /// Checks the fields used for ownership and idempotent registration.
-    ///
-    /// # Errors
-    ///
-    /// Returns the invalid field name.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.id.trim().is_empty() {
-            return Err("id");
-        }
-        if self.client_id.trim().is_empty() {
-            return Err("client_id");
-        }
-        if self.name.trim().is_empty() {
-            return Err("name");
-        }
-        Ok(())
-    }
+/// Resolved principal and durable ownership entities for one request.
+/// Entity fields are reused directly rather than copied into another shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessContext {
+    pub principal: String,
+    pub client: PaymentClient,
+    pub scenario: PaymentScenario,
 }
 
 #[cfg(test)]

@@ -1,73 +1,90 @@
-use serde::{Deserialize, Serialize};
+use super::{Amount, PaymentIntent};
 
-use super::payment::{Amount, AssetIdentity, PaymentDirection, PaymentStatus};
+pub use super::domain::PaymentReceipt;
 
-/// Protocol-neutral evidence returned after settlement observation.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentReceipt {
-    pub intent_id: String,
-    pub scenario_id: String,
-    pub direction: PaymentDirection,
-    pub protocol: String,
-    pub asset: AssetIdentity,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferQuery {
+    pub network: String,
+    pub transaction: String,
+    pub token_contract: String,
+    pub payer: String,
     pub recipient: String,
-    /// Payer identity observed by the trusted facilitator/provider or chain
-    /// verifier, never accepted from an unverified merchant response.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payer: Option<String>,
-    pub requested_amount: Amount,
-    pub settled_amount: Amount,
-    pub status: PaymentStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub settlement_ref: Option<String>,
-    /// Hash of trusted provider, facilitator, or chain evidence.
-    pub evidence_hash: String,
-    pub confirmed_at: i64,
+    pub amount: Amount,
 }
 
-impl PaymentReceipt {
-    /// Ensures a receipt cannot claim confirmation without evidence and a
-    /// settlement reference.
-    ///
-    /// # Errors
-    ///
-    /// Returns the invalid field or invariant name.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.intent_id.trim().is_empty() {
-            return Err("intent_id");
-        }
-        if self.scenario_id.trim().is_empty() {
-            return Err("scenario_id");
-        }
-        if self.protocol.trim().is_empty() {
-            return Err("protocol");
-        }
-        self.asset.validate()?;
-        if self.requested_amount.is_zero() {
-            return Err("requested_amount");
-        }
-        if self.payer.as_deref().is_some_and(str::is_empty) {
-            return Err("payer");
-        }
-        if self.settled_amount > self.requested_amount {
-            return Err("settled_amount");
-        }
-        if self.status == PaymentStatus::Settled {
-            if self.settled_amount.is_zero() {
-                return Err("settled_amount");
-            }
-            if self.tx_hash.is_none() && self.settlement_ref.is_none() {
-                return Err("settlement_reference");
-            }
-            if self.evidence_hash.trim().is_empty() {
-                return Err("evidence_hash");
-            }
-        }
-        Ok(())
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmAuthorizationQuery {
+    pub network: String,
+    pub token_contract: String,
+    pub payer: String,
+    pub nonce: String,
+    pub recipient: String,
+    pub amount: Amount,
+    pub from_block: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmedTransfer {
+    pub authority: String,
+    pub transaction: String,
+    pub effect_ref: String,
+    pub confirmations: u64,
+    pub minimum_confirmations: u64,
+    pub effective_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReceiptObservation {
+    Confirmed(ConfirmedTransfer),
+    Pending,
+    Mismatch { reason: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvmAuthorizationObservation {
+    Confirmed(ConfirmedTransfer),
+    Pending,
+    NoEffect { observed_block: u64, observed_at: i64 },
+    Mismatch { reason: String },
+}
+
+/// Trusted observation produced after independently checking an outbound
+/// merchant receipt against the configured chain evidence source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OutboundEvidenceObservation {
+    Confirmed {
+        authority: String,
+        transaction: String,
+        payer: String,
+        effect_ref: String,
+        confirmations: u64,
+        minimum_confirmations: u64,
+        effective_at: i64,
+    },
+    Pending,
+    Unknown {
+        reason: String,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordOutboundPaymentResponse {
+    pub scenario_id: String,
+    pub run_id: String,
+    pub intent_id: String,
+    pub protocol: String,
+    pub header_name: String,
+    pub header_value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedOutboundEvidence {
+    pub intent: PaymentIntent,
+    pub accepted: bool,
+    pub replayed: bool,
 }
 
 #[cfg(test)]

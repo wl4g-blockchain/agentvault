@@ -5,9 +5,9 @@ Enterprise payment infrastructure for autonomous AI agents.
 AgentVault is a Rust service that mediates both sides of machine payments:
 
 - Payer / OUTBOUND: authorize a paid HTTP/MCP request, reserve budget, obtain approval when needed, sign an intent-bound credential, and reconcile settlement.
-- Payee / INBOUND: resolve a fixed Offer, issue a 402 challenge, verify and settle an incoming credential through an external provider, then publish a trusted receipt.
+- Payee / INBOUND: resolve a fixed Price, issue a 402 challenge, verify and settle an incoming credential through an external provider, then publish a trusted receipt.
 
-Private keys and all financial state are stored only in PostgreSQL or SQLite. Keys use versioned AES-256-GCM envelope encryption with full UUID v4 nonces; Ledger rows are append-only. Memory/Redis caches contain only reconstructible state and never decide budgets, approvals, idempotency, settlement, or balances.
+Private keys and all financial state are stored only in PostgreSQL or SQLite. Keys use versioned AES-256-GCM envelope encryption with full UUID v4 nonces; Ledger rows are append-only. Memory/Redis caches contain only reconstructible or safely disposable short-lived coordination state and never decide budgets, approvals, idempotency, settlement, or balances.
 
 ## Architecture
 
@@ -81,6 +81,29 @@ Dashboard checks:
   python3 runner.py -s web --e2e-sdk-scope full \
   --matrix-evidence-run <completed-matrix-run>)
 ```
+
+## Management console
+
+`agentvault console` opens the interactive administrator console; the same
+commands can be executed non-interactively. Catalog creation reuses the
+canonical resource importer, lifecycle changes reuse the storage/domain ports,
+approval decisions reuse the production approval state machine, and payment,
+approval, Ledger, and Event history is read-only.
+
+```bash
+agentvault --config etc/agentvault.yaml console import resources/
+agentvault --config etc/agentvault.yaml console list client
+agentvault --config etc/agentvault.yaml console wallet create wallet.yaml
+agentvault --config etc/agentvault.yaml console wallet list
+agentvault --config etc/agentvault.yaml console wallet get wallet-id
+```
+
+Wallet custody intentionally has a narrower command surface than other
+catalog resources: only `create`, `list`, and `get` exist, and both read
+commands return public metadata only. There is no console or Dashboard command
+to reveal, export, update, rotate, disable, or delete an EOA private key. Once
+created, the encrypted key is available only to the runtime signer through the
+custody port; neither API serializes key material.
 
 ## Deployment
 

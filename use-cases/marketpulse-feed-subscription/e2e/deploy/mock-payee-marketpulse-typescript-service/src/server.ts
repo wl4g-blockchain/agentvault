@@ -10,13 +10,13 @@ import express, { type Express } from 'express';
 import type { Server as HttpServer } from 'node:http';
 import { FeedHandler } from './handler/feed.js';
 import { FeedRouter } from './route/feed.js';
-import { FeedSQLiteStorage } from './storage/feed.js';
+import { FeedSqliteRepository } from './storage/feed.js';
 
 /** Owns the Express listener, MCP endpoint, SDK middleware and lifecycle. */
 export class MarketPulseServer {
   private constructor(
     readonly application: Express,
-    private readonly storage: FeedSQLiteStorage,
+    private readonly storage: FeedSqliteRepository,
     private readonly vault: AgentVault,
     private readonly host: string,
     private readonly port: number,
@@ -30,11 +30,11 @@ export class MarketPulseServer {
       '/mcp',
       'marketpulse.realtime_news',
       required('MARKETPULSE_SCENARIO_ID'),
-      required('MARKETPULSE_OFFER_ID'),
+      required('MARKETPULSE_PRICE_ID'),
       required('MARKETPULSE_RESOURCE_URL'),
       required('MARKETPULSE_ORIGIN'),
     )]);
-    const storage = new FeedSQLiteStorage(required('MARKETPULSE_DATABASE'));
+    const storage = new FeedSqliteRepository(required('MARKETPULSE_DATABASE'));
     const handler = new FeedHandler(
       storage,
       process.env.MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION === 'true',

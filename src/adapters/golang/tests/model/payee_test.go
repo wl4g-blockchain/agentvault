@@ -8,7 +8,7 @@ import (
 
 func TestPayeePhasesReuseOneRunIdentity(t *testing.T) {
 	operation := model.PayeeOperation{
-		ScenarioID: "scenario", RunID: "run", OfferID: "offer",
+		ScenarioID: "scenario", RunID: "run", PriceID: "price",
 		Resource: "mcp://marketpulse/realtime", Origin: "https://marketpulse.test", Protocol: "x402", RequestHash: "hash",
 	}
 	if err := operation.Validate(); err != nil {

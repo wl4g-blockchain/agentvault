@@ -34,7 +34,7 @@ class DeliveryState:
     response: str = ""
 
 
-class FeedSQLiteStorage:
+class FeedSqliteRepository:
     def __init__(self, path: str) -> None:
         if not path or path == ":memory:":
             raise ValueError("MARKETPULSE_DATABASE must be persistent")

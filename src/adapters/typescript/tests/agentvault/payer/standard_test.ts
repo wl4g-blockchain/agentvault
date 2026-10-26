@@ -22,7 +22,7 @@ test('FetchPayerMiddleware leaves free responses untouched', async () => {
 
 test('FetchPayerMiddleware closes x402 and MPP MCP metadata flows once', async () => {
   const fixture = JSON.parse(readFileSync(
-    new URL('../../../../fixtures/payment_protocol_mcp.json', import.meta.url),
+    new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url),
     'utf8',
   )) as {
     protocols: Record<string, {

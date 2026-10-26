@@ -14,26 +14,30 @@ pub const WALLET_KEY_ENCRYPTION_SCHEME: &str = "aes-256-gcm-uuid-v4-nonce-envelo
 pub type Aes256GcmUuidNonce = AesGcm<Aes256, U16>;
 pub type UuidNonce = Nonce<U16>;
 
-/// Generates a UUID v4 nonce without truncating its 122 random bits.
-#[must_use]
-pub fn new_uuid_nonce() -> [u8; UUID_NONCE_BYTES] {
-    Uuid::new_v4().into_bytes()
-}
+pub struct UuidNonceCodec;
 
-/// Parses and validates a complete RFC 4122 UUID v4 nonce.
-///
-/// # Errors
-///
-/// Returns an error when `bytes` is not exactly one RFC 4122 UUID v4 value.
-pub fn parse_uuid_nonce(bytes: &[u8]) -> Result<[u8; UUID_NONCE_BYTES]> {
-    let nonce: [u8; UUID_NONCE_BYTES] = bytes
-        .try_into()
-        .map_err(|_| Error::Crypto("AES-GCM nonce is not a UUID v4".to_owned()))?;
-    let uuid = Uuid::from_bytes(nonce);
-    if uuid.get_variant() != Variant::RFC4122 || uuid.get_version() != Some(Version::Random) {
-        return Err(Error::Crypto("AES-GCM nonce is not a UUID v4".to_owned()));
+impl UuidNonceCodec {
+    /// Generates a UUID v4 nonce without truncating its 122 random bits.
+    #[must_use]
+    pub fn generate() -> [u8; UUID_NONCE_BYTES] {
+        Uuid::new_v4().into_bytes()
     }
-    Ok(nonce)
+
+    /// Parses and validates a complete RFC 4122 UUID v4 nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `bytes` is not exactly one RFC 4122 UUID v4 value.
+    pub fn parse(bytes: &[u8]) -> Result<[u8; UUID_NONCE_BYTES]> {
+        let nonce: [u8; UUID_NONCE_BYTES] = bytes
+            .try_into()
+            .map_err(|_| Error::Crypto("AES-GCM nonce is not a UUID v4".to_owned()))?;
+        let uuid = Uuid::from_bytes(nonce);
+        if uuid.get_variant() != Variant::RFC4122 || uuid.get_version() != Some(Version::Random) {
+            return Err(Error::Crypto("AES-GCM nonce is not a UUID v4".to_owned()));
+        }
+        Ok(nonce)
+    }
 }
 
 #[cfg(test)]

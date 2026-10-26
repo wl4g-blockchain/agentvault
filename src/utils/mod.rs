@@ -7,9 +7,14 @@ pub(crate) mod runtime_identity;
 pub(crate) mod secret;
 pub mod secure_material;
 pub(crate) mod solana_rpc;
+pub(crate) mod storage;
 
 pub use error::{Error, Result};
 
 #[cfg(test)]
 #[path = "../../tests/utils/mod_test.rs"]
 mod tests;
+
+pub(crate) mod evm_client;
+
+pub mod clock;

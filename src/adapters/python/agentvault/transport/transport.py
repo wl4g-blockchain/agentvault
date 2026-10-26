@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from typing import Any, Mapping, Protocol
 
 
@@ -10,6 +11,15 @@ class VaultTransport(Protocol):
         path: str,
         body: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]: ...
+
+
+class AsyncVaultTransport(VaultTransport, Protocol):
+    def request_async(
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, Any] | None = None,
+    ) -> Future[dict[str, Any]]: ...
 
 
 class APIError(RuntimeError):

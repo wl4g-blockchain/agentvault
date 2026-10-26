@@ -1,3 +1,6 @@
+import type { TaskStore, ServerCallContext } from '@a2a-js/sdk/server';
+import { A2APaymentCall } from './a2a.js';
+import type { PayeeOperation, SettledIncomingPayment } from '../model/payee.js';
 import { createHash } from 'node:crypto';
 import express, { type RequestHandler } from 'express';
 import type { PaymentChallenge } from '../model/base.js';
@@ -9,11 +12,12 @@ export interface ExpressPayeeRoute {
   method: string;
   path: string;
   scenarioId: string;
-  offerId: string;
+  priceId: string;
   resource: string;
   origin: string;
   protocol?: string;
   mcpTool?: string;
+  a2aTaskStore?: TaskStore;
 }
 
 interface McpCall {
@@ -26,7 +30,7 @@ export function mcpToolRoute(
   path: string,
   tool: string,
   scenarioId: string,
-  offerId: string,
+  priceId: string,
   resource: string,
   origin: string,
 ): ExpressPayeeRoute {
@@ -34,7 +38,7 @@ export function mcpToolRoute(
     path,
     tool,
     scenarioId,
-    offerId,
+    priceId,
     resource,
     origin,
     'x402',
@@ -45,12 +49,12 @@ export function mcpToolRouteWithProtocol(
   path: string,
   tool: string,
   scenarioId: string,
-  offerId: string,
+  priceId: string,
   resource: string,
   origin: string,
   protocol: string,
 ): ExpressPayeeRoute {
-  return { method: 'POST', path, scenarioId, offerId, resource, origin, protocol, mcpTool: tool };
+  return { method: 'POST', path, scenarioId, priceId, resource, origin, protocol, mcpTool: tool };
 }
 
 /** Express middleware that protects only explicitly registered routes. */
@@ -61,6 +65,7 @@ export class ExpressPayeeMiddleware {
     private readonly maxBodyBytes = 1024 * 1024,
   ) {
     if (maxBodyBytes <= 0) throw new Error('maxBodyBytes must be positive');
+    if (routes.some((route) => route.mcpTool && route.a2aTaskStore)) throw new Error('MCP and A2A routes are mutually exclusive');
   }
 
   handlers(): RequestHandler[] {
@@ -79,7 +84,7 @@ export class ExpressPayeeMiddleware {
         if (!Buffer.isBuffer(request.body)) {
           throw new Error('Express raw body middleware was not installed');
         }
-        const call = route.mcpTool === undefined
+        let call: McpCall | A2APaymentCall | undefined = route.mcpTool === undefined
           ? undefined
           : this.mcpCall(request.body, route.mcpTool);
         if (route.mcpTool !== undefined && !call) {
@@ -98,6 +103,15 @@ export class ExpressPayeeMiddleware {
           return;
         }
         const protocolName = route.protocol ?? 'x402';
+        const operation: PayeeOperation = {
+          scenarioId: route.scenarioId, runId, priceId: route.priceId,
+          resource: route.resource, origin: route.origin, protocol: protocolName,
+          requestHash: this.requestHash(request.method, request.path, request.body),
+        };
+        if (route.a2aTaskStore) {
+          call = await this.core.a2a().prepare(request.body, operation, route.a2aTaskStore, headers, response.locals.a2aContext as ServerCallContext | undefined);
+          if (!call) { next(); return; }
+        }
         const protocol = this.core.protocol(protocolName);
         let credentialPayload: unknown | undefined;
         try {
@@ -105,9 +119,8 @@ export class ExpressPayeeMiddleware {
           if (call && httpCredential !== undefined) {
             throw new Error('MCP payment credentials must use protocol metadata, not HTTP headers');
           }
-          credentialPayload = call
-            ? this.core.presentedMcpCredential(protocolName, call.meta)
-            : httpCredential;
+          credentialPayload = call instanceof A2APaymentCall ? call.credential
+            : call ? this.core.presentedMcpCredential(protocolName, call.meta) : httpCredential;
         } catch (error) {
           throw new InvalidCredentialError(
             error instanceof Error ? error.message : 'invalid payment credential',
@@ -120,26 +133,17 @@ export class ExpressPayeeMiddleware {
         );
         let outcome;
         try {
-          outcome = await this.core.protect({
-            scenarioId: route.scenarioId,
-            runId,
-            offerId: route.offerId,
-            resource: route.resource,
-            origin: route.origin,
-            protocol: protocolName,
-            requestHash,
-            credentialPayload,
-          });
+          outcome = await this.core.protect({ ...operation, requestHash, credentialPayload });
         } catch (error) {
           if (error instanceof InvalidPaymentError) {
-            if (call) this.sendMcpChallenge(response, call, error.challenge, true);
+            if (call) await this.sendMcpChallenge(response, call, error.challenge, true);
             else this.sendHttpChallenge(response, protocol, error.challenge);
             return;
           }
           throw error;
         }
         if (outcome.outcome === 'payment_required') {
-          if (call) this.sendMcpChallenge(response, call, outcome.challenge, false);
+          if (call) await this.sendMcpChallenge(response, call, outcome.challenge, false);
           else this.sendHttpChallenge(response, protocol, outcome.challenge);
           return;
         }
@@ -147,8 +151,11 @@ export class ExpressPayeeMiddleware {
         let receiptInstalled: () => boolean;
         if (call) {
           request.body = Buffer.from(call.canonicalBody);
-          const receipt = this.core.mcpReceipt(outcome.challenge, outcome.payment);
-          receiptInstalled = this.installMcpReceipt(response, call, receipt);
+          if (call instanceof A2APaymentCall) receiptInstalled = this.installA2aReceipt(response, call, outcome.challenge, outcome.payment);
+          else {
+            const receipt = this.core.mcpReceipt(outcome.challenge, outcome.payment);
+            receiptInstalled = this.installMcpReceipt(response, call, receipt);
+          }
         } else {
           const receipt = protocol.receipt(outcome.payment);
           receiptInstalled = this.installHttpReceipt(response, receipt.headers);
@@ -197,13 +204,18 @@ export class ExpressPayeeMiddleware {
     response.send(wire.body ? Buffer.from(wire.body) : Buffer.alloc(0));
   }
 
-  private sendMcpChallenge(
+  private async sendMcpChallenge(
     response: import('express').Response,
-    call: McpCall,
+    call: McpCall | A2APaymentCall,
     challenge: PaymentChallenge,
     rejected: boolean,
-  ): void {
-    const wire = this.core.mcpPaymentRequired(challenge, rejected);
+  ): Promise<void> {
+    const wire = call instanceof A2APaymentCall
+      ? await this.core.a2a().challenge(call, challenge, rejected) : this.core.mcpPaymentRequired(challenge, rejected);
+    if (call instanceof A2APaymentCall) {
+      const extension = this.core.a2a().extension(challenge.protocol);
+      if (extension) response.setHeader('x-a2a-extensions', extension);
+    }
     response.status(200).type('application/json');
     response.set('payment-protocol', challenge.protocol);
     response.set('payment-expires-at', String(challenge.expires_at));
@@ -265,6 +277,38 @@ export class ExpressPayeeMiddleware {
       return sent;
     }) as typeof response.json;
     return () => installed;
+  }
+
+  private installA2aReceipt(response: import('express').Response, call: A2APaymentCall,
+    challenge: PaymentChallenge, payment: SettledIncomingPayment): () => boolean {
+    const originalJson = response.json.bind(response), originalSend = response.send.bind(response);
+    let released = false, committing = false, submitted = false;
+    response.write = (() => { throw new Error('paid A2A responses cannot stream'); }) as typeof response.write;
+    response.flushHeaders = () => { throw new Error('paid A2A responses cannot stream'); };
+    response.send = ((body: unknown) => {
+      if (!committing) throw new Error('paid A2A handler must return JSON-RPC via response.json');
+      return originalSend(body);
+    }) as typeof response.send;
+    response.json = ((body: unknown) => {
+      if (submitted) throw new Error('A2A handler attempted a second response');
+      submitted = true;
+      void (async () => {
+        if (this.hasMerchantEvidenceHeader(this.responseHeaders(response))) throw new Error('handler supplied payment headers');
+        if (Buffer.byteLength(JSON.stringify(body)) > this.maxBodyBytes) throw new Error('A2A response exceeds limit');
+        const paid = await this.core.a2a().receipt(call, body, challenge, payment);
+        if (Buffer.byteLength(JSON.stringify(paid)) > this.maxBodyBytes) throw new Error('A2A receipt exceeds limit');
+        response.removeHeader('content-length');
+        committing = true;
+        originalJson(paid);
+        released = true;
+      })().catch((error: unknown) => {
+        committing = true;
+        response.status(502);
+        originalJson({error: {code: 'A2A_RESPONSE_INVALID', message: error instanceof Error ? error.message : 'invalid A2A response'}});
+      });
+      return response;
+    }) as typeof response.json;
+    return () => released;
   }
 
   private installHttpReceipt(

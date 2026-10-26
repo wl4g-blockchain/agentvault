@@ -18,7 +18,7 @@ import (
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/transport"
 )
 
-func TestStandardPayeeMiddlewarePassesUnprotectedRoute(t *testing.T) {
+func TestStdHttpMiddlewarePassesUnprotectedRoute(t *testing.T) {
 	next := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) })
 	var middleware *StdHttpMiddleware = NewStdHttpMiddleware(nil)
 	recorder := httptest.NewRecorder()
@@ -28,11 +28,11 @@ func TestStandardPayeeMiddlewarePassesUnprotectedRoute(t *testing.T) {
 	}
 }
 
-func TestStandardPayeeMiddlewareBypassesFreeToolOnProtectedMCPRoute(t *testing.T) {
+func TestStdHttpMiddlewareBypassesFreeToolOnProtectedMCPRoute(t *testing.T) {
 	next := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) })
 	core := &PayeeMiddleware{}
 	middleware := NewStdHttpMiddleware(core, NewStandardMCPToolRoute(
-		"/mcp", "marketpulse.realtime_news", "scenario", "offer",
+		"/mcp", "marketpulse.realtime_news", "scenario", "price",
 		"mcp://marketpulse/realtime", "https://marketpulse.example",
 	))
 	if middleware.PayeeMiddleware != core {
@@ -56,12 +56,6 @@ func TestStandardPayeeMiddlewareBypassesFreeToolOnProtectedMCPRoute(t *testing.T
 	}
 }
 
-func TestStandardPayeeMiddlewareConstructorRemainsCompatible(t *testing.T) {
-	if middleware := NewStandardPayeeMiddleware(nil); middleware == nil {
-		t.Fatal("compatibility constructor returned nil")
-	}
-}
-
 func TestPayeeCoreRejectsDuplicatePaymentAuthorizationBeforeVault(t *testing.T) {
 	core := &PayeeMiddleware{}
 	_, err := core.PresentedCredential(&protocol.MppAdapter{}, map[string][]string{
@@ -80,7 +74,7 @@ func TestStdHttpMiddlewareCompletesOfficialMCPFlows(t *testing.T) {
 			entry := fixture["protocols"].(map[string]any)[protocolName].(map[string]any)
 			core, requestHashes, paths := newMCPPayeeCore(t, protocolName, entry, true)
 			route := NewStandardMCPToolRouteWithProtocol(
-				"/mcp", "marketpulse.realtime", "scenario", "offer",
+				"/mcp", "marketpulse.realtime", "scenario", "price",
 				"mcp://tool/marketpulse.realtime", "https://marketpulse.example", protocolName,
 			)
 			var handlerCalls int
@@ -183,7 +177,7 @@ func TestStdHttpMiddlewareRejectsAmbiguousMCPPaymentMetadataPlacement(t *testing
 	entry := fixture["protocols"].(map[string]any)["mpp"].(map[string]any)
 	core, _, paths := newMCPPayeeCore(t, "mpp", entry, true)
 	protected := NewStdHttpMiddleware(core, NewStandardMCPToolRouteWithProtocol(
-		"/mcp", "marketpulse.realtime", "scenario", "offer",
+		"/mcp", "marketpulse.realtime", "scenario", "price",
 		"mcp://tool/marketpulse.realtime", "https://marketpulse.example", "mpp",
 	)).Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("ambiguous MPP credential reached the application handler")
@@ -216,7 +210,7 @@ func TestStdHttpMiddlewarePreservesPaidMCPBusinessFailure(t *testing.T) {
 	entry := fixture["protocols"].(map[string]any)["x402"].(map[string]any)
 	core, _, _ := newMCPPayeeCore(t, "x402", entry, true)
 	protected := NewStdHttpMiddleware(core, NewStandardMCPToolRoute(
-		"/mcp", "marketpulse.realtime", "scenario", "offer",
+		"/mcp", "marketpulse.realtime", "scenario", "price",
 		"mcp://tool/marketpulse.realtime", "https://marketpulse.example",
 	)).Handler(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -235,7 +229,7 @@ func TestStdHttpMiddlewareReturnsMPPVerificationFailedChallenge(t *testing.T) {
 	entry := fixture["protocols"].(map[string]any)["mpp"].(map[string]any)
 	core, _, paths := newMCPPayeeCore(t, "mpp", entry, false)
 	protected := NewStdHttpMiddleware(core, NewStandardMCPToolRouteWithProtocol(
-		"/mcp", "marketpulse.realtime", "scenario", "offer",
+		"/mcp", "marketpulse.realtime", "scenario", "price",
 		"mcp://tool/marketpulse.realtime", "https://marketpulse.example", "mpp",
 	)).Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("invalid MPP credential reached the application handler")
@@ -326,7 +320,7 @@ func newMCPPayeeCore(
 			requestHash := input["request_hash"].(string)
 			requestHashes = append(requestHashes, requestHash)
 			return payeeJSONResponse(t, map[string]any{
-				"scenario_id": "scenario", "offer_id": "offer", "resource": "mcp://tool/marketpulse.realtime",
+				"scenario_id": "scenario", "price_id": "price", "resource": "mcp://tool/marketpulse.realtime",
 				"protocol": protocolName, "asset": map[string]any{"network": "eip155:42431", "asset": "USDC", "decimals": 6},
 				"amount": "1000", "recipient": "0x1111111111111111111111111111111111111111",
 				"nonce": "challenge-0123456789abcdef", "challenge_hash": "challenge-hash",
@@ -369,7 +363,7 @@ func newMCPPayeeCore(
 
 func payeeIntent(protocolName, requestHash, status, settledAmount string) map[string]any {
 	return map[string]any{
-		"id": "intent-1", "scenario_id": "scenario", "run_id": "run-1", "offer_id": "offer",
+		"id": "intent-1", "scenario_id": "scenario", "run_id": "run-1", "price_id": "price",
 		"direction": "inbound", "protocol": protocolName,
 		"asset":     map[string]any{"network": "eip155:42431", "asset": "USDC", "decimals": 6},
 		"recipient": "0x1111111111111111111111111111111111111111", "amount": "1000",
@@ -390,7 +384,7 @@ func payeeJSONResponse(t *testing.T, value any) transport.TransportResponse {
 
 func readPayeeMCPFixture(t *testing.T) map[string]any {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payment_protocol_mcp.json"))
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "payment_protocol_mcp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

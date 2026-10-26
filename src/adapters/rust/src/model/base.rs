@@ -131,7 +131,7 @@ pub struct AssetIdentity {
 pub struct PaymentChallenge {
     pub scenario_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offer_id: Option<String>,
+    pub price_id: Option<String>,
     pub resource: String,
     pub protocol: String,
     pub asset: AssetIdentity,
@@ -194,7 +194,7 @@ pub struct PaymentIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offer_id: Option<String>,
+    pub price_id: Option<String>,
     pub direction: PaymentDirection,
     pub protocol: String,
     pub asset: AssetIdentity,

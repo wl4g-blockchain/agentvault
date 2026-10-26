@@ -8,7 +8,7 @@ test('PayeeMiddleware creates a challenge when no credential is present', async 
     async request<T>(_method, path): Promise<T> {
       assert.equal(path, '/api/v1/payee/challenges');
       return {
-        scenario_id: 'scenario-1', offer_id: 'offer-1', resource: 'mcp://marketpulse/realtime',
+        scenario_id: 'scenario-1', price_id: 'price-1', resource: 'mcp://marketpulse/realtime',
         protocol: 'x402', asset: { network: 'eip155:1', asset: 'USDC', decimals: 6 },
         amount: '100', recipient: 'recipient-1', nonce: 'nonce-1', challenge_hash: 'challenge-1',
         payload: {}, expires_at: 1,
@@ -16,7 +16,7 @@ test('PayeeMiddleware creates a challenge when no credential is present', async 
     },
   };
   const outcome = await new PayeeMiddleware(transport).protect({
-    scenarioId: 'scenario-1', runId: 'run-1', offerId: 'offer-1',
+    scenarioId: 'scenario-1', runId: 'run-1', priceId: 'price-1',
     resource: 'mcp://marketpulse/realtime', origin: 'https://marketpulse.test', protocol: 'x402',
     requestHash: 'request-hash',
   });
@@ -30,7 +30,7 @@ test('PayeeMiddleware rejects invalid payment before settlement', async () => {
       paths.push(path);
       if (path === '/api/v1/payee/challenges') {
         return {
-          scenario_id: 'scenario', offer_id: 'offer', resource: 'mcp://marketpulse/realtime',
+          scenario_id: 'scenario', price_id: 'price', resource: 'mcp://marketpulse/realtime',
           protocol: 'x402', asset: { network: 'eip155:31337', asset: 'USDC', decimals: 6 },
           amount: '1000', recipient: '0x1', nonce: 'nonce', challenge_hash: 'challenge',
           expires_at: 1, payload: { payment_required: {} },
@@ -39,7 +39,7 @@ test('PayeeMiddleware rejects invalid payment before settlement', async () => {
       if (path === '/api/v1/payee/verify') {
         return {
           intent: {
-            id: 'intent', scenario_id: 'scenario', run_id: 'run', offer_id: 'offer',
+            id: 'intent', scenario_id: 'scenario', run_id: 'run', price_id: 'price',
             direction: 'inbound', protocol: 'x402',
             asset: { network: 'eip155:31337', asset: 'USDC', decimals: 6 },
             recipient: '0x1', amount: '1000', settled_amount: '0',
@@ -56,7 +56,7 @@ test('PayeeMiddleware rejects invalid payment before settlement', async () => {
   };
   await assert.rejects(
     () => new PayeeMiddleware(transport).protect({
-      scenarioId: 'scenario', runId: 'run', offerId: 'offer',
+      scenarioId: 'scenario', runId: 'run', priceId: 'price',
       resource: 'mcp://marketpulse/realtime', origin: 'https://marketpulse.example',
       protocol: 'x402', requestHash: 'request-hash', credentialPayload: { signature: 'present' },
     }),

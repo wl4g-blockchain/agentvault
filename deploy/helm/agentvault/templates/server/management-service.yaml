@@ -1,3 +1,4 @@
+{{- $backend := .Values.agentvault.backend -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,4 +12,4 @@ spec:
     {{- include "agentvault.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: server
   ports:
-    - { name: management, port: {{ .Values.service.managementPort }}, targetPort: management }
+    - { name: management, port: {{ $backend.service.managementPort }}, targetPort: management }

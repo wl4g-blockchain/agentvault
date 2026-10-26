@@ -1,6 +1,7 @@
 package io.agentvault.sdk.protocol;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -9,7 +10,9 @@ import java.util.Map;
 
 public final class ProtocolRegistry {
     public record McpChallenge(PaymentProtocol adapter, PaymentProtocol.HttpResponse challenge) {}
+
     public record McpCredential(String protocol, JsonNode value) {}
+
     public record McpEvidence(String protocol, PaymentProtocol.MerchantEvidence evidence) {}
 
     private final Map<String, PaymentProtocol> adapters;
@@ -20,8 +23,55 @@ public final class ProtocolRegistry {
 
     public PaymentProtocol get(String name) {
         PaymentProtocol adapter = adapters.get(name);
-        if (adapter == null) throw new IllegalArgumentException("payment protocol is not enabled: " + name);
+        if (adapter == null)
+            throw new IllegalArgumentException("payment protocol is not enabled: " + name);
         return adapter;
+    }
+
+    public String a2aExtensions(String existing) {
+        var values = new java.util.LinkedHashSet<String>();
+        if (existing != null)
+            for (String value : existing.split(",")) if (!value.isBlank()) values.add(value.trim());
+        for (var adapter : adapters.values())
+            if (!adapter.a2aExtension().isEmpty()) values.add(adapter.a2aExtension());
+        return String.join(", ", values);
+    }
+
+    public McpChallenge a2aChallenge(JsonNode message, int limit) {
+        for (var adapter : adapters.values()) {
+            var value = adapter.a2aChallenge(message, limit);
+            if (value != null) return new McpChallenge(adapter, value);
+        }
+        return null;
+    }
+
+    public McpCredential a2aCredential(JsonNode message, int limit) {
+        McpCredential selected = null;
+        for (var adapter : adapters.values()) {
+            var value = adapter.presentedA2aCredential(message, limit);
+            if (value != null) {
+                if (selected != null)
+                    throw new IllegalArgumentException("multiple A2A credentials");
+                selected = new McpCredential(adapter.name(), value);
+            }
+        }
+        return selected;
+    }
+
+    public void a2aStripCredentials(JsonNode message) {
+        adapters.values().forEach(adapter -> adapter.a2aStripCredential(message));
+    }
+
+    public McpEvidence a2aEvidence(JsonNode message, int limit) {
+        McpEvidence selected = null;
+        for (var adapter : adapters.values()) {
+            var value = adapter.a2aEvidence(message, limit);
+            if (value != null) {
+                if (selected != null) throw new IllegalArgumentException("multiple A2A receipts");
+                selected = new McpEvidence(adapter.name(), value);
+            }
+        }
+        return selected;
     }
 
     public List<String> credentialHeaderNames() {
@@ -55,7 +105,8 @@ public final class ProtocolRegistry {
             JsonNode value = adapter.presentedCredential(headers, limit);
             if (value == null) continue;
             if (selected != null) {
-                throw new IllegalArgumentException("multiple payment protocol credentials were supplied");
+                throw new IllegalArgumentException(
+                        "multiple payment protocol credentials were supplied");
             }
             selected = adapter.name();
             payload = value;
@@ -70,7 +121,8 @@ public final class ProtocolRegistry {
             PaymentProtocol.MerchantEvidence value = adapter.merchantEvidence(headers);
             if (value == null) continue;
             if (selected != null) {
-                throw new IllegalArgumentException("multiple payment protocol receipts were supplied");
+                throw new IllegalArgumentException(
+                        "multiple payment protocol receipts were supplied");
             }
             selected = adapter.name();
             evidence = value;
@@ -93,7 +145,8 @@ public final class ProtocolRegistry {
             JsonNode value = adapter.presentedMcpCredential(meta, limit);
             if (value == null) continue;
             if (selected != null) {
-                throw new IllegalArgumentException("multiple MCP payment credentials were supplied");
+                throw new IllegalArgumentException(
+                        "multiple MCP payment credentials were supplied");
             }
             selected = adapter.name();
             payload = value;
@@ -108,7 +161,8 @@ public final class ProtocolRegistry {
             PaymentProtocol.MerchantEvidence value = adapter.mcpMerchantEvidence(meta, limit);
             if (value == null) continue;
             if (selected != null) {
-                throw new IllegalArgumentException("multiple MCP settlement receipts were supplied");
+                throw new IllegalArgumentException(
+                        "multiple MCP settlement receipts were supplied");
             }
             selected = adapter.name();
             evidence = value;

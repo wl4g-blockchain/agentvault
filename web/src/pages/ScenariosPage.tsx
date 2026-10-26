@@ -122,7 +122,7 @@ export function ScenariosPage() {
               />
               <span><b>{wallet.id}</b><code>{wallet.address}</code></span>
             </label>)}
-            {wallets.length === 0 && <p className="placeholder compact">Provision Wallets before creating a Scenario.</p>}
+            {wallets.length === 0 && <p className="placeholder compact">Import or create Wallets before creating a Scenario.</p>}
           </div>
         </details>
 

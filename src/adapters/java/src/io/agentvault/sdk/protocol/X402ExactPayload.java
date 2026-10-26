@@ -3,11 +3,11 @@ package io.agentvault.sdk.protocol;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.Base64;
 
 /** Chain-specific projection of the official x402 v2 {@code PaymentPayload.payload}. */
-sealed interface X402ExactPayload
-        permits X402ExactPayload.Eip3009, X402ExactPayload.SolanaExact {
+sealed interface X402ExactPayload permits X402ExactPayload.Eip3009, X402ExactPayload.SolanaExact {
 
     static X402ExactPayload parse(
             ObjectMapper json, JsonNode accepted, JsonNode payload, String label) {
@@ -20,12 +20,12 @@ sealed interface X402ExactPayload
                 requireExactFields(payload, "signature", "authorization");
                 JsonNode authorization = payload.path("authorization");
                 requireExactFields(
-                        authorization,
-                        "from", "to", "value", "validAfter", "validBefore", "nonce");
+                        authorization, "from", "to", "value", "validAfter", "validBefore", "nonce");
                 requireText(payload.path("signature"), label, "signature");
-                for (String field : new String[] {
-                        "from", "to", "value", "validAfter", "validBefore", "nonce"
-                }) {
+                for (String field :
+                        new String[] {
+                            "from", "to", "value", "validAfter", "validBefore", "nonce"
+                        }) {
                     requireText(authorization.path(field), label, "authorization." + field);
                 }
                 Eip3009 value = json.treeToValue(payload, Eip3009.class);
@@ -41,18 +41,22 @@ sealed interface X402ExactPayload
                 SolanaExact value = json.treeToValue(payload, SolanaExact.class);
                 byte[] transaction = Base64.getDecoder().decode(value.transaction());
                 if (transaction.length == 0
-                        || !Base64.getEncoder().encodeToString(transaction).equals(value.transaction())) {
+                        || !Base64.getEncoder()
+                                .encodeToString(transaction)
+                                .equals(value.transaction())) {
                     throw new IllegalArgumentException(
                             label + " has no canonical base64 Solana transaction");
                 }
                 if (!isText(accepted.path("extra").path("feePayer"))) {
-                    throw new IllegalArgumentException(label + " has no Solana facilitator fee payer");
+                    throw new IllegalArgumentException(
+                            label + " has no Solana facilitator fee payer");
                 }
                 return value;
             }
         } catch (JsonProcessingException | IllegalArgumentException error) {
             if (error instanceof IllegalArgumentException argument) throw argument;
-            throw new IllegalArgumentException(label + " has invalid chain-specific payload fields", error);
+            throw new IllegalArgumentException(
+                    label + " has invalid chain-specific payload fields", error);
         }
         throw new IllegalArgumentException(label + " uses an unsupported x402 network");
     }

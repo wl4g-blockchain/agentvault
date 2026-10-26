@@ -11,8 +11,39 @@ pub mod postgres;
 pub mod sqlite;
 
 pub use port::*;
-pub(crate) use port::{outbound_evidence_replay_matches, validate_outbound_evidence_transition};
 
 #[cfg(test)]
 #[path = "../../tests/storage/mod_test.rs"]
-mod schema_tests;
+pub(crate) mod schema_tests;
+
+pub mod approval;
+pub use approval::*;
+pub mod approver;
+pub use approver::*;
+pub mod client;
+pub use client::*;
+pub mod event;
+pub use event::*;
+pub mod ledger;
+pub use ledger::*;
+pub mod price;
+pub use price::*;
+pub mod outbox;
+pub use outbox::*;
+pub mod payment;
+pub use payment::*;
+pub mod policy;
+pub use policy::*;
+pub mod scenario;
+pub use scenario::*;
+pub mod signing;
+pub use signing::*;
+pub mod wallet;
+pub use wallet::*;
+
+pub(crate) mod schema;
+
+mod entity;
+pub use entity::*;
+mod query;
+pub use query::*;

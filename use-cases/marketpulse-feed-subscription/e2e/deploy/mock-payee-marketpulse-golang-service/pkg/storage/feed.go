@@ -49,11 +49,11 @@ type DeliveryState struct {
 	Response string
 }
 
-type FeedSQLiteStorage struct {
+type FeedSqliteRepository struct {
 	database *sql.DB
 }
 
-func NewFeedSQLiteStorage(path string) (*FeedSQLiteStorage, error) {
+func NewFeedSqliteRepository(path string) (*FeedSqliteRepository, error) {
 	if path == "" || path == ":memory:" {
 		return nil, errors.New("MARKETPULSE_DATABASE must be persistent")
 	}
@@ -61,7 +61,7 @@ func NewFeedSQLiteStorage(path string) (*FeedSQLiteStorage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open MarketPulse database: %w", err)
 	}
-	storage := &FeedSQLiteStorage{database: database}
+	storage := &FeedSqliteRepository{database: database}
 	if err := storage.initialize(); err != nil {
 		database.Close()
 		return nil, err
@@ -69,9 +69,9 @@ func NewFeedSQLiteStorage(path string) (*FeedSQLiteStorage, error) {
 	return storage, nil
 }
 
-func (storage *FeedSQLiteStorage) Close() error { return storage.database.Close() }
+func (storage *FeedSqliteRepository) Close() error { return storage.database.Close() }
 
-func (storage *FeedSQLiteStorage) initialize() error {
+func (storage *FeedSqliteRepository) initialize() error {
 	_, err := storage.database.Exec(`
 CREATE TABLE IF NOT EXISTS feed_item(
  id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,topic TEXT NOT NULL,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS mcp_delivery(
 	return transaction.Commit()
 }
 
-func (storage *FeedSQLiteStorage) News(tier string, limit int) ([]NewsItem, error) {
+func (storage *FeedSqliteRepository) News(tier string, limit int) ([]NewsItem, error) {
 	rows, err := storage.database.Query(`SELECT id,observed_at,author,role,topic,symbols_json,headline,source,sentiment_bps
 FROM feed_item WHERE access_tier=? ORDER BY id LIMIT ?`, tier, limit)
 	if err != nil {
@@ -142,7 +142,7 @@ FROM feed_item WHERE access_tier=? ORDER BY id LIMIT ?`, tier, limit)
 	return items, rows.Err()
 }
 
-func (storage *FeedSQLiteStorage) Delivery(runID, requestHash string) (DeliveryState, error) {
+func (storage *FeedSqliteRepository) Delivery(runID, requestHash string) (DeliveryState, error) {
 	var storedHash, intentID, response, status string
 	err := storage.database.QueryRow(`SELECT request_hash,intent_id,COALESCE(response_json,''),status
 FROM mcp_delivery WHERE run_id=?`, runID).Scan(&storedHash, &intentID, &response, &status)
@@ -158,7 +158,7 @@ FROM mcp_delivery WHERE run_id=?`, runID).Scan(&storedHash, &intentID, &response
 	return DeliveryState{IntentID: intentID, Response: response}, nil
 }
 
-func (storage *FeedSQLiteStorage) RecordSettled(
+func (storage *FeedSqliteRepository) RecordSettled(
 	runID, requestHash string,
 	payment *model.SettledIncomingPayment,
 ) error {
@@ -186,7 +186,7 @@ VALUES(?,?,?,?,NULL,'settled',?) ON CONFLICT(run_id) DO NOTHING`,
 	return nil
 }
 
-func (storage *FeedSQLiteStorage) RecordDelivered(runID, requestHash, response string) error {
+func (storage *FeedSqliteRepository) RecordDelivered(runID, requestHash, response string) error {
 	result, err := storage.database.Exec(`UPDATE mcp_delivery SET response_json=?,status='delivered',updated_at=?
 WHERE run_id=? AND request_hash=? AND status='settled'`, response, time.Now().Unix(), runID, requestHash)
 	if err != nil {
@@ -199,7 +199,7 @@ WHERE run_id=? AND request_hash=? AND status='settled'`, response, time.Now().Un
 	return nil
 }
 
-func (storage *FeedSQLiteStorage) RecordFailure(runID, requestHash string) error {
+func (storage *FeedSqliteRepository) RecordFailure(runID, requestHash string) error {
 	result, err := storage.database.Exec(`UPDATE mcp_delivery SET failure_injections=1,updated_at=?
 WHERE run_id=? AND request_hash=? AND status='settled' AND failure_injections=0`,
 		time.Now().Unix(), runID, requestHash)

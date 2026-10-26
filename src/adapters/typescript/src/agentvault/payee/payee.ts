@@ -1,15 +1,16 @@
+import { A2APayeeMiddleware } from './a2a.js';
 import type { PayeeConfig } from '../config/config.js';
 import { PaymentCredential, required, type PaymentChallenge, type PaymentReceipt } from '../model/base.js';
 import {
   operationContext,
   validatePayeeOperation,
-  validateResolveOfferRequest,
+  validateResolvePriceRequest,
   type CreateChallengeRequest,
   type PayeeOperation,
-  type PaymentOffer,
+  type PaymentPrice,
   type PaymentVerification,
   type ProtectionOutcome,
-  type ResolveOfferRequest,
+  type ResolvePriceRequest,
   type SettlePaymentRequest,
   type SettledIncomingPayment,
   type VerifyPaymentRequest,
@@ -34,6 +35,8 @@ export class InvalidPaymentError extends Error {
 export class PayeeMiddleware {
   readonly config: Required<PayeeConfig>;
   private readonly protocols: ProtocolRegistry;
+
+  a2a(): A2APayeeMiddleware { return new A2APayeeMiddleware(this, this.protocols); }
 
   constructor(private readonly transport: VaultTransport, config: PayeeConfig = {}) {
     if (!transport) throw new Error('AgentVault transport is not configured');
@@ -134,7 +137,7 @@ export class PayeeMiddleware {
     const context = operationContext(operation);
     const request: CreateChallengeRequest = {
       ...context,
-      offer_id: operation.offerId,
+      price_id: operation.priceId,
       resource: operation.resource,
       origin: operation.origin,
       protocol: operation.protocol,
@@ -206,11 +209,11 @@ export class PayeeMiddleware {
     return { outcome: 'authorized', challenge, payment };
   }
 
-  resolveOffer(request: ResolveOfferRequest): Promise<PaymentOffer> {
-    validateResolveOfferRequest(request);
+  resolvePrice(request: ResolvePriceRequest): Promise<PaymentPrice> {
+    validateResolvePriceRequest(request);
     const body: Record<string, string> = { scenario_id: request.scenarioId, resource: request.resource };
     if (request.protocol) body.protocol = request.protocol;
-    return this.transport.request('POST', '/api/v1/offers/resolve', body);
+    return this.transport.request('POST', '/api/v1/prices/resolve', body);
   }
 
   getReceipt(scenarioId: string, intentId: string): Promise<PaymentReceipt> {
@@ -228,7 +231,7 @@ function sdkEvent(event: string, fields: Record<string, unknown>): void {
 }
 
 function validateChallengeBinding(operation: PayeeOperation, challenge: PaymentChallenge): void {
-  if (challenge.scenario_id !== operation.scenarioId || challenge.offer_id !== operation.offerId ||
+  if (challenge.scenario_id !== operation.scenarioId || challenge.price_id !== operation.priceId ||
       challenge.resource !== operation.resource || challenge.protocol !== operation.protocol ||
       !challenge.asset?.network || !challenge.asset.asset || !challenge.amount || !challenge.recipient ||
       !challenge.nonce || !challenge.challenge_hash) {
@@ -243,7 +246,7 @@ function validateVerificationBinding(
 ): void {
   const intent = verification.intent;
   if (intent.direction !== 'inbound' || intent.scenario_id !== operation.scenarioId ||
-      intent.offer_id !== operation.offerId || intent.resource !== operation.resource ||
+      intent.price_id !== operation.priceId || intent.resource !== operation.resource ||
       intent.protocol !== operation.protocol || intent.challenge_hash !== challenge.challenge_hash ||
       intent.request_hash !== operation.requestHash || !sameAsset(intent.asset, challenge.asset) ||
       intent.amount !== challenge.amount || intent.recipient !== challenge.recipient) {
@@ -260,7 +263,7 @@ function validateSettlementBinding(
   const verified = verification.intent;
   const receipt = payment.receipt;
   if (intent.id !== verified.id || intent.direction !== 'inbound' ||
-      intent.scenario_id !== verified.scenario_id || intent.offer_id !== verified.offer_id ||
+      intent.scenario_id !== verified.scenario_id || intent.price_id !== verified.price_id ||
       intent.resource !== verified.resource || intent.protocol !== verified.protocol ||
       intent.challenge_hash !== verified.challenge_hash || intent.request_hash !== verified.request_hash ||
       !sameAsset(intent.asset, verified.asset) || intent.amount !== verified.amount ||

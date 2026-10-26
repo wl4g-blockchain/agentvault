@@ -1,3 +1,4 @@
+import { A2ACall } from '../model/a2a.js';
 import { readBounded } from '../transport/transport.js';
 import type { PayerRequestContext } from '../model/payer.js';
 import { PayerMiddleware, safeHttpUrl } from './payer.js';
@@ -7,6 +8,7 @@ interface McpCall {
   readonly id: string | number;
   readonly message: Record<string, unknown>;
   readonly body: Uint8Array;
+  readonly a2a?: A2ACall;
 }
 
 /** Native Fetch payer adapter with transparent HTTP and MCP payment handling. */
@@ -33,6 +35,14 @@ export class FetchPayerMiddleware {
     const target = safeHttpUrl(request.url);
     const replay = request.clone();
     const mcpCall = await this.mcpCall(replay.clone());
+    if (mcpCall?.a2a) {
+      const existing = request.headers.get('x-run-id');
+      if (existing !== null && existing !== operation.runId) throw new Error('A2A run_id conflicts with paid operation');
+      for (const outgoing of [request, replay]) {
+        outgoing.headers.set('x-run-id', operation.runId);
+        outgoing.headers.set('x-a2a-extensions', this.core.a2a().extensions(outgoing.headers.get('x-a2a-extensions') ?? ''));
+      }
+    }
     const first = await this.fetchImpl(request);
     if (first.status !== 402) {
       const paid = await this.handleMcpChallenge(
@@ -99,7 +109,8 @@ export class FetchPayerMiddleware {
     } catch {
       return undefined;
     }
-    const authorized = await this.core.authorizeMcp(
+    const authorize = call.a2a ? this.core.a2a().authorize.bind(this.core.a2a()) : this.core.authorizeMcp.bind(this.core);
+    const authorized = await authorize(
       {
         method: replay.method,
         url: target.href,
@@ -118,8 +129,9 @@ export class FetchPayerMiddleware {
       runId: operation.runId,
       intentId: authorized.intent.id,
     });
-    const metadata = this.core.mcpCredential(authorized, target.origin);
-    const paidBody = this.attachMcpCredential(call.message, metadata.key, metadata.value);
+    const metadata = call.a2a ? undefined : this.core.mcpCredential(authorized, target.origin);
+    const paidBody = call.a2a ? this.core.a2a().credential(authorized, call.a2a, message, target.origin)
+      : this.attachMcpCredential(call.message, metadata!.key, metadata!.value);
     const response = await this.core.deliver(operation, authorized, {
       send: async () => this.fetchImpl(new Request(replay.clone(), {
         body: paidBody,
@@ -141,6 +153,10 @@ export class FetchPayerMiddleware {
           paidMessage = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
         } catch {
           throw new Error('paid MCP response is not valid JSON');
+        }
+        if (call.a2a) {
+          await this.core.a2a().report(operation, authorized, call.a2a, paidMessage, value.headers);
+          return;
         }
         if (!this.isRecord(paidMessage) || paidMessage.jsonrpc !== '2.0' || paidMessage.id !== call.id ||
             !this.isRecord(paidMessage.result)) {
@@ -167,6 +183,8 @@ export class FetchPayerMiddleware {
     } catch {
       return undefined;
     }
+    const a2a = A2ACall.parse(body, this.core.config.maxChallengeBytes);
+    if (a2a) return { id: a2a.envelope.id, message: a2a.wire, body, a2a };
     if (!this.isRecord(message) || message.jsonrpc !== '2.0' ||
         message.method !== 'tools/call' || !this.isRecord(message.params) ||
         (typeof message.id !== 'string' && typeof message.id !== 'number')) return undefined;

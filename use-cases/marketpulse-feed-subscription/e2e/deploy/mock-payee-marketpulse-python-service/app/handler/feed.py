@@ -4,14 +4,14 @@ import hashlib
 import json
 from typing import Any
 
-from agentvault import settled_payment
+from agentvault import FastPayeeMiddleware
 from fastapi import Request, Response
 
-from app.storage.feed import FeedSQLiteStorage
+from app.storage.feed import FeedSqliteRepository
 
 
 class FeedHandler:
-    def __init__(self, storage: FeedSQLiteStorage, allow_failure_injection: bool) -> None:
+    def __init__(self, storage: FeedSqliteRepository, allow_failure_injection: bool) -> None:
         self._storage = storage
         self._allow_failure_injection = allow_failure_injection
 
@@ -69,7 +69,7 @@ class FeedHandler:
             return Response(content=delivery.response, media_type="application/json")
         intent_id = delivery.intent_id
         if not intent_id:
-            payment = settled_payment(request.scope)
+            payment = FastPayeeMiddleware.settled_payment(request.scope)
             if payment is None:
                 return self._response(402, self._error(identifier, -32005, "settled payment is required"))
             self._storage.record_settled(run_id, request_hash, payment)

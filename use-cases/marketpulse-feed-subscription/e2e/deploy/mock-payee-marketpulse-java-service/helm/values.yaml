@@ -22,7 +22,7 @@ env:
   AGENTVAULT_MQTT_CLIENT_ID: "client-marketpulse"
   AGENTVAULT_MQTT_TIMEOUT_SECONDS: "15"
   MARKETPULSE_SCENARIO_ID: "scenario-marketpulse-feed"
-  MARKETPULSE_OFFER_ID: "offer-realtime-news"
+  MARKETPULSE_PRICE_ID: "price-realtime-news"
   MARKETPULSE_RESOURCE_URL: "http://marketpulse-java:8081/mcp"
   MARKETPULSE_ORIGIN: "http://marketpulse-java:8081"
   MARKETPULSE_DATABASE: "/var/lib/marketpulse/marketpulse.sqlite3"
@@ -49,6 +49,7 @@ config:
   content: |
     
 persistence:
+  existingClaim: ""
   enabled: true
   mountPath: "/var/lib/marketpulse"
 resources:

@@ -1,1 +1,5 @@
-# The runner intentionally uses only Python's standard library.
+# Native console-resource YAML plus real Chromium journeys and independent RSA
+# evidence used by the E2E verifier.
+PyYAML>=6.0.2,<7
+playwright>=1.55,<2
+cryptography>=41

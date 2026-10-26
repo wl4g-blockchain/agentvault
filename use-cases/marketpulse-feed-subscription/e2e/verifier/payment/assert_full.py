@@ -24,8 +24,9 @@ if payer_language not in languages:
 if payee_language not in languages:
     raise RuntimeError("E2E_PAYEE_LANGUAGE must select one supported feed service")
 
-market_path = Path(f"/evidence/marketpulse-{payee_language}/marketpulse.sqlite3")
-quant_path = Path(f"/evidence/quantstream-{payer_language}/ingestion.sqlite3")
+evidence_root = Path(os.environ.get("E2E_EVIDENCE_ROOT", "/evidence"))
+market_path = evidence_root / f"marketpulse-{payee_language}" / "marketpulse.sqlite3"
+quant_path = evidence_root / f"quantstream-{payer_language}" / "ingestion.sqlite3"
 if not market_path.is_file() or not quant_path.is_file():
     raise RuntimeError("durable business databases are missing")
 for database in (market_path, quant_path):

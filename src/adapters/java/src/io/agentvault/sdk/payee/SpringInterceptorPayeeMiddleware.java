@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+
+import io.a2a.server.tasks.TaskStore;
+import io.agentvault.sdk.model.A2a;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
 import io.agentvault.sdk.model.Payee.Authorized;
 import io.agentvault.sdk.model.Payee.PayeeOperation;
@@ -12,6 +15,7 @@ import io.agentvault.sdk.model.Payee.ProtectionOutcome;
 import io.agentvault.sdk.payee.PayeeMiddleware.InvalidPaymentException;
 import io.agentvault.sdk.protocol.PaymentProtocol;
 import io.agentvault.sdk.transport.VaultTransport.ApiException;
+
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
@@ -22,6 +26,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
+
+import org.springframework.web.filter.OncePerRequestFilter;
+
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -35,7 +42,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Spring Servlet payee adapter; register once as a Filter bean. */
 public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter {
@@ -48,58 +54,107 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             String method,
             String path,
             String scenarioId,
-            String offerId,
+            String priceId,
             String resource,
             String origin,
             String protocol,
-            String mcpTool) {
+            String mcpTool,
+            TaskStore a2aTaskStore) {
+        public Route(
+                String method,
+                String path,
+                String scenarioId,
+                String priceId,
+                String resource,
+                String origin,
+                String protocol,
+                String mcpTool) {
+            this(method, path, scenarioId, priceId, resource, origin, protocol, mcpTool, null);
+        }
+
+        public Route {
+            if (mcpTool != null && a2aTaskStore != null)
+                throw new IllegalArgumentException("MCP/A2A routes are mutually exclusive");
+        }
+
+        public static Route a2a(
+                String path,
+                String scenarioId,
+                String priceId,
+                String resource,
+                String origin,
+                String protocol,
+                TaskStore store) {
+            return new Route(
+                    "POST",
+                    path,
+                    scenarioId,
+                    priceId,
+                    resource,
+                    origin,
+                    protocol,
+                    null,
+                    java.util.Objects.requireNonNull(store));
+        }
+
         public static Route mcpTool(
                 String path,
                 String tool,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin) {
-            return mcpToolWithProtocol(
-                    path, tool, scenarioId, offerId, resource, origin, "x402");
+            return mcpToolWithProtocol(path, tool, scenarioId, priceId, resource, origin, "x402");
         }
 
         public static Route mcpToolWithProtocol(
                 String path,
                 String tool,
                 String scenarioId,
-                String offerId,
+                String priceId,
                 String resource,
                 String origin,
                 String protocol) {
-            return new Route("POST", path, scenarioId, offerId, resource, origin, protocol, tool);
+            return new Route("POST", path, scenarioId, priceId, resource, origin, protocol, tool);
         }
     }
 
-    private record McpCall(JsonNode id, ObjectNode metadata, byte[] canonicalBody) {
-        @Override public byte[] canonicalBody() { return canonicalBody.clone(); }
+    private record McpCall(
+            JsonNode id, ObjectNode metadata, byte[] canonicalBody, A2aPayeeMiddleware.Call a2a) {
+        private McpCall(JsonNode id, ObjectNode metadata, byte[] canonicalBody) {
+            this(id, metadata, canonicalBody, null);
+        }
+
+        @Override
+        public byte[] canonicalBody() {
+            return canonicalBody.clone();
+        }
     }
 
     private final PayeeMiddleware core;
     private final List<Route> routes;
     private final int maxBodyBytes;
 
-    public SpringInterceptorPayeeMiddleware(PayeeMiddleware core, List<Route> routes, int maxBodyBytes) {
+    public SpringInterceptorPayeeMiddleware(
+            PayeeMiddleware core, List<Route> routes, int maxBodyBytes) {
         this.core = java.util.Objects.requireNonNull(core, "core");
         this.routes = List.copyOf(routes);
         if (maxBodyBytes <= 0) throw new IllegalArgumentException("maxBodyBytes must be positive");
         this.maxBodyBytes = maxBodyBytes;
     }
 
-    @Override protected void doFilterInternal(
-            HttpServletRequest request,
-            HttpServletResponse response,
-            FilterChain chain) throws ServletException, IOException {
-        Route route = routes.stream()
-                .filter(value -> value.method().equalsIgnoreCase(request.getMethod())
-                        && value.path().equals(request.getRequestURI()))
-                .findFirst()
-                .orElse(null);
+    @Override
+    protected void doFilterInternal(
+            HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        Route route =
+                routes.stream()
+                        .filter(
+                                value ->
+                                        value.method().equalsIgnoreCase(request.getMethod())
+                                                && value.path().equals(request.getRequestURI()))
+                        .findFirst()
+                        .orElse(null);
         if (route == null) {
             chain.doFilter(request, response);
             return;
@@ -126,19 +181,49 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 error(response, 400, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required");
                 return;
             }
+            if (route.a2aTaskStore() != null) {
+                var a2a =
+                        core.a2a()
+                                .prepare(
+                                        body,
+                                        runId,
+                                        route.scenarioId(),
+                                        route.priceId(),
+                                        route.protocol(),
+                                        route.a2aTaskStore(),
+                                        requestHeaders);
+                if (a2a == null) {
+                    chain.doFilter(replayable, response);
+                    return;
+                }
+                call = new McpCall(a2a.id(), null, a2a.canonicalBody(), a2a);
+                replayable = new ReplayableRequest(request, call.canonicalBody());
+            }
             PaymentProtocol protocol = core.protocol(route.protocol());
             JsonNode httpCredential = core.presentedCredential(route.protocol(), requestHeaders);
             if (call != null && httpCredential != null) {
                 throw new IllegalArgumentException(
                         "MCP payment credentials must use protocol metadata, not HTTP headers");
             }
-            JsonNode credential = call == null
-                    ? httpCredential
-                    : core.presentedMcpCredential(route.protocol(), call.metadata());
+            JsonNode credential =
+                    call == null
+                            ? httpCredential
+                            : call.a2a() != null
+                                    ? call.a2a().credential()
+                                    : core.presentedMcpCredential(
+                                            route.protocol(), call.metadata());
             byte[] requestBody = call == null ? body : call.canonicalBody();
-            ProtectionOutcome outcome = core.protect(new PayeeOperation(
-                    route.scenarioId(), runId, route.offerId(), route.resource(), route.origin(),
-                    route.protocol(), hash(request.getMethod(), request.getRequestURI(), requestBody), credential));
+            ProtectionOutcome outcome =
+                    core.protect(
+                            new PayeeOperation(
+                                    route.scenarioId(),
+                                    runId,
+                                    route.priceId(),
+                                    route.resource(),
+                                    route.origin(),
+                                    route.protocol(),
+                                    hash(request.getMethod(), request.getRequestURI(), requestBody),
+                                    credential));
             if (outcome instanceof PaymentRequired required) {
                 if (call == null) sendHttpChallenge(response, protocol, required.challenge());
                 else sendMcpChallenge(response, call, required.challenge(), false);
@@ -148,23 +233,30 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             replayable.setAttribute(PAYMENT_ATTRIBUTE, authorized.payment());
             if (call == null) {
                 var receipt = protocol.receipt(authorized.payment());
-                chain.doFilter(replayable, new ProtectedReceiptResponse(
-                        response, receipt.headers(), core.merchantEvidenceHeaderNames()));
+                chain.doFilter(
+                        replayable,
+                        new ProtectedReceiptResponse(
+                                response, receipt.headers(), core.merchantEvidenceHeaderNames()));
             } else {
                 PaymentProtocol.McpMetadata receipt =
-                        core.mcpReceipt(authorized.challenge(), authorized.payment());
+                        call.a2a() == null
+                                ? core.mcpReceipt(authorized.challenge(), authorized.payment())
+                                : null;
                 var buffered = new BufferedResponse(response, maxBodyBytes);
                 chain.doFilter(replayable, buffered);
-                buffered.commitMcp(call, receipt, core);
+                buffered.commitMcp(call, receipt, core, authorized);
             }
             if (response.getStatus() >= 200 && response.getStatus() < 300) {
-                LOG.log(System.Logger.Level.INFO,
+                LOG.log(
+                        System.Logger.Level.INFO,
                         "agentvault.sdk.payee.resource_released run_id={0} intent_id={1}",
-                        runId, authorized.payment().intent().id());
+                        runId,
+                        authorized.payment().intent().id());
             }
         } catch (InvalidPaymentException error) {
             if (call == null) {
-                sendHttpChallenge(response, core.protocol(error.challenge().protocol()), error.challenge());
+                sendHttpChallenge(
+                        response, core.protocol(error.challenge().protocol()), error.challenge());
             } else {
                 sendMcpChallenge(response, call, error.challenge(), true);
             }
@@ -180,13 +272,13 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
     }
 
     private void sendHttpChallenge(
-            HttpServletResponse response,
-            PaymentProtocol protocol,
-            PaymentChallenge challenge) throws IOException {
+            HttpServletResponse response, PaymentProtocol protocol, PaymentChallenge challenge)
+            throws IOException {
         PaymentProtocol.HttpResponse wire = protocol.challenge(challenge);
         response.reset();
         response.setStatus(402);
-        response.setContentType(wire.contentType() == null ? "application/json" : wire.contentType());
+        response.setContentType(
+                wire.contentType() == null ? "application/json" : wire.contentType());
         response.setHeader("payment-protocol", challenge.protocol());
         response.setHeader("payment-expires-at", Long.toString(challenge.expiresAt()));
         wire.headers().forEach(response::setHeader);
@@ -197,9 +289,12 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             HttpServletResponse response,
             McpCall call,
             PaymentChallenge challenge,
-            boolean rejected) throws IOException {
+            boolean rejected)
+            throws IOException {
         PaymentProtocol.McpPaymentRequired wire =
-                core.mcpPaymentRequired(challenge, rejected);
+                call.a2a() == null
+                        ? core.mcpPaymentRequired(challenge, rejected)
+                        : core.a2a().challenge(call.a2a(), challenge, rejected);
         ObjectNode envelope = JSON.createObjectNode();
         envelope.put("jsonrpc", "2.0");
         envelope.set("id", call.id());
@@ -212,6 +307,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
         response.reset();
         response.setStatus(200);
         response.setContentType("application/json");
+        if (call.a2a() != null && !core.a2a().extension(challenge.protocol()).isEmpty())
+            response.setHeader("x-a2a-extensions", core.a2a().extension(challenge.protocol()));
         response.setHeader("payment-protocol", challenge.protocol());
         response.setHeader("payment-expires-at", Long.toString(challenge.expiresAt()));
         response.setContentLength(body.length);
@@ -221,7 +318,9 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
     private McpCall mcpCall(byte[] body, String expected) {
         try {
             JsonNode value = JSON.readTree(body);
-            if (value == null || !value.isObject() || !"2.0".equals(value.path("jsonrpc").asText())
+            if (value == null
+                    || !value.isObject()
+                    || !"2.0".equals(value.path("jsonrpc").asText())
                     || !"tools/call".equals(value.path("method").asText())
                     || !value.path("params").isObject()
                     || !expected.equals(value.path("params").path("name").asText())) return null;
@@ -233,8 +332,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             if (existing != null && !existing.isObject()) {
                 throw new IllegalArgumentException("MCP params._meta must be an object");
             }
-            ObjectNode metadata = existing == null
-                    ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
+            ObjectNode metadata =
+                    existing == null ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
             JsonNode rootExisting = value.get("_meta");
             if (rootExisting != null && !rootExisting.isObject()) {
                 throw new IllegalArgumentException("JSON-RPC root _meta must be an object");
@@ -243,7 +342,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 for (String key : core.mcpRootRequestMetadataKeys()) {
                     if (!rootExisting.has(key)) continue;
                     if (metadata.has(key)) {
-                        throw new IllegalArgumentException("duplicate MCP payment credential metadata");
+                        throw new IllegalArgumentException(
+                                "duplicate MCP payment credential metadata");
                     }
                     metadata.set(key, rootExisting.get(key));
                 }
@@ -262,7 +362,9 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 core.mcpRootRequestMetadataKeys().forEach(canonicalRoot::remove);
                 if (canonicalRoot.isEmpty()) canonical.remove("_meta");
             }
-            return new McpCall(value.get("id"), metadata,
+            return new McpCall(
+                    value.get("id"),
+                    metadata,
                     canonicalJson(canonical).getBytes(StandardCharsets.UTF_8));
         } catch (IOException error) {
             return null;
@@ -272,14 +374,17 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
     private java.util.Map<String, String> headers(HttpServletRequest request) {
         var headers = new LinkedHashMap<String, String>();
         var paymentHeaders = core.credentialHeaderNames();
-        java.util.Collections.list(request.getHeaderNames()).forEach(name -> {
-            var values = java.util.Collections.list(request.getHeaders(name));
-            if (paymentHeaders.stream().anyMatch(name::equalsIgnoreCase) && values.size() != 1) {
-                throw new IllegalArgumentException(
-                        "duplicate payment request header is not allowed: " + name);
-            }
-            headers.put(name, String.join(", ", values));
-        });
+        java.util.Collections.list(request.getHeaderNames())
+                .forEach(
+                        name -> {
+                            var values = java.util.Collections.list(request.getHeaders(name));
+                            if (paymentHeaders.stream().anyMatch(name::equalsIgnoreCase)
+                                    && values.size() != 1) {
+                                throw new IllegalArgumentException(
+                                        "duplicate payment request header is not allowed: " + name);
+                            }
+                            headers.put(name, String.join(", ", values));
+                        });
         return headers;
     }
 
@@ -287,7 +392,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update("agentvault.payee.http.v1\0".getBytes(StandardCharsets.UTF_8));
-            digest.update(method.toUpperCase(java.util.Locale.ROOT).getBytes(StandardCharsets.UTF_8));
+            digest.update(
+                    method.toUpperCase(java.util.Locale.ROOT).getBytes(StandardCharsets.UTF_8));
             digest.update((byte) 0);
             digest.update(path.getBytes(StandardCharsets.UTF_8));
             digest.update((byte) 0);
@@ -309,7 +415,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                     if (index > 0) result.append(',');
                     var field = fields.get(index);
                     result.append(JSON.writeValueAsString(field.getKey()))
-                            .append(':').append(canonicalJson(field.getValue()));
+                            .append(':')
+                            .append(canonicalJson(field.getValue()));
                 }
                 return result.append('}').toString();
             }
@@ -327,17 +434,19 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
         }
     }
 
-    private static void error(
-            HttpServletResponse response,
-            int status,
-            String code,
-            String message) throws IOException {
-        if (response.isCommitted()) throw new IOException("cannot replace a committed payment response");
+    private static void error(HttpServletResponse response, int status, String code, String message)
+            throws IOException {
+        if (response.isCommitted())
+            throw new IOException("cannot replace a committed payment response");
         response.reset();
         response.setStatus(status);
         response.setContentType("application/json");
-        JSON.writeValue(response.getOutputStream(), java.util.Map.of(
-                "error", java.util.Map.of("code", code, "message", message == null ? code : message)));
+        JSON.writeValue(
+                response.getOutputStream(),
+                java.util.Map.of(
+                        "error",
+                        java.util.Map.of(
+                                "code", code, "message", message == null ? code : message)));
     }
 
     private static final class BufferedResponse extends HttpServletResponseWrapper {
@@ -351,65 +460,90 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             this.limit = limit;
         }
 
-        @Override public ServletOutputStream getOutputStream() {
+        @Override
+        public ServletOutputStream getOutputStream() {
             if (writer != null) throw new IllegalStateException("getWriter() was already called");
             return outputStream();
         }
 
         private ServletOutputStream outputStream() {
             if (stream == null) {
-                stream = new ServletOutputStream() {
-                    @Override public boolean isReady() { return true; }
-                    @Override public void setWriteListener(WriteListener listener) {
-                        throw new UnsupportedOperationException("SSE/async MCP responses are unsupported");
-                    }
-                    @Override public void write(int value) throws IOException {
-                        ensureCapacity(1);
-                        body.write(value);
-                    }
-                    @Override public void write(byte[] value, int offset, int length) throws IOException {
-                        ensureCapacity(length);
-                        body.write(value, offset, length);
-                    }
-                    private void ensureCapacity(int added) throws IOException {
-                        if ((long) body.size() + added > limit) {
-                            throw new IOException("paid MCP response exceeds configured limit");
-                        }
-                    }
-                };
+                stream =
+                        new ServletOutputStream() {
+                            @Override
+                            public boolean isReady() {
+                                return true;
+                            }
+
+                            @Override
+                            public void setWriteListener(WriteListener listener) {
+                                throw new UnsupportedOperationException(
+                                        "SSE/async MCP responses are unsupported");
+                            }
+
+                            @Override
+                            public void write(int value) throws IOException {
+                                ensureCapacity(1);
+                                body.write(value);
+                            }
+
+                            @Override
+                            public void write(byte[] value, int offset, int length)
+                                    throws IOException {
+                                ensureCapacity(length);
+                                body.write(value, offset, length);
+                            }
+
+                            private void ensureCapacity(int added) throws IOException {
+                                if ((long) body.size() + added > limit) {
+                                    throw new IOException(
+                                            "paid MCP response exceeds configured limit");
+                                }
+                            }
+                        };
             }
             return stream;
         }
 
-        @Override public PrintWriter getWriter() throws IOException {
-            if (stream != null) throw new IllegalStateException("getOutputStream() was already called");
+        @Override
+        public PrintWriter getWriter() throws IOException {
+            if (stream != null)
+                throw new IllegalStateException("getOutputStream() was already called");
             if (writer == null) {
-                writer = new PrintWriter(new OutputStreamWriter(
-                        outputStream(), getCharacterEncoding()), false);
+                writer =
+                        new PrintWriter(
+                                new OutputStreamWriter(outputStream(), getCharacterEncoding()),
+                                false);
             }
             return writer;
         }
 
-        @Override public void flushBuffer() throws IOException {
+        @Override
+        public void flushBuffer() throws IOException {
             if (writer != null) writer.flush();
         }
 
         private void commitMcp(
                 McpCall call,
                 PaymentProtocol.McpMetadata receipt,
-                PayeeMiddleware core) throws IOException {
+                PayeeMiddleware core,
+                Authorized authorized)
+                throws IOException {
             if (writer != null) writer.flush();
             HttpServletResponse delegate = (HttpServletResponse) getResponse();
             if (delegate.getContentType() == null
-                    || !delegate.getContentType().toLowerCase(java.util.Locale.ROOT)
+                    || !delegate.getContentType()
+                            .toLowerCase(java.util.Locale.ROOT)
                             .startsWith("application/json")) {
                 throw new IllegalStateException(
                         "paid MCP handler must return a bounded application/json response");
             }
             var headers = new LinkedHashMap<String, String>();
-            for (String name : delegate.getHeaderNames()) headers.put(name, delegate.getHeader(name));
+            for (String name : delegate.getHeaderNames())
+                headers.put(name, delegate.getHeader(name));
             if (core.merchantEvidenceHeaderNames().stream()
-                    .anyMatch(owned -> headers.keySet().stream().anyMatch(owned::equalsIgnoreCase))) {
+                    .anyMatch(
+                            owned -> headers.keySet().stream().anyMatch(owned::equalsIgnoreCase))) {
                 throw new IllegalStateException(
                         "paid MCP handler attempted to supply settlement evidence");
             }
@@ -420,22 +554,41 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
                 throw new IllegalStateException("paid MCP handler returned invalid JSON", error);
             }
             if (message == null || !message.isObject() || !call.id().equals(message.get("id"))) {
-                throw new IllegalStateException(
-                        "paid MCP response id does not match its request");
+                throw new IllegalStateException("paid MCP response id does not match its request");
+            }
+            if (call.a2a() != null) {
+                var paid =
+                        core.a2a()
+                                .receipt(
+                                        call.a2a(),
+                                        message,
+                                        authorized.challenge(),
+                                        authorized.payment());
+                byte[] encoded = A2a.JSON.writeValueAsBytes(paid);
+                if (encoded.length > limit)
+                    throw new IllegalStateException("A2A response exceeds configured limit");
+                delegate.setStatus(200);
+                delegate.setContentType("application/json");
+                delegate.setContentLength(encoded.length);
+                delegate.getOutputStream().write(encoded);
+                delegate.flushBuffer();
+                return;
             }
             JsonNode rawResult = message.get("result");
             if (rawResult != null && !rawResult.isObject()) {
-                throw new IllegalStateException("paid MCP handler returned an invalid JSON-RPC result");
+                throw new IllegalStateException(
+                        "paid MCP handler returned an invalid JSON-RPC result");
             }
             ObjectNode result = rawResult == null ? null : (ObjectNode) rawResult;
             JsonNode existing = result == null ? null : result.get("_meta");
             if (existing != null && !existing.isObject()) {
                 throw new IllegalStateException("paid MCP result._meta must be an object");
             }
-            ObjectNode metadata = existing == null
-                    ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
+            ObjectNode metadata =
+                    existing == null ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
             if (result != null
-                    && (core.mcpMerchantEvidence(metadata) != null || metadata.has(receipt.key()))) {
+                    && (core.mcpMerchantEvidence(metadata) != null
+                            || metadata.has(receipt.key()))) {
                 throw new IllegalStateException(
                         "paid MCP handler attempted to supply settlement metadata");
             }
@@ -482,7 +635,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             applyReceipt();
         }
 
-        @Override public void setHeader(String name, String value) {
+        @Override
+        public void setHeader(String name, String value) {
             if (protectedHeader(name)) {
                 throw new IllegalStateException(
                         "paid handler attempted to replace settlement evidence");
@@ -490,7 +644,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             super.setHeader(name, value);
         }
 
-        @Override public void addHeader(String name, String value) {
+        @Override
+        public void addHeader(String name, String value) {
             if (protectedHeader(name)) {
                 throw new IllegalStateException(
                         "paid handler attempted to append settlement evidence");
@@ -498,7 +653,8 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             super.addHeader(name, value);
         }
 
-        @Override public void reset() {
+        @Override
+        public void reset() {
             super.reset();
             applyReceipt();
         }
@@ -521,20 +677,45 @@ public final class SpringInterceptorPayeeMiddleware extends OncePerRequestFilter
             this.body = body.clone();
         }
 
-        @Override public int getContentLength() { return body.length; }
-        @Override public long getContentLengthLong() { return body.length; }
-        @Override public BufferedReader getReader() {
-            return new BufferedReader(new InputStreamReader(getInputStream(), StandardCharsets.UTF_8));
+        @Override
+        public int getContentLength() {
+            return body.length;
         }
-        @Override public ServletInputStream getInputStream() {
+
+        @Override
+        public long getContentLengthLong() {
+            return body.length;
+        }
+
+        @Override
+        public BufferedReader getReader() {
+            return new BufferedReader(
+                    new InputStreamReader(getInputStream(), StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public ServletInputStream getInputStream() {
             ByteArrayInputStream input = new ByteArrayInputStream(body);
             return new ServletInputStream() {
-                @Override public boolean isFinished() { return input.available() == 0; }
-                @Override public boolean isReady() { return true; }
-                @Override public void setReadListener(ReadListener listener) {
+                @Override
+                public boolean isFinished() {
+                    return input.available() == 0;
+                }
+
+                @Override
+                public boolean isReady() {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(ReadListener listener) {
                     throw new UnsupportedOperationException("async body reads are unsupported");
                 }
-                @Override public int read() { return input.read(); }
+
+                @Override
+                public int read() {
+                    return input.read();
+                }
             };
         }
     }

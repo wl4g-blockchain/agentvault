@@ -15,5 +15,5 @@ fn request_debug_redacts_headers_and_body() {
 
 #[test]
 fn percent_encoding_is_stable() {
-    assert_eq!(percent_encode("run id/1"), "run%20id%2F1");
+    assert_eq!(TransportRequest::percent_encode("run id/1"), "run%20id%2F1");
 }

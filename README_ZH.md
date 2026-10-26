@@ -5,7 +5,7 @@
 AgentVault 是一个 Rust 中间件，同时承载两类业务：
 
 - Payer / OUTBOUND：购买付费 HTTP/MCP 服务，执行预算预留、超额审批、Intent 绑定签名和结算对账。
-- Payee / INBOUND：按固定 Offer 对 HTTP Route/MCP Tool 收费，签发 402 Challenge，经外部 Provider 验证/结算并生成可信 Receipt。
+- Payee / INBOUND：按固定 Price 对 HTTP Route/MCP Tool 收费，签发 402 Challenge，经外部 Provider 验证/结算并生成可信 Receipt。
 
 私钥和所有资金状态只保存在 PostgreSQL 或 SQLite。私钥采用 AES-256-GCM 信封加密、完整 UUID v4 Nonce 和不可变版本；Ledger 只追加。Memory/Redis 只缓存可重建数据，不能决定预算、审批、幂等、结算或余额。
 

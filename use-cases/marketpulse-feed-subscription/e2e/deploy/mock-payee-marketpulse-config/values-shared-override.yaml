@@ -1,0 +1,25 @@
+env:
+  AGENTVAULT_GRPC_ENDPOINT: "127.0.0.1:50051"
+  AGENTVAULT_GRPC_TLS: "false"
+  AGENTVAULT_MQTT_HOST: "127.0.0.1"
+  AGENTVAULT_MQTT_PORT: "1883"
+  AGENTVAULT_MQTT_TLS: "false"
+
+extraContainers:
+  - name: local-envoy-cm
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+    imagePullPolicy: IfNotPresent
+    args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: [ALL] }
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+    volumeMounts:
+      - { name: local-envoy-cm-config, mountPath: /etc/envoy, readOnly: true }
+
+extraVolumes:
+  - name: local-envoy-cm-config
+    configMap: { name: local-envoy-cm }

@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::{
-    percent_encode, ApiClient, CreateChallengeRequest, Error, OperationContext, PayeeConfig, PayeeOperation,
-    PaymentChallenge, PaymentCredential, PaymentOffer, PaymentProtocolFactory, PaymentReceipt, PaymentVerification,
-    ProtectionOutcome, ProtocolHttpResponse, ProtocolMcpMetadata, ProtocolMcpPaymentRequired, ProtocolRegistry,
-    ResolveOfferRequest, Result, SettlePaymentRequest, SettledIncomingPayment, VaultTransport, VerifyPaymentRequest,
+    ApiClient, CreateChallengeRequest, Error, OperationContext, PayeeConfig, PayeeOperation, PaymentChallenge,
+    PaymentCredential, PaymentPrice, PaymentProtocolFactory, PaymentReceipt, PaymentVerification, ProtectionOutcome,
+    ProtocolHttpResponse, ProtocolMcpMetadata, ProtocolMcpPaymentRequired, ProtocolRegistry, ResolvePriceRequest,
+    Result, SettlePaymentRequest, SettledIncomingPayment, VaultTransport, VerifyPaymentRequest,
 };
 
 /// Transport-neutral payee workflow. HTTP framework adapters construct a
@@ -15,7 +15,7 @@ use crate::{
 pub struct PayeeMiddleware<T> {
     api: ApiClient<T>,
     config: PayeeConfig,
-    protocols: ProtocolRegistry,
+    pub(crate) protocols: ProtocolRegistry,
 }
 
 pub(crate) enum PayeeProtectionError {
@@ -179,7 +179,7 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
         let challenge = self
             .create_challenge(&CreateChallengeRequest {
                 context,
-                offer_id: operation.offer_id.clone(),
+                price_id: operation.price_id.clone(),
                 resource: operation.resource.clone(),
                 origin: operation.origin.clone(),
                 protocol: operation.protocol.clone(),
@@ -274,15 +274,15 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
         ))
     }
 
-    pub async fn resolve_offer(&self, request: &ResolveOfferRequest) -> Result<PaymentOffer> {
+    pub async fn resolve_price(&self, request: &ResolvePriceRequest) -> Result<PaymentPrice> {
         crate::model_base::validate_required("scenario_id", &request.scenario_id)?;
         crate::model_base::validate_required("resource", &request.resource)?;
-        self.api.post(crate::paths::RESOLVE_OFFER.to_owned(), request).await
+        self.api.post(crate::paths::RESOLVE_PRICE.to_owned(), request).await
     }
 
     async fn create_challenge(&self, request: &CreateChallengeRequest) -> Result<PaymentChallenge> {
         request.context.validate()?;
-        crate::model_base::validate_required("offer_id", &request.offer_id)?;
+        crate::model_base::validate_required("price_id", &request.price_id)?;
         crate::model_base::validate_required("resource", &request.resource)?;
         crate::model_base::validate_required("origin", &request.origin)?;
         crate::model_base::validate_required("protocol", &request.protocol)?;
@@ -319,8 +319,8 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             .get(format!(
                 "{}/{intent_id}/receipt?scenario_id={scenario_id}",
                 crate::paths::PAYMENTS,
-                intent_id = percent_encode(intent_id),
-                scenario_id = percent_encode(scenario_id)
+                intent_id = crate::TransportRequest::percent_encode(intent_id),
+                scenario_id = crate::TransportRequest::percent_encode(scenario_id)
             ))
             .await
     }
@@ -328,7 +328,7 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
 
 fn validate_challenge_binding(operation: &PayeeOperation, challenge: &PaymentChallenge) -> Result<()> {
     if challenge.scenario_id != operation.scenario_id
-        || challenge.offer_id.as_deref() != Some(operation.offer_id.as_str())
+        || challenge.price_id.as_deref() != Some(operation.price_id.as_str())
         || challenge.resource != operation.resource
         || challenge.protocol != operation.protocol
     {
@@ -358,7 +358,7 @@ fn validate_verification_binding(
     if intent.id.is_empty()
         || intent.direction != crate::PaymentDirection::Inbound
         || intent.scenario_id != operation.scenario_id
-        || intent.offer_id.as_deref() != Some(operation.offer_id.as_str())
+        || intent.price_id.as_deref() != Some(operation.price_id.as_str())
         || intent.resource != operation.resource
         || intent.protocol != operation.protocol
         || intent.challenge_hash.as_deref() != Some(challenge.challenge_hash.as_str())
@@ -383,7 +383,7 @@ fn validate_settlement_binding(
     if payment.intent.id != verified.id
         || payment.intent.direction != crate::PaymentDirection::Inbound
         || payment.intent.scenario_id != verified.scenario_id
-        || payment.intent.offer_id != verified.offer_id
+        || payment.intent.price_id != verified.price_id
         || payment.intent.resource != verified.resource
         || payment.intent.protocol != verified.protocol
         || payment.intent.challenge_hash != verified.challenge_hash

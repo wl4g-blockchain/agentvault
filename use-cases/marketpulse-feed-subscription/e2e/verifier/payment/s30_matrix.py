@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from common.context import VerificationContext
-from common.deploy import create_deployer
+from deploy.deployer import create_deployer
 from common.sdk_matrix import matrix_cases
 
 

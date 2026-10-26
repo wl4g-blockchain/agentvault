@@ -114,7 +114,7 @@ class _McpPayeeTransport:
             nonce = mcp_challenge["id"]
         return {
             "scenario_id": "scenario",
-            "offer_id": "offer",
+            "price_id": "price",
             "resource": "mcp://marketpulse/realtime",
             "protocol": self.protocol,
             "asset": self._asset(),
@@ -133,7 +133,7 @@ class _McpPayeeTransport:
             "id": "intent-1",
             "scenario_id": "scenario",
             "run_id": "run-1",
-            "offer_id": "offer",
+            "price_id": "price",
             "direction": "inbound",
             "protocol": self.protocol,
             "asset": self._asset(),
@@ -166,7 +166,7 @@ class _McpPayeeTransport:
 class FastPayeeMiddlewareTest(unittest.TestCase):
     def test_route_is_exact(self):
         route = FastPayeeRoute.mcp_tool(
-            "/mcp", "marketpulse.realtime_news", "scenario", "offer",
+            "/mcp", "marketpulse.realtime_news", "scenario", "price",
             "mcp://marketpulse/realtime", "https://marketpulse.example")
         self.assertEqual((route.method, route.path), ("POST", "/mcp"))
         self.assertEqual(route.mcp_tool_name, "marketpulse.realtime_news")
@@ -178,7 +178,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
             called.append(await _body(receive))
 
         route = FastPayeeRoute.mcp_tool(
-            "/mcp", "marketpulse.realtime_news", "scenario", "offer",
+            "/mcp", "marketpulse.realtime_news", "scenario", "price",
             "mcp://marketpulse/realtime", "https://marketpulse.example")
         middleware = FastPayeeMiddleware(
             app, middleware=PayeeMiddleware(_NoopTransport(), PayeeConfig()), routes=[route])
@@ -205,7 +205,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
             await send({"type": "http.response.body", "body": b"{}"})
 
         route = FastPayeeRoute(
-            "POST", "/paid", "scenario", "offer",
+            "POST", "/paid", "scenario", "price",
             "https://marketpulse.example/paid", "https://marketpulse.example")
         middleware = FastPayeeMiddleware(app, middleware=_AuthorizedMiddleware(), routes=[route])
         body = b"{}"
@@ -235,7 +235,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
             raise AssertionError("protected application must not receive an ambiguous credential")
 
         route = FastPayeeRoute.mcp_tool(
-            "/mcp", "marketpulse.realtime_news", "scenario", "offer",
+            "/mcp", "marketpulse.realtime_news", "scenario", "price",
             "mcp://marketpulse/realtime", "https://marketpulse.example")
         middleware = FastPayeeMiddleware(app, middleware=_AuthorizedMiddleware(), routes=[route])
         body = json.dumps({
@@ -269,7 +269,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_x402_and_mpp_mcp_payee_flows_verify_settle_and_preserve_bearer(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         for protocol in ("x402", "mpp"):
             with self.subTest(protocol=protocol):
@@ -305,7 +305,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
                     "/mcp",
                     "marketpulse.realtime",
                     "scenario",
-                    "offer",
+                    "price",
                     "mcp://marketpulse/realtime",
                     "https://merchant.test",
                     protocol,
@@ -405,7 +405,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_mpp_invalid_mcp_credential_returns_verification_error(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         contract = fixture["protocols"]["mpp"]
         transport = _McpPayeeTransport("mpp", contract)
@@ -423,7 +423,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
                 "/mcp",
                 "marketpulse.realtime",
                 "scenario",
-                "offer",
+                "price",
                 "mcp://marketpulse/realtime",
                 "https://merchant.test",
                 "mpp",
@@ -455,7 +455,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
 
     def test_paid_mcp_business_failure_is_preserved_for_delivery_retry(self):
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "fixtures" / "payment_protocol_mcp.json").read_text()
+            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
         )
         contract = fixture["protocols"]["x402"]
 
@@ -484,7 +484,7 @@ class FastPayeeMiddlewareTest(unittest.TestCase):
                 "/mcp",
                 "marketpulse.realtime",
                 "scenario",
-                "offer",
+                "price",
                 "mcp://marketpulse/realtime",
                 "https://merchant.test",
             )],

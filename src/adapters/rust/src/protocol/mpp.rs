@@ -1,3 +1,4 @@
+use crate::A2aCall;
 use std::collections::BTreeMap;
 
 use mpp::{
@@ -151,6 +152,71 @@ impl MppAdapter {
 }
 
 impl PaymentProtocol for MppAdapter {
+    fn a2a_challenge(&self, message: &Value, limit: usize) -> Result<Option<ProtocolHttpResponse>> {
+        if message.get("error").is_some() {
+            self.mcp_challenge(message, limit)
+        } else {
+            Ok(None)
+        }
+    }
+    fn presented_a2a_credential(&self, message: &Value, limit: usize) -> Result<Option<Value>> {
+        let key = self
+            .mcp_request_metadata_key()
+            .ok_or_else(|| A2aCall::invalid("MPP key missing"))?;
+        if message["params"]["_meta"].get(key).is_some() || message["params"]["message"]["metadata"].get(key).is_some()
+        {
+            return Err(A2aCall::invalid("MPP A2A credential requires root _meta"));
+        }
+        self.presented_mcp_credential(
+            &message.get("_meta").cloned().unwrap_or_else(|| serde_json::json!({})),
+            limit,
+        )
+    }
+    fn a2a_strip_credential(&self, message: &mut Value) -> Result<()> {
+        A2aCall::metadata(message, true)?.remove("org.paymentauth/credential");
+        Ok(())
+    }
+    fn a2a_apply_credential(&self, message: &mut Value, credential: &PaymentCredential) -> Result<()> {
+        let value = self.mcp_credential(credential)?;
+        let meta = A2aCall::metadata(message, true)?;
+        if meta.contains_key(value.key) {
+            return Err(A2aCall::invalid("existing MPP credential"));
+        }
+        meta.insert(value.key.into(), value.value);
+        Ok(())
+    }
+    fn a2a_payment_required(
+        &self,
+        challenge: &PaymentChallenge,
+        _task: &a2a_types::Task,
+        rejected: bool,
+    ) -> Result<ProtocolMcpPaymentRequired> {
+        if rejected {
+            self.mcp_payment_rejected(challenge, "Payment verification failed")
+        } else {
+            self.mcp_payment_required(challenge)
+        }
+    }
+    fn a2a_evidence(&self, message: &Value, limit: usize) -> Result<Option<MerchantEvidence>> {
+        self.mcp_merchant_evidence(
+            &message.get("_meta").cloned().unwrap_or_else(|| serde_json::json!({})),
+            limit,
+        )
+    }
+    fn a2a_inject_receipt(
+        &self,
+        message: &mut Value,
+        challenge: &PaymentChallenge,
+        payment: &SettledIncomingPayment,
+    ) -> Result<()> {
+        let value = self.mcp_receipt(challenge, payment)?;
+        let meta = A2aCall::metadata(message, true)?;
+        if meta.contains_key(value.key) {
+            return Err(A2aCall::invalid("handler supplied MPP receipt"));
+        }
+        meta.insert(value.key.into(), value.value);
+        Ok(())
+    }
     fn name(&self) -> &'static str {
         "mpp"
     }

@@ -65,11 +65,8 @@ type AuthorizePaymentResponse struct {
 
 type ReportOutboundResponseRequest struct {
 	OperationContext
-	// PaymentResponse preserves the original x402-only wire contract. New
-	// callers use Protocol and Evidence so every protocol keeps its own header.
-	PaymentResponse string            `json:"payment_response,omitempty"`
-	Protocol        string            `json:"protocol,omitempty"`
-	Evidence        *ProtocolEvidence `json:"evidence,omitempty"`
+	Protocol string           `json:"protocol"`
+	Evidence ProtocolEvidence `json:"evidence"`
 }
 
 type ProtocolEvidence struct {
@@ -81,29 +78,22 @@ func (request ReportOutboundResponseRequest) Validate() error {
 	if err := request.OperationContext.Validate(); err != nil {
 		return err
 	}
-	value := request.PaymentResponse
-	if request.PaymentResponse != "" {
-		if request.Protocol != "" || request.Evidence != nil {
-			return errors.New("legacy payment_response cannot be combined with protocol evidence")
-		}
-	} else {
-		if request.Evidence == nil || request.Protocol == "" {
-			return errors.New("protocol evidence is required")
-		}
-		if err := ValidateIdentifier("protocol", request.Protocol); err != nil {
-			return err
-		}
-		if err := Required("evidence.header_name", request.Evidence.HeaderName); err != nil {
-			return err
-		}
-		for _, character := range []byte(request.Evidence.HeaderName) {
-			if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-				(character >= '0' && character <= '9') || character == '-') {
-				return errors.New("evidence.header_name is invalid")
-			}
-		}
-		value = request.Evidence.HeaderValue
+	if err := ValidateIdentifier("protocol", request.Protocol); err != nil {
+		return err
 	}
+	if err := Required("evidence.header_name", request.Evidence.HeaderName); err != nil {
+		return err
+	}
+	if len(request.Evidence.HeaderName) > 64 {
+		return errors.New("evidence.header_name is invalid")
+	}
+	for _, character := range []byte(request.Evidence.HeaderName) {
+		if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-') {
+			return errors.New("evidence.header_name is invalid")
+		}
+	}
+	value := request.Evidence.HeaderValue
 	if len(value) == 0 || len(value) > 64*1024 {
 		return errors.New("merchant evidence must be a bounded HTTP header value")
 	}

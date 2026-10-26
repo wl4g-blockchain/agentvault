@@ -79,10 +79,12 @@ EOF
 fi
 
 sync_kubernetes_secret
-write_values_file "$VAULT_VALUES_FILE" "secrets:
-  provider: vault
-  kubernetes:
-    existingSecret: ${AGENTVAULT_SECRET_NAME}
-  vault:
-    vaultRole: ${VAULT_ROLE_NAME}
-    secretPath: ${VAULT_KV_MOUNT}/data/${VAULT_SECRET_PATH}"
+write_values_file "$VAULT_VALUES_FILE" "agentvault:
+  backend:
+    secrets:
+      provider: vault
+      kubernetes:
+        existingSecret: ${AGENTVAULT_SECRET_NAME}
+      vault:
+        vaultRole: ${VAULT_ROLE_NAME}
+        secretPath: ${VAULT_KV_MOUNT}/data/${VAULT_SECRET_PATH}"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from common.deploy.base import FullFlowEvidence
+from deploy.deployer.base import FullFlowEvidence
 
 
 PAYEE_EVENTS = (

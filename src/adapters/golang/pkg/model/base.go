@@ -81,7 +81,7 @@ type AssetIdentity struct {
 
 type PaymentChallenge struct {
 	ScenarioID    string        `json:"scenario_id"`
-	OfferID       string        `json:"offer_id,omitempty"`
+	PriceID       string        `json:"price_id,omitempty"`
 	Resource      string        `json:"resource"`
 	Protocol      string        `json:"protocol"`
 	Asset         AssetIdentity `json:"asset"`
@@ -125,7 +125,7 @@ type PaymentIntent struct {
 	RunID             string            `json:"run_id"`
 	WalletID          *string           `json:"wallet_id,omitempty"`
 	PolicyID          string            `json:"policy_id,omitempty"`
-	OfferID           string            `json:"offer_id,omitempty"`
+	PriceID           string            `json:"price_id,omitempty"`
 	Direction         PaymentDirection  `json:"direction"`
 	Protocol          string            `json:"protocol"`
 	Asset             AssetIdentity     `json:"asset"`

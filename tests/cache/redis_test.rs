@@ -5,11 +5,11 @@ use crate::config::{RedisCacheConfig, RedisCacheMode, SecretRefConfig};
 
 #[test]
 fn namespaces_are_isolated_single_slot_hashes() {
-    let offers = namespace_key("agentvault", "offers").unwrap();
+    let prices = namespace_key("agentvault", "prices").unwrap();
     let receipts = namespace_key("agentvault", "receipts").unwrap();
 
-    assert_eq!(offers, "agentvault:{offers}:entries");
-    assert_ne!(offers, receipts);
+    assert_eq!(prices, "agentvault:{prices}:entries");
+    assert_ne!(prices, receipts);
     assert!(namespace_key("agentvault", "bad:key").is_err());
 }
 

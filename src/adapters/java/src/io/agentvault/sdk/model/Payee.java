@@ -14,15 +14,15 @@ import java.util.List;
 public final class Payee {
     private Payee() {}
 
-    public record ResolveOfferRequest(String scenarioId, String resource, String protocol) {
-        public ResolveOfferRequest {
+    public record ResolvePriceRequest(String scenarioId, String resource, String protocol) {
+        public ResolvePriceRequest {
             Base.required("scenarioId", scenarioId);
             Base.required("resource", resource);
             if (protocol != null) Base.required("protocol", protocol);
         }
     }
 
-    public record PaymentOffer(
+    public record PaymentPrice(
             String id,
             @JsonProperty("scenario_id") String scenarioId,
             String resource,
@@ -37,14 +37,14 @@ public final class Payee {
     public record PayeeOperation(
             String scenarioId,
             String runId,
-            String offerId,
+            String priceId,
             String resource,
             String origin,
             String protocol,
             String requestHash,
             JsonNode credentialPayload) {
         public PayeeOperation {
-            for (String value : new String[]{scenarioId, runId, offerId, resource,
+            for (String value : new String[]{scenarioId, runId, priceId, resource,
                     origin, protocol, requestHash}) {
                 if (value == null || value.isBlank()) {
                     throw new IllegalArgumentException("payee operation fields cannot be blank");
@@ -65,13 +65,13 @@ public final class Payee {
     public record CreateChallengeRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("offer_id") String offerId,
+            @JsonProperty("price_id") String priceId,
             String resource,
             String origin,
             String protocol,
             @JsonProperty("request_hash") String requestHash) {
         public CreateChallengeRequest(OperationContext context, PayeeOperation operation) {
-            this(context.scenarioId(), context.runId(), operation.offerId(),
+            this(context.scenarioId(), context.runId(), operation.priceId(),
                     operation.resource(), operation.origin(), operation.protocol(), operation.requestHash());
         }
     }

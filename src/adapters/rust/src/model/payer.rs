@@ -113,27 +113,13 @@ pub struct ProtocolEvidence {
 pub struct ReportOutboundResponseRequest {
     #[serde(flatten)]
     pub context: OperationContext,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payment_response: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<ProtocolEvidence>,
+    pub protocol: String,
+    pub evidence: ProtocolEvidence,
 }
 
 impl ReportOutboundResponseRequest {
     #[must_use]
-    pub fn legacy(context: OperationContext, payment_response: impl Into<String>) -> Self {
-        Self {
-            context,
-            payment_response: Some(payment_response.into()),
-            protocol: None,
-            evidence: None,
-        }
-    }
-
-    #[must_use]
-    pub fn protocol(
+    pub fn new(
         context: OperationContext,
         protocol: impl Into<String>,
         header_name: impl Into<String>,
@@ -141,57 +127,52 @@ impl ReportOutboundResponseRequest {
     ) -> Self {
         Self {
             context,
-            payment_response: None,
-            protocol: Some(protocol.into()),
-            evidence: Some(ProtocolEvidence {
+            protocol: protocol.into(),
+            evidence: ProtocolEvidence {
                 header_name: header_name.into(),
                 header_value: header_value.into(),
-            }),
+            },
         }
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
         self.context.validate()?;
-        match (&self.payment_response, &self.protocol, &self.evidence) {
-            (Some(value), None, None)
-                if !value.is_empty()
-                    && value.len() <= 16 * 1024
-                    && value.bytes().all(|byte| byte.is_ascii_graphic()) => {}
-            (None, Some(protocol), Some(evidence))
-                if !protocol.is_empty()
-                    && protocol.len() <= 32
-                    && protocol
-                        .bytes()
-                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                    && !evidence.header_name.is_empty()
-                    && evidence.header_name.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric()
-                            || matches!(
-                                byte,
-                                b'!' | b'#'
-                                    | b'$'
-                                    | b'%'
-                                    | b'&'
-                                    | b'\''
-                                    | b'*'
-                                    | b'+'
-                                    | b'-'
-                                    | b'.'
-                                    | b'^'
-                                    | b'_'
-                                    | b'`'
-                                    | b'|'
-                                    | b'~'
-                            )
-                    })
-                    && !evidence.header_value.is_empty()
-                    && evidence.header_value.len() <= 64 * 1024
-                    && evidence.header_value.bytes().all(|byte| byte.is_ascii_graphic()) => {}
-            _ => {
-                return Err(Error::InvalidArgument(
-                    "outbound response must contain exactly one valid legacy or protocol evidence value".to_owned(),
-                ));
-            }
+        let protocol = &self.protocol;
+        let evidence = &self.evidence;
+        if protocol.is_empty()
+            || protocol.len() > 32
+            || !protocol
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            || evidence.header_name.is_empty()
+            || evidence.header_name.len() > 64
+            || !evidence.header_name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+            || evidence.header_value.is_empty()
+            || evidence.header_value.len() > 64 * 1024
+            || !evidence.header_value.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(Error::InvalidArgument(
+                "protocol settlement evidence is invalid".to_owned(),
+            ));
         }
         Ok(())
     }

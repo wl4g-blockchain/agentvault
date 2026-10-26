@@ -12,7 +12,7 @@ export function OverviewPage() {
 
     <section className="metric-grid">
       <article><ArrowUpRight /><small>OUTBOUND / PAYER</small><strong>Challenge → policy → signature</strong><p>Agent SDKs retry paid HTTP and MCP calls only after intent-bound authorization.</p></article>
-      <article><ArrowDownLeft /><small>INBOUND / PAYEE</small><strong>Offer → settlement → delivery</strong><p>Paid resources execute after external provider evidence is confirmed and persisted.</p></article>
+      <article><ArrowDownLeft /><small>INBOUND / PAYEE</small><strong>Price → settlement → delivery</strong><p>Paid resources execute after external provider evidence is confirmed and persisted.</p></article>
       <article><DatabaseZap /><small>AUTHORITATIVE STATE</small><strong>SQL + append-only ledger</strong><p>Redis and memory cache can accelerate reads, never authorize funds or replace durable facts.</p></article>
     </section>
 

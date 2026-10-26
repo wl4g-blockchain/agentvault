@@ -1,11 +1,12 @@
-{{- if .Values.management.serviceMonitor.enabled }}
+{{- $serviceMonitor := .Values.agentvault.backend.management.serviceMonitor -}}
+{{- if $serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "agentvault.fullname" . }}
   labels:
     {{- include "agentvault.labels" . | nindent 4 }}
-    {{- with .Values.management.serviceMonitor.labels }}
+    {{- with $serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -17,5 +18,5 @@ spec:
   endpoints:
     - port: management
       path: /metrics
-      interval: {{ .Values.management.serviceMonitor.interval }}
+      interval: {{ $serviceMonitor.interval }}
 {{- end }}

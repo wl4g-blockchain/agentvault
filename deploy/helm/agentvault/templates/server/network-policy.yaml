@@ -1,5 +1,6 @@
-{{- if .Values.networkPolicy.enabled }}
-{{- $middleware := index .Values "authguard-middleware" }}
+{{- $backend := .Values.agentvault.backend -}}
+{{- if $backend.networkPolicy.enabled }}
+{{- $authguard := .Values.authguard }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,41 +14,41 @@ spec:
       app.kubernetes.io/component: server
   policyTypes: [Ingress]
   ingress:
-    {{- if $middleware.enabled }}
+    {{- if $authguard.enabled }}
     - from:
         - namespaceSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyNamespaceSelector | nindent 14 }}
           podSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
-      ports: [{ protocol: TCP, port: {{ .Values.service.apiPort }} }]
-    {{- if .Values.runtime.grpc.enabled }}
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyPodSelector | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ $backend.service.apiPort }} }]
+    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
     - from:
         - namespaceSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyNamespaceSelector | nindent 14 }}
           podSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
-      ports: [{ protocol: TCP, port: {{ .Values.service.grpcPort }} }]
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyPodSelector | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ $backend.service.grpcPort }} }]
     {{- end }}
     {{- else }}
     # Disabling the AuthGuard dependency is an explicit open-edge decision.
     # Permit the externally exposed data-plane Service while keeping the
     # management listener constrained by the rules below.
     - ports:
-        - { protocol: TCP, port: {{ .Values.service.apiPort }} }
-        {{- if .Values.runtime.grpc.enabled }}
-        - { protocol: TCP, port: {{ .Values.service.grpcPort }} }
+        - { protocol: TCP, port: {{ $backend.service.apiPort }} }
+        {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
+        - { protocol: TCP, port: {{ $backend.service.grpcPort }} }
         {{- end }}
     {{- end }}
     - from:
         - namespaceSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyNamespaceSelector | nindent 14 }}
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyNamespaceSelector | nindent 14 }}
           podSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.envoyPodSelector | nindent 14 }}
-      ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
+            matchLabels: {{ toYaml $backend.networkPolicy.envoyPodSelector | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ $backend.service.managementPort }} }]
     - from:
         - namespaceSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 14 }}
+            matchLabels: {{ toYaml $backend.networkPolicy.monitoringNamespaceSelector | nindent 14 }}
           podSelector:
-            matchLabels: {{ toYaml .Values.networkPolicy.monitoringPodSelector | nindent 14 }}
-      ports: [{ protocol: TCP, port: {{ .Values.service.managementPort }} }]
+            matchLabels: {{ toYaml $backend.networkPolicy.monitoringPodSelector | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ $backend.service.managementPort }} }]
 {{- end }}

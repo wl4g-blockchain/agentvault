@@ -38,6 +38,10 @@ class PayerMiddleware:
         self.config = config
         self._protocols = PaymentProtocolFactory().create(config.protocols)
 
+    def a2a(self) -> "A2APayerMiddleware":
+        from .a2a import A2APayerMiddleware
+        return A2APayerMiddleware(self)
+
     def standard(self, *, timeout: float = 30.0,
               client: "httpx.AsyncClient | None" = None) -> "HttpxPayerMiddleware":
         from .standard import HttpxPayerMiddleware
@@ -49,7 +53,7 @@ class PayerMiddleware:
         if response.status != 402:
             return None
         original = request
-        _validate_request(original)
+        PayerMiddleware._validate_request(original)
         if len(response.body) > self.config.max_challenge_bytes:
             raise RuntimeError("payment challenge exceeds configured limit")
         try:
@@ -59,11 +63,11 @@ class PayerMiddleware:
         required = PaymentRequired(
             origin=request.origin,
             resource=request.url,
-            content_type=_header(response.headers, "content-type") or "application/json",
+            content_type=PayerMiddleware._header(response.headers, "content-type") or "application/json",
             headers=dict(response.headers),
             body=challenge_body,
-            protocol_hint=_header(response.headers, "payment-protocol") or None,
-            expires_at=_header(response.headers, "payment-expires-at") or None,
+            protocol_hint=PayerMiddleware._header(response.headers, "payment-protocol") or None,
+            expires_at=PayerMiddleware._header(response.headers, "payment-expires-at") or None,
         )
         if required.protocol_hint is not None:
             self._protocols.get(required.protocol_hint)
@@ -111,18 +115,18 @@ class PayerMiddleware:
             return None
         adapter, challenge = selected
         transport_headers = response_headers or {}
-        if _header(transport_headers, "payment-required"):
+        if PayerMiddleware._header(transport_headers, "payment-required"):
             raise RuntimeError(
                 "MCP payment challenge must not also declare PAYMENT-REQUIRED"
             )
-        advertised = _header(transport_headers, "payment-protocol")
+        advertised = PayerMiddleware._header(transport_headers, "payment-protocol")
         if advertised and advertised.lower() != adapter.name.lower():
             raise RuntimeError(
                 "MCP payment challenge protocol metadata conflicts with its JSON-RPC payload"
             )
         headers = dict(challenge.headers)
         headers["payment-protocol"] = adapter.name
-        expires_at = _header(transport_headers, "payment-expires-at")
+        expires_at = PayerMiddleware._header(transport_headers, "payment-expires-at")
         if expires_at:
             headers["payment-expires-at"] = expires_at
         return self.authorize(
@@ -308,7 +312,7 @@ class PayerMiddleware:
         self, context: OperationContext, intent_id: str, protocol: str,
         header_name: str, header_value: str,
     ) -> ReportOutboundResponseResponse:
-        _required_query("intent_id", intent_id)
+        PayerMiddleware._required_query("intent_id", intent_id)
         request = ReportOutboundResponseRequest(
             context, protocol=protocol,
             evidence=ProtocolEvidence(header_name, header_value),
@@ -318,16 +322,16 @@ class PayerMiddleware:
         return ReportOutboundResponseResponse.from_wire(value)
 
     def get_payment(self, scenario_id: str, intent_id: str) -> PaymentIntent:
-        _required_query("scenario_id", scenario_id)
-        _required_query("intent_id", intent_id)
+        PayerMiddleware._required_query("scenario_id", scenario_id)
+        PayerMiddleware._required_query("intent_id", intent_id)
         query = urllib.parse.urlencode({"scenario_id": scenario_id})
         value = self._transport.request(
             "GET", f"/api/v1/payments/{urllib.parse.quote(intent_id, safe='')}?{query}")
         return PaymentIntent.from_wire(value)
 
     def get_receipt(self, scenario_id: str, intent_id: str) -> PaymentReceipt:
-        _required_query("scenario_id", scenario_id)
-        _required_query("intent_id", intent_id)
+        PayerMiddleware._required_query("scenario_id", scenario_id)
+        PayerMiddleware._required_query("intent_id", intent_id)
         query = urllib.parse.urlencode({"scenario_id": scenario_id})
         value = self._transport.request(
             "GET", f"/api/v1/payments/{urllib.parse.quote(intent_id, safe='')}/receipt?{query}")
@@ -339,20 +343,23 @@ class PayerMiddleware:
         return PaymentBalance.from_wire(value)
 
 
-def _header(headers: Mapping[str, str], wanted: str) -> str:
-    return next((value for name, value in headers.items() if name.lower() == wanted), "")
+    @staticmethod
+    def _header(headers: Mapping[str, str], wanted: str) -> str:
+        return next((value for name, value in headers.items() if name.lower() == wanted), "")
 
 
-def _required_query(name: str, value: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{name} cannot be blank")
+    @staticmethod
+    def _required_query(name: str, value: str) -> None:
+        if not value.strip():
+            raise ValueError(f"{name} cannot be blank")
 
 
-def _validate_request(request: PayerHttpRequest) -> None:
-    parsed = urllib.parse.urlsplit(request.url)
-    origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
-    if (
-        request.follow_redirects or parsed.scheme not in {"http", "https"}
-        or not parsed.netloc or parsed.username or origin.lower() != request.origin.lower()
-    ):
-        raise ValueError("paid request must use a canonical HTTP(S) origin with redirects disabled")
+    @staticmethod
+    def _validate_request(request: PayerHttpRequest) -> None:
+        parsed = urllib.parse.urlsplit(request.url)
+        origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+        if (
+            request.follow_redirects or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc or parsed.username or origin.lower() != request.origin.lower()
+        ):
+            raise ValueError("paid request must use a canonical HTTP(S) origin with redirects disabled")

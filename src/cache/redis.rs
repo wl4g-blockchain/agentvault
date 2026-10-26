@@ -10,13 +10,14 @@ use zeroize::Zeroizing;
 
 use super::port::{effective_ttl, validate_component};
 use super::{CacheError, CacheResult, ICache};
-use crate::{
-    config::{
-        CacheProvider, RedisCacheConfig, RedisCacheMode, MAX_CACHE_REDIS_ENDPOINTS, MAX_CACHE_RETRIES, MAX_CACHE_TTL,
-        MAX_CACHE_VALUE_BYTES,
-    },
-    utils::secret::read_secret_ref,
-};
+use crate::config::CacheProvider;
+use crate::config::RedisCacheConfig;
+use crate::config::RedisCacheMode;
+use crate::config::MAX_CACHE_REDIS_ENDPOINTS;
+use crate::config::MAX_CACHE_RETRIES;
+use crate::config::MAX_CACHE_TTL;
+use crate::config::MAX_CACHE_VALUE_BYTES;
+use crate::utils::secret::SecretReader;
 
 const MAX_REDIS_URL_BYTES: usize = 8 * 1024;
 const READ_SCRIPT: &str = r"
@@ -343,7 +344,7 @@ fn resolve_urls(config: &RedisCacheConfig) -> CacheResult<Vec<Zeroizing<String>>
                     "Redis URLs must use environment-backed secret references".to_owned(),
                 ));
             }
-            read_secret_ref(reference, "Redis cache URL", MAX_REDIS_URL_BYTES)
+            SecretReader::read_ref(reference, "Redis cache URL", MAX_REDIS_URL_BYTES)
                 .map_err(|_| CacheError::Unavailable("Redis cache URL environment variable is unavailable".to_owned()))
         })
         .collect()

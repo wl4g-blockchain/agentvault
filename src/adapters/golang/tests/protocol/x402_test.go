@@ -41,7 +41,7 @@ func TestX402AdapterUsesNativeWireHeaders(t *testing.T) {
 }
 
 func TestX402AdapterPreservesChainSpecificV2PayloadsAndRejectsCrossovers(t *testing.T) {
-	contents, err := os.ReadFile("../../../fixtures/x402_v2_chain_payloads.json")
+	contents, err := os.ReadFile("../../../tests/x402_v2_chain_payloads.json")
 	if err != nil {
 		t.Fatal(err)
 	}

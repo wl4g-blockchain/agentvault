@@ -20,7 +20,7 @@ export type PaymentIntent = {
   run_id: string
   wallet_id?: string
   policy_id?: string
-  offer_id?: string
+  price_id?: string
   direction: PaymentDirection
   protocol: string
   asset: AssetIdentity
@@ -137,7 +137,7 @@ export type LedgerListInput = {
   limit?: number
 }
 
-export type PaymentOffer = {
+export type PaymentPrice = {
   id: string
   scenario_id: string
   policy_id: string
@@ -150,6 +150,7 @@ export type PaymentOffer = {
   created_at: number
   updated_at: number
 }
+
 
 export type BalanceQuery = {
   scenario_id: string
@@ -195,6 +196,24 @@ export type Wallet = {
   created_at: number
 }
 
+export type WalletImportSession = {
+  session_id: string
+  server_public_key: string
+  expires_at: number
+}
+
+export type EncryptedWalletPrivateKey = {
+  session_id: string
+  ciphertext: string
+}
+
+export type CreateWalletInput = {
+  id: string
+  algorithm: 'secp256k1'
+  enabled: boolean
+  encrypted_private_key: EncryptedWalletPrivateKey
+}
+
 export type PaymentPolicyLimits = {
   max_per_payment: Amount
   max_per_day: Amount
@@ -238,7 +257,7 @@ export type ApiCapabilities = {
   balanceLookup: true
   pendingApprovalRead: true
   approvalDecision: true
-  offerResolution: true
+  priceResolution: true
   managementRead: true
   managementMutation: true
   paymentListing: true

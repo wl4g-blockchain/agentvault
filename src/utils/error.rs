@@ -24,8 +24,12 @@ pub enum Error {
     PaymentProtocol(String),
     #[error("settlement error: {0}")]
     Settlement(String),
+    #[error("storage conflict: {0}")]
+    StorageConflict(String),
     #[error("storage error: {0}")]
     Storage(String),
+    #[error("required dependency is unavailable: {0}")]
+    DependencyUnavailable(String),
     #[error("cryptographic operation failed: {0}")]
     Crypto(String),
     #[error("failed to read {path}: {source}")]
@@ -45,3 +49,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 #[path = "../../tests/utils/error_test.rs"]
 mod tests;
+
+impl Error {
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self::PaymentConflict(message.into())
+    }
+}

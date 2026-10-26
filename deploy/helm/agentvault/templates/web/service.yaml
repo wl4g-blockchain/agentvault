@@ -1,4 +1,5 @@
-{{- if .Values.web.enabled }}
+{{- $frontend := .Values.agentvault.frontend -}}
+{{- if $frontend.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,9 +7,9 @@ metadata:
   labels:
     {{- include "agentvault.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.web.service.type }}
+  type: {{ $frontend.service.type }}
   selector:
     {{- include "agentvault.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: web
-  ports: [{ name: http, port: {{ .Values.web.service.port }}, targetPort: http }]
+  ports: [{ name: http, port: {{ $frontend.service.port }}, targetPort: http }]
 {{- end }}

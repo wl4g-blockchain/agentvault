@@ -1,7 +1,7 @@
 package io.agentvault.e2e.server;
 
 import io.agentvault.e2e.handler.FeedHandler;
-import io.agentvault.e2e.storage.FeedSQLiteStorage;
+import io.agentvault.e2e.storage.FeedSqliteRepository;
 import io.agentvault.sdk.AgentVault;
 import io.agentvault.sdk.config.Config.GrpcConfig;
 import io.agentvault.sdk.config.Config.MqttConfig;
@@ -28,8 +28,8 @@ public class MarketPulseServer {
     }
 
     @Bean(destroyMethod = "close")
-    FeedSQLiteStorage feedSQLiteStorage() {
-        return new FeedSQLiteStorage(required("MARKETPULSE_DATABASE"));
+    FeedSqliteRepository feedSqliteRepository() {
+        return new FeedSqliteRepository(required("MARKETPULSE_DATABASE"));
     }
 
     @Bean
@@ -39,7 +39,7 @@ public class MarketPulseServer {
                 "/mcp",
                 "marketpulse.realtime_news",
                 required("MARKETPULSE_SCENARIO_ID"),
-                required("MARKETPULSE_OFFER_ID"),
+                required("MARKETPULSE_PRICE_ID"),
                 required("MARKETPULSE_RESOURCE_URL"),
                 required("MARKETPULSE_ORIGIN"));
         var registration = new FilterRegistrationBean<>(payee.spring(List.of(route)));

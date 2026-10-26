@@ -82,30 +82,12 @@ public final class Payer {
     public record ReportOutboundResponseRequest(
             @JsonProperty("scenario_id") String scenarioId,
             @JsonProperty("run_id") String runId,
-            @JsonProperty("payment_response") String paymentResponse,
             String protocol,
             ProtocolEvidence evidence) {
-        public ReportOutboundResponseRequest(String scenarioId, String runId, String paymentResponse) {
-            this(scenarioId, runId, paymentResponse, null, null);
-        }
-
-        public ReportOutboundResponseRequest(
-                String scenarioId, String runId, String protocol, ProtocolEvidence evidence) {
-            this(scenarioId, runId, null, protocol, evidence);
-        }
-
         public ReportOutboundResponseRequest {
             new Base.OperationContext(scenarioId, runId);
-            boolean legacy = paymentResponse != null && protocol == null && evidence == null;
-            boolean modern = paymentResponse == null && protocol != null && evidence != null;
-            if (!legacy && !modern) {
-                throw new IllegalArgumentException("provide either legacy payment_response or protocol evidence");
-            }
-            if (legacy && (paymentResponse.length() > 64 * 1024
-                    || !paymentResponse.matches("[\\x21-\\x7e]+"))) {
-                throw new IllegalArgumentException("payment_response must be a bounded official x402 header value");
-            }
-            if (modern) Base.required("protocol", protocol);
+            Base.required("protocol", protocol);
+            if (evidence == null) throw new IllegalArgumentException("protocol evidence is required");
         }
     }
 

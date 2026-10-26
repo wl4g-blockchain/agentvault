@@ -3,7 +3,7 @@ package io.agentvault.e2e.handler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.agentvault.e2e.storage.FeedSQLiteStorage;
+import io.agentvault.e2e.storage.FeedSqliteRepository;
 import io.agentvault.sdk.model.Payee.SettledIncomingPayment;
 import io.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,10 +19,10 @@ import org.springframework.stereotype.Service;
 @Service
 public final class FeedHandler {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private final FeedSQLiteStorage storage;
+    private final FeedSqliteRepository storage;
     private final boolean allowFailureInjection;
 
-    public FeedHandler(FeedSQLiteStorage storage) {
+    public FeedHandler(FeedSqliteRepository storage) {
         this.storage = storage;
         this.allowFailureInjection = "true".equals(System.getenv("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION"));
     }
@@ -74,7 +74,7 @@ public final class FeedHandler {
             return response(400, rpcError(id, -32602, "x-run-id is required"));
         }
         String requestHash = requestHash(body);
-        FeedSQLiteStorage.DeliveryState delivery;
+        FeedSqliteRepository.DeliveryState delivery;
         try {
             delivery = storage.delivery(runId, requestHash);
         } catch (IllegalStateException error) {

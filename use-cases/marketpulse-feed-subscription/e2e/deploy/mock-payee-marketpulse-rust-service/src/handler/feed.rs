@@ -9,17 +9,17 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::storage::feed::{DeliveryState, FeedSQLiteStorage, StoredSettlement};
+use crate::storage::feed::{DeliveryState, FeedSqliteRepository, StoredSettlement};
 
 #[derive(Clone)]
 pub struct FeedHandler {
-    storage: FeedSQLiteStorage,
+    storage: FeedSqliteRepository,
     allow_failure_injection: bool,
 }
 
 impl FeedHandler {
     #[must_use]
-    pub const fn new(storage: FeedSQLiteStorage, allow_failure_injection: bool) -> Self {
+    pub const fn new(storage: FeedSqliteRepository, allow_failure_injection: bool) -> Self {
         Self {
             storage,
             allow_failure_injection,
@@ -118,7 +118,7 @@ fn paid_realtime(
     let Some(run_id) = header_text(headers, "x-run-id") else {
         return response(StatusCode::BAD_REQUEST, &error(id, -32602, "x-run-id is required"));
     };
-    let request_hash = FeedSQLiteStorage::request_hash(body);
+    let request_hash = FeedSqliteRepository::request_hash(body);
     match handler.storage.delivery(run_id, &request_hash) {
         Ok(DeliveryState::Delivered { response: replay }) => return json(StatusCode::OK, replay),
         Ok(DeliveryState::Settled(settlement)) => {

@@ -1,0 +1,68 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: "localhost/quantstream-admin-ui-e2e"
+  tag: "local"
+  pullPolicy: Never
+command: []
+args: []
+env:
+  QUANTSTREAM_UI_HOST: "0.0.0.0"
+  QUANTSTREAM_UI_PORT: "8086"
+  QUANTSTREAM_CLIENT_ID: "client-quantstream-rust"
+  QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-rust-market-ingestion"
+  QUANTSTREAM_APPROVER_PRINCIPAL: "principal-quantstream-rust-admin"
+  AGENTVAULT_MQTT_TIMEOUT_SECONDS: "15"
+  AGENTVAULT_MQTT_URL: "mqtt://127.0.0.1:1883"
+  AGENTVAULT_MQTT_APPROVER_USERNAME: "quantstream-rust-approver"
+  AGENTVAULT_URL: "http://127.0.0.1:8080/api/v1"
+secret:
+  name: marketpulse-e2e-secrets
+  env:
+    QUANTSTREAM_ADMIN_UI_TOKEN: "admin-ui-token"
+    AGENTVAULT_MQTT_APPROVER_PASSWORD: "mqtt-approver-password"
+ports:
+  - { name: http, containerPort: 8086, servicePort: 8086 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: http
+  path: "/healthz"
+  port: 8086
+  initialDelaySeconds: 5
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: "/etc/component/config"
+  content: |
+    
+persistence:
+  enabled: false
+  mountPath: "/var/lib/component"
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }
+
+extraContainers:
+  - name: local-envoy-cm
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
+    imagePullPolicy: IfNotPresent
+    args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: [ALL] }
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+    volumeMounts:
+      - { name: local-envoy-cm-config, mountPath: /etc/envoy, readOnly: true }
+
+extraVolumes:
+  - name: local-envoy-cm-config
+    configMap: { name: local-envoy-cm }

@@ -4,7 +4,7 @@ use super::*;
 fn x402_adapter_uses_only_native_x402_challenge_headers() {
     let challenge: PaymentChallenge = serde_json::from_value(serde_json::json!({
         "scenario_id": "scenario",
-        "offer_id": "offer",
+        "price_id": "price",
         "resource": "https://merchant.example/tool",
         "protocol": "x402",
         "asset": {"network": "eip155:42431", "asset": "USDC", "decimals": 6},
@@ -64,7 +64,7 @@ fn x402_adapter_does_not_misclassify_unrelated_mcp_tool_errors() {
 fn x402_adapter_preserves_chain_specific_v2_payloads_and_rejects_crossovers() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../fixtures/x402_v2_chain_payloads.json"
+        "/../tests/x402_v2_chain_payloads.json"
     )))
     .expect("shared x402 fixture");
     for case in ["evm_eip3009", "solana_spl_exact"] {

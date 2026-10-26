@@ -10,7 +10,7 @@ Mock 包装成 E2E。它模拟两个完整系统：
   语义的新闻数据。`route/feed`（Java 为 `FeedController`）只承载 `/healthz`
   和 `/metrics` 运维接口，收费 MCP Listener 由 server 统一拥有。MCP Endpoint 提供免费的
   `marketpulse.yesterday_news` 与每次 1 USDC 的
-  `marketpulse.realtime_news`。收费 Tool 从服务端 Offer 生成 x402 v2 402，
+  `marketpulse.realtime_news`。收费 Tool 从服务端 Price 生成 x402 v2 402，
   由 AgentVault 调外部官方 Facilitator 验证/结算，只在确认结算后交付数据。
 - **QuantStream** 是买方量化采集平台。Go、Rust、Python、Java、TypeScript
   五个逻辑等价的独立后端定时调用两个 Tool；SDK 检测 402，并按 Case 配置通过 MQTT 或 gRPC 请求
@@ -55,7 +55,7 @@ QuantStream（Go/Rust/Python/Java/TS）
 
 ## 双向额度与审批
 
-Provisioning Manifest 明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
+Console 资源导入夹具明确表达 `Client 1:N Scenario`、`Scenario 1:N Policy`、
 `Policy 1:N Wallet membership`。生产环境允许多个 Policy 共享 Wallet；本矩阵则
 刻意使用五套隔离 Payer 身份和十个不同 EOA，以便直接发现 SDK 之间的越权串用。
 AgentVault 在同等授权结果中优先选择当日使用量最低的钱包，稳定散列负责并列决胜。
@@ -84,7 +84,11 @@ JWT 只在 AgentVault 内部使用；Approval 表保存 `jti`、Claims Hash 和�
 - `payee-{go,rust,python,java,typescript}`：选择一个收款后端；
 - `ingestor-{go,rust,python,java,typescript}`：选择一个付款后端。
 
-五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 E2EUSDC。独立的
+既有 `full` 流程和五语言业务矩阵已使用 x402 v2 / EVM / EIP-3009，在本地 Anvil
+部署 E2EUSDC 并真实转账。显式的 `x402-evm` 场景复用同一完整执行器和五份验证，
+覆盖托管签名、独立 Facilitator verify/settle、审批及交付恢复、两笔 ERC-20 转账、
+四条双向 Ledger、独立回执、十钱包隔离与 Facilitator 原生 Gas 精确守恒，并额外写入
+`payment/x402-evm/evidence.json`，不另建支付状态机。独立的
 `mpp-tempo` 场景验证 Vault 签出的 Tempo type-0x76 `charge`、外部 HTTP
 verify/settle、结算响应丢失后的只读恢复、单次广播、回执绑定，以及包含 pathUSD
 计价 Gas 的余额守恒。显式的 `x402-solana` 场景会在固定版本的本地 Validator 上
@@ -100,27 +104,36 @@ x402 Profile 的 `payment-expires-at`；审批轮询始终复用这个绝对值�
 ```text
 marketpulse-feed-subscription/e2e/
 ├── deploy/
+│   ├── deployer/          # Docker/Kubernetes 生命周期与范围化清理
+│   ├── namespaces.yaml    # 集群级 E2E Namespace 清单
+│   ├── agentvault-helm-shared/
+│   ├── mock-payee-marketpulse-config/
+│   ├── mock-payer-quantstream-config/
 │   ├── anvil/  solana/  facilitator/
 │   ├── mock-payee-marketpulse-{golang,rust,python,java,typescript}-service/
 │   │   └── {main/Application,server,route/feed,handler/feed,storage/feed}
-│   ├── mock-payer-quantstream-ingest-ui/src/
-│   ├── mock-payer-quantstream-ingest-service-golang/
+│   ├── mock-payer-quantstream-ui/src/
+│   ├── mock-payer-quantstream-service-golang/
 │   │   ├── main.go
 │   │   └── pkg/{route,handler,job,agent}/
-│   ├── mock-payer-quantstream-ingest-service-rust/
+│   ├── mock-payer-quantstream-service-rust/
 │   │   └── src/{lib.rs,main.rs,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-python/
+│   ├── mock-payer-quantstream-service-python/
 │   │   └── app/{main.py,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-java/
+│   ├── mock-payer-quantstream-service-java/
 │   │   └── src/io/agentvault/e2e/{Application.java,route/,handler/,job/,agent/}
-│   ├── mock-payer-quantstream-ingest-service-typescript/
+│   ├── mock-payer-quantstream-service-typescript/
 │   │   └── src/{main.ts,route/,handler/,job/,agent/}
 │   └── */tests/           # 与源码相对路径一致的单元测试
-├── common/contract/       # Provisioning 与 MQTT 契约
+├── common/                # 仅含 Python 的案例上下文与公共工具
+├── config/                # AgentVault 运行与初始化配置
+│   ├── agentvault/
+│   │   ├── values.yaml    # 唯一的 Helm/Kubernetes values 来源
+│   │   └── init.import.yaml # 规范化 Console 初始化导入资源
 ├── verifier/              # 结构、业务与资金证据断言
 ├── reports/               # 分层验收报告
 ├── docker-compose.yaml
-└── runner.py              # 仅依赖 Python 标准库的编排器
+└── runner.py              # 依赖统一声明于 requirements.txt 的分层编排器
 ```
 
 五语言后端刻意维持一致的组合方式：极简 `main/Application`、仅含运维接口的
@@ -136,6 +149,7 @@ MCP Service 注册这两个外部 Tool 并接入对应语言的 Payer Middleware
 
 ```bash
 cd use-cases/marketpulse-feed-subscription/e2e
+python3 -m pip install --requirement requirements.txt
 
 python3 runner.py --list
 python3 runner.py -s structure
@@ -146,6 +160,7 @@ python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
 python3 runner.py -s mpp-tempo
 python3 runner.py -s x402-solana
+python3 runner.py -s x402-evm --payer-language rust --payee-language rust --cleanup-after-run
 python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -170,7 +185,8 @@ AgentVault/MarketPulse/QuantStream `*:local` 镜像，以及清单中声明且�
 外部基础镜像、镜像仓库、无关卷、全局 builder cache，亦不会触碰上述命名空间之外的资源。
 
 `--cleanup-after-run` 刻意保持更窄范围：Docker backend 只回收当前 Compose 容器和卷，
-Kubernetes backend 只卸载当前 E2E Helm release；两者都保留本地构建镜像。单独部署、
+Kubernetes backend 卸载当前 E2E Helm release，并删除声明的 E2E namespace 内带专用
+标签的业务证据 Job 和 PVC；两者都保留本地构建镜像。单独部署、
 用于人工验收的 Kubernetes 环境不会被 Docker backend 的运行后清理触碰。
 
 十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
@@ -180,8 +196,16 @@ Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进
 
 ## Kubernetes Namespace 契约
 
-`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，默认仍为 CI 使用的
-Docker。Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
+`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，CLI 默认使用 Docker。
+PR CI 在构建门禁后，用两个独立 runner 并行执行 Docker 和 Kubernetes，复用同一个
+不可变 dirty AgentVault 镜像。每种模式均执行 Rust/Go × Rust/Go × MQTT/gRPC 的八个
+组合，分别上传报告。Kubernetes job 创建固定版本的全新 K3s 集群，内部 Case 串行
+运行（`--matrix-workers 1`）；Docker 保持隔离 worker 并发。最终 PR 评论直接渲染
+两份 Markdown 摘要，只有构建和两种 E2E 都成功才报告整体成功。
+Matrix 的续跑计划和断点绑定 backend 与 SDK scope，Docker 断点不能作为 K8s 通过
+证据；旧记录若未标明 backend，必须开启新 run。
+
+Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
 Job、审批和 PostgreSQL/链上证据采集；共享集群上的 Matrix 会强制串行，避免跨 Case
 状态污染。各组件 Helm Chart 强制 Kubernetes 部署边界：渲染出的 Deployment、Job、
 ConfigMap 和 Service 都从固定 Chart annotation
@@ -250,3 +274,15 @@ Tempo RPC 唯一广播一次，不虚构 x402 式 Facilitator 或重复商户合
 另行覆盖两种 Transport、两种协议和两个角色。MPP session/split/fee-payer/
 delegated method 及手续费/退款/充值/转账/冲正矩阵仍明确 Unsupported，或需要
 独立验收场景。
+
+
+### A2A SDK 验收
+
+`python3 runner.py -s a2a --timeout 600` 顺序执行五语言 A2A 测试，保存
+`payment/a2a/evidence.json` 和各语言原生测试日志。先安装各 SDK 锁定的依赖，
+包括在仓库根目录执行 `pip install -e 'src/adapters/python[test]'`；磁盘有限时，
+通过 `CARGO_TARGET_DIR` 指定有足够空间的构建目录。
+
+该场景通过实际 HTTP 适配器和受控 Vault 端口验证 SDK 边界，不代替链上结算证明。
+既有 `mpp-tempo`、`x402-solana` 和 `full` 场景保留独立的链、账本及余额断言。
+五种语言均覆盖 A2A 0.3 非流式 `message/send`、x402 v2 和 MPP 原生 JSON-RPC 元数据。

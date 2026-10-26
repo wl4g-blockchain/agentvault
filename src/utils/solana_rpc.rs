@@ -31,6 +31,8 @@ use tracing::Instrument as _;
 
 use crate::{apm::inject_current_trace_context, Error, Result};
 
+pub(crate) struct SolanaRpcClient;
+
 const RATE_LIMIT_RETRIES: u8 = 5;
 
 struct BoundedHttpSender {
@@ -195,72 +197,75 @@ impl RpcSender for BoundedHttpSender {
     }
 }
 
-pub(crate) fn client(
-    endpoint: &str,
-    timeout: Duration,
-    max_response_bytes: usize,
-    configured_headers: &BTreeMap<String, String>,
-    allow_insecure_loopback: bool,
-) -> Result<RpcClient> {
-    let url = reqwest::Url::parse(endpoint).map_err(|_| Error::Config("Solana RPC URL is invalid".to_owned()))?;
-    if url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || !matches!(url.scheme(), "http" | "https")
-        || (url.scheme() == "http" && (!allow_insecure_loopback || !url.host_str().is_some_and(is_loopback_host)))
-        || timeout.is_zero()
-        || max_response_bytes == 0
-    {
-        return Err(Error::Config("Solana RPC endpoint or timeout is unsafe".to_owned()));
-    }
-
-    let mut headers = HttpSender::default_headers();
-    for (name, value) in configured_headers {
-        let normalized = name.to_ascii_lowercase();
-        if matches!(
-            normalized.as_str(),
-            "connection"
-                | "content-length"
-                | "content-type"
-                | "host"
-                | "traceparent"
-                | "tracestate"
-                | "transfer-encoding"
-        ) {
-            return Err(Error::Config("Solana RPC secret header name is reserved".to_owned()));
+impl SolanaRpcClient {
+    pub(crate) fn build(
+        endpoint: &str,
+        timeout: Duration,
+        max_response_bytes: usize,
+        configured_headers: &BTreeMap<String, String>,
+        allow_insecure_loopback: bool,
+    ) -> Result<RpcClient> {
+        let url = reqwest::Url::parse(endpoint).map_err(|_| Error::Config("Solana RPC URL is invalid".to_owned()))?;
+        if url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !matches!(url.scheme(), "http" | "https")
+            || (url.scheme() == "http"
+                && (!allow_insecure_loopback || !url.host_str().is_some_and(SolanaRpcClient::is_loopback_host)))
+            || timeout.is_zero()
+            || max_response_bytes == 0
+        {
+            return Err(Error::Config("Solana RPC endpoint or timeout is unsafe".to_owned()));
         }
-        let name = solana_client::client_error::reqwest::header::HeaderName::from_bytes(name.as_bytes())
-            .map_err(|_| Error::Config("Solana RPC header name is invalid".to_owned()))?;
-        let mut value = solana_client::client_error::reqwest::header::HeaderValue::from_str(value)
-            .map_err(|_| Error::Config("Solana RPC header value is invalid".to_owned()))?;
-        value.set_sensitive(true);
-        headers.insert(name, value);
-    }
-    let http = reqwest::Client::builder()
-        .timeout(timeout)
-        .connect_timeout(timeout.min(Duration::from_secs(5)))
-        .pool_idle_timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| Error::Config(format!("build Solana RPC client: {error}")))?;
-    Ok(RpcClient::new_sender(
-        BoundedHttpSender {
-            client: http,
-            endpoint: url,
-            headers,
-            timeout,
-            max_response_bytes,
-            request_id: AtomicU64::new(0),
-            stats: RwLock::new(RpcTransportStats::default()),
-        },
-        RpcClientConfig::default(),
-    ))
-}
 
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || IpAddr::from_str(host).is_ok_and(|address| address.is_loopback())
+        let mut headers = HttpSender::default_headers();
+        for (name, value) in configured_headers {
+            let normalized = name.to_ascii_lowercase();
+            if matches!(
+                normalized.as_str(),
+                "connection"
+                    | "content-length"
+                    | "content-type"
+                    | "host"
+                    | "traceparent"
+                    | "tracestate"
+                    | "transfer-encoding"
+            ) {
+                return Err(Error::Config("Solana RPC secret header name is reserved".to_owned()));
+            }
+            let name = solana_client::client_error::reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| Error::Config("Solana RPC header name is invalid".to_owned()))?;
+            let mut value = solana_client::client_error::reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| Error::Config("Solana RPC header value is invalid".to_owned()))?;
+            value.set_sensitive(true);
+            headers.insert(name, value);
+        }
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .connect_timeout(timeout.min(Duration::from_secs(5)))
+            .pool_idle_timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| Error::Config(format!("build Solana RPC client: {error}")))?;
+        Ok(RpcClient::new_sender(
+            BoundedHttpSender {
+                client: http,
+                endpoint: url,
+                headers,
+                timeout,
+                max_response_bytes,
+                request_id: AtomicU64::new(0),
+                stats: RwLock::new(RpcTransportStats::default()),
+            },
+            RpcClientConfig::default(),
+        ))
+    }
+
+    fn is_loopback_host(host: &str) -> bool {
+        host.eq_ignore_ascii_case("localhost") || IpAddr::from_str(host).is_ok_and(|address| address.is_loopback())
+    }
 }
 
 #[cfg(test)]

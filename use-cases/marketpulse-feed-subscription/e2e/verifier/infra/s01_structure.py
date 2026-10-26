@@ -6,16 +6,24 @@ import re
 from common.context import VerificationContext
 from common.payer_identity import PAYER_IDENTITIES
 from common.project import E2E_ROOT, REPOSITORY_ROOT
+from common.resource_import import ConsoleResourceFixture
 
 
 REQUIRED = (
     "runner.py",
     "deploy/namespaces.yaml",
-    "common/deploy/base.py",
-    "common/deploy/docker.py",
-    "common/deploy/kubernetes.py",
-    "common/deploy/kubernetes_deployer.py",
+    "deploy/deployer/base.py",
+    "deploy/deployer/docker.py",
+    "deploy/deployer/kubernetes.py",
     "common/payer_identity.py",
+    "common/resource_import.py",
+    "config/agentvault/init.import.yaml",
+    "config/agentvault/values-override.yaml",
+    "deploy/agentvault-helm-shared/local-envoy.configmap.yaml",
+    "deploy/mock-payee-marketpulse-config/local-envoy.configmap.yaml",
+    "deploy/mock-payee-marketpulse-config/values-shared-override.yaml",
+    "deploy/mock-payer-quantstream-config/local-envoy.configmap.yaml",
+    "deploy/mock-payer-quantstream-config/values-shared-override.yaml",
     "verifier/payment/s20_full.py",
     "verifier/payment/s21_payer_signing.py",
     "verifier/payment/s22_payee_settlement.py",
@@ -23,8 +31,12 @@ REQUIRED = (
     "verifier/payment/s24_gateway_balance.py",
     "verifier/payment/s25_mpp_tempo.py",
     "verifier/payment/s26_x402_solana.py",
+    "verifier/payment/s27_a2a.py",
+    "verifier/payment/s28_x402_evm.py",
     "verifier/payment/s30_matrix.py",
     "verifier/web/s40_dashboard.py",
+    "verifier/web/wallet_creation.py",
+    "requirements.txt",
     "deploy/anvil/docker-compose.yaml",
     "deploy/solana/docker-compose.yaml",
     "deploy/facilitator/docker-compose.yaml",
@@ -37,7 +49,7 @@ REQUIRED = (
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/route/FeedController.java",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/handler/FeedHandler.java",
-    "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/storage/FeedSQLiteStorage.java",
+    "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/storage/FeedSqliteRepository.java",
     "deploy/mock-payee-marketpulse-python-service/app/main.py",
     "deploy/mock-payee-marketpulse-python-service/app/server.py",
     "deploy/mock-payee-marketpulse-python-service/app/route/feed.py",
@@ -54,33 +66,31 @@ REQUIRED = (
     "deploy/mock-payee-marketpulse-typescript-service/src/route/feed.ts",
     "deploy/mock-payee-marketpulse-typescript-service/src/handler/feed.ts",
     "deploy/mock-payee-marketpulse-typescript-service/src/storage/feed.ts",
-    "deploy/mock-payer-quantstream-ingest-ui/src/server.mjs",
-    "deploy/mock-payer-quantstream-ingest-service-golang/pkg/route/ingestion.go",
-    "deploy/mock-payer-quantstream-ingest-service-golang/pkg/handler/ingestion.go",
-    "deploy/mock-payer-quantstream-ingest-service-golang/pkg/agent/mcp.go",
-    "deploy/mock-payer-quantstream-ingest-service-golang/pkg/job/ingestion_job.go",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/lib.rs",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/route/ingestion.rs",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/handler/ingestion.rs",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/agent/mcp.rs",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/job/ingestion_job.rs",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/main.py",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/route/ingestion.py",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/handler/ingestion.py",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/agent/mcp.py",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/job/ingestion_job.py",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/Application.java",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/route/IngestionController.java",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/handler/IngestionHandler.java",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/agent/MCPHelper.java",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/job/IngestionJob.java",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/main.ts",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/route/ingestion.ts",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/handler/ingestion.ts",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/agent/mcp.ts",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/job/ingestion_job.ts",
-    "common/contract/payment-mqtt.schema.json",
-    "common/contract/scenario.json",
+    "deploy/mock-payer-quantstream-ui/src/server.mjs",
+    "deploy/mock-payer-quantstream-service-golang/pkg/route/ingestion.go",
+    "deploy/mock-payer-quantstream-service-golang/pkg/handler/ingestion.go",
+    "deploy/mock-payer-quantstream-service-golang/pkg/agent/mcp.go",
+    "deploy/mock-payer-quantstream-service-golang/pkg/job/ingestion_job.go",
+    "deploy/mock-payer-quantstream-service-rust/src/lib.rs",
+    "deploy/mock-payer-quantstream-service-rust/src/route/ingestion.rs",
+    "deploy/mock-payer-quantstream-service-rust/src/handler/ingestion.rs",
+    "deploy/mock-payer-quantstream-service-rust/src/agent/mcp.rs",
+    "deploy/mock-payer-quantstream-service-rust/src/job/ingestion_job.rs",
+    "deploy/mock-payer-quantstream-service-python/app/main.py",
+    "deploy/mock-payer-quantstream-service-python/app/route/ingestion.py",
+    "deploy/mock-payer-quantstream-service-python/app/handler/ingestion.py",
+    "deploy/mock-payer-quantstream-service-python/app/agent/mcp.py",
+    "deploy/mock-payer-quantstream-service-python/app/job/ingestion_job.py",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/Application.java",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/route/IngestionController.java",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/handler/IngestionHandler.java",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/agent/MCPHelper.java",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/job/IngestionJob.java",
+    "deploy/mock-payer-quantstream-service-typescript/src/main.ts",
+    "deploy/mock-payer-quantstream-service-typescript/src/route/ingestion.ts",
+    "deploy/mock-payer-quantstream-service-typescript/src/handler/ingestion.ts",
+    "deploy/mock-payer-quantstream-service-typescript/src/agent/mcp.ts",
+    "deploy/mock-payer-quantstream-service-typescript/src/job/ingestion_job.ts",
     "docker-compose.yaml",
 )
 
@@ -95,12 +105,12 @@ DEPLOY_COMPONENTS = (
     "mock-payee-marketpulse-python-service",
     "mock-payee-marketpulse-rust-service",
     "mock-payee-marketpulse-typescript-service",
-    "mock-payer-quantstream-ingest-service-golang",
-    "mock-payer-quantstream-ingest-service-java",
-    "mock-payer-quantstream-ingest-service-python",
-    "mock-payer-quantstream-ingest-service-rust",
-    "mock-payer-quantstream-ingest-service-typescript",
-    "mock-payer-quantstream-ingest-ui",
+    "mock-payer-quantstream-service-golang",
+    "mock-payer-quantstream-service-java",
+    "mock-payer-quantstream-service-python",
+    "mock-payer-quantstream-service-rust",
+    "mock-payer-quantstream-service-typescript",
+    "mock-payer-quantstream-ui",
     "postgres",
     "solana",
     "tempo",
@@ -117,12 +127,12 @@ E2E_NAMESPACE_GROUPS = {
         "mock-payee-marketpulse-typescript-service",
     ),
     "e2e-agentvault-mock-payer": (
-        "mock-payer-quantstream-ingest-service-golang",
-        "mock-payer-quantstream-ingest-service-java",
-        "mock-payer-quantstream-ingest-service-python",
-        "mock-payer-quantstream-ingest-service-rust",
-        "mock-payer-quantstream-ingest-service-typescript",
-        "mock-payer-quantstream-ingest-ui",
+        "mock-payer-quantstream-service-golang",
+        "mock-payer-quantstream-service-java",
+        "mock-payer-quantstream-service-python",
+        "mock-payer-quantstream-service-rust",
+        "mock-payer-quantstream-service-typescript",
+        "mock-payer-quantstream-ui",
     ),
 }
 
@@ -141,6 +151,7 @@ COMPONENT_MANIFESTS = (
 
 SDK_SOURCE_ALLOWLISTS = {
     "golang/pkg": {
+        "model/a2a.go", "payer/a2a.go", "payee/a2a.go",
         "agentvault.go", "config/config.go",
         "model/approval.go", "model/base.go", "model/payee.go", "model/payer.go",
         "payer/payer.go", "payer/standard.go", "payee/payee.go", "payee/standard.go",
@@ -148,13 +159,15 @@ SDK_SOURCE_ALLOWLISTS = {
         "transport/factory.go", "protocol/adapter.go", "protocol/x402.go", "protocol/mpp.go",
     },
     "rust/src": {
+        "model/a2a.rs", "payer/a2a.rs", "payee/a2a.rs",
         "lib.rs", "agentvault.rs", "config/config.rs",
         "model/approval.rs", "model/base.rs", "model/payee.rs", "model/payer.rs",
         "payer/payer.rs", "payer/standard.rs", "payee/payee.rs", "payee/standard.rs",
-        "payee/axum.rs", "transport/transport.rs", "transport/grpc.rs", "transport/mqtt.rs",
+        "payee/axum.rs", "payee/axum_message.rs", "transport/transport.rs", "transport/grpc.rs", "transport/mqtt.rs",
         "transport/factory.rs", "protocol/adapter.rs", "protocol/x402.rs", "protocol/mpp.rs",
     },
     "python/agentvault": {
+        "model/a2a.py", "payer/a2a.py", "payee/a2a.py",
         "__init__.py", "agentvault.py", "config/__init__.py", "config/config.py",
         "model/__init__.py", "model/approval.py", "model/base.py", "model/payee.py", "model/payer.py",
         "payer/__init__.py", "payer/payer.py", "payer/standard.py", "payee/__init__.py",
@@ -164,6 +177,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "protocol/x402.py", "protocol/mpp.py",
     },
     "typescript/src/agentvault": {
+        "model/a2a.ts", "payer/a2a.ts", "payee/a2a.ts",
         "agentvault.ts", "config/config.ts", "model/approval.ts", "model/base.ts",
         "model/payee.ts", "model/payer.ts", "payer/payer.ts", "payer/standard.ts",
         "payee/payee.ts", "payee/standard.ts", "payee/express.ts", "transport/transport.ts",
@@ -171,12 +185,15 @@ SDK_SOURCE_ALLOWLISTS = {
         "transport/factory.ts", "protocol/adapter.ts", "protocol/x402.ts", "protocol/mpp.ts",
     },
     "java/src/io/agentvault/sdk": {
+        "model/A2a.java", "payer/A2aPayerMiddleware.java", "payee/A2aPayeeMiddleware.java",
         "AgentVault.java", "config/Config.java", "model/Approval.java",
         "model/Base.java", "model/Payee.java", "model/Payer.java", "payer/PayerMiddleware.java",
-        "payer/SpringInterceptorPayerMiddleware.java", "payer/JdkHttpPayerMiddleware.java",
+        "payer/SpringRestPayerMiddleware.java", "payer/SpringWebFluxPayerMiddleware.java",
+        "payer/SpringPayerMessages.java", "payer/JdkHttpPayerMiddleware.java",
         "payee/PayeeMiddleware.java",
         "payee/StandardPayeeMiddleware.java", "payee/SpringInterceptorPayeeMiddleware.java",
-        "transport/VaultTransport.java", "transport/GrpcVaultTransport.java", "transport/MqttVaultTransport.java",
+        "transport/VaultTransport.java", "transport/AsyncVaultTransport.java",
+        "transport/GrpcVaultTransport.java", "transport/MqttVaultTransport.java",
         "transport/VaultTransportFactory.java", "protocol/PaymentProtocol.java",
         "protocol/PaymentProtocolFactory.java", "protocol/ProtocolRegistry.java",
         "protocol/X402Adapter.java", "protocol/X402ExactPayload.java", "protocol/MppAdapter.java",
@@ -188,45 +205,109 @@ SDK_TEST_ROOTS = {
     "rust/src": "rust/tests",
     "python/agentvault": "python/tests/agentvault",
     "typescript/src/agentvault": "typescript/tests/agentvault",
-    "java/src/io/agentvault/sdk": "java/tests/io/agentvault/sdk",
+    "java/src/io/agentvault/sdk": "java/test/io/agentvault/sdk",
 }
 
+SHARED_SDK_TEST_CONTRACTS = {
+    "payment_protocol_a2a.json",
+    "payment_protocol_http.json",
+    "payment_protocol_mcp.json",
+    "x402_v2_chain_payloads.json",
+}
+
+ROOT_CMD_FILES = frozenset({
+    "mod.rs", "agentvault.rs", "console.rs", "lifecycle.rs", "payment_runtime.rs",
+    "payment_adapters.rs", "payment_jobs.rs",
+})
+ROOT_HANDLER_TYPES = {
+    "approval": "ApprovalHandler", "client": "PayClientHandler", "scenario": "ScenarioHandler",
+    "policy": "PolicyHandler", "wallet": "WalletHandler", "ledger": "LedgerHandler",
+    "price": "PriceHandler", "intent": "IntentHandler", "event": "EventHandler",
+}
+ROOT_HANDLER_FILES = frozenset({"mod.rs", *(f"{name}.rs" for name in ROOT_HANDLER_TYPES)})
+ROOT_MODEL_FILES = frozenset({
+    "mod.rs", "approval.rs", "balance.rs", "event.rs", "payment.rs", "payment_api.rs",
+    "mqtt.rs", "policy.rs", "price.rs", "receipt.rs", "reconciliation.rs", "resource.rs", "scenario.rs",
+    "settlement.rs", "wallet.rs",
+})
+DOMAIN_MODEL_FILES = frozenset({
+    "mod.rs", "approval.rs", "client.rs", "event.rs", "ledger.rs", "price.rs",
+    "payment.rs", "policy.rs", "receipt.rs", "scenario.rs", "wallet.rs",
+})
+ROOT_MODEL_TEST_FILES = frozenset(f"{name[:-3]}_test.rs" for name in ROOT_MODEL_FILES)
+ROOT_CONFIG_FILES = frozenset({"mod.rs", "config.rs", "foundation.rs", "payment.rs", "validation.rs"})
+ROOT_PAYMENT_FILES = frozenset("""
+    mod.rs api.rs approval.rs approval_grant.rs authorization.rs balance.rs evidence.rs facilitator.rs
+    outbox.rs price.rs provider.rs provider_http.rs reconciliation.rs reconciliation_posting.rs
+    recovery.rs signing.rs validation.rs wallet_import.rs
+    receipt/mod.rs receipt/evm.rs receipt/solana.rs
+    resource/mod.rs resource/apply.rs resource/reader.rs resource/validation.rs
+    settlement/mod.rs settlement/challenge.rs settlement/commit.rs settlement/facts.rs
+    settlement/recovery.rs settlement/verification.rs
+""".split())
+ROOT_JOB_FILES = frozenset({"mod.rs", "approval.rs", "reconciliation.rs"})
+ROOT_CONTROLLER_FILES = frozenset({"mod.rs", "api.rs", "grpc.rs", "mqtt.rs", "principal_context.rs"})
+ROOT_TRANSPORT_FILES = frozenset({
+    "mod.rs", "http.rs", "grpc.rs", "mqtt/mod.rs", "mqtt/command.rs", "mqtt/connection.rs",
+    "mqtt/delivery.rs", "mqtt/state.rs", "mqtt/wire.rs",
+})
+ROOT_PROTOCOL_FILES = frozenset({
+    "mod.rs", "adapter.rs", "factory.rs", "mpp.rs", "mpp_tempo.rs", "mpp_wire.rs",
+    "x402.rs", "x402_evm.rs", "x402_solana.rs", "x402_wire.rs",
+})
+ROOT_APM_FILES = frozenset({"mod.rs", "metrics.rs", "pprof.rs", "telemetry.rs", "management.rs"})
+ROOT_UTILS_FILES = frozenset({
+    "mod.rs", "aead.rs", "clock.rs", "crypto.rs", "error.rs", "evm_client.rs",
+    "runtime_identity.rs", "secret.rs", "secure_material.rs", "solana_rpc.rs", "storage.rs",
+})
+STORAGE_DOMAINS = frozenset({
+    "approval", "approver", "client", "event", "ledger", "price", "outbox", "payment",
+    "policy", "scenario", "signing", "wallet",
+})
+ROOT_STORAGE_FILES = frozenset({
+    "mod.rs", "storage.rs", "postgres.rs", "sqlite.rs", "entity.rs", "query.rs", "schema.rs",
+    *(f"{domain}/{dialect}.rs" for domain in STORAGE_DOMAINS for dialect in ("mod", "postgres", "sqlite")),
+    *(f"{domain}/transactions.rs" for domain in ("approval", "payment", "policy", "signing", "wallet")),
+    "payment/authority.rs", "payment/budget.rs", "payment/mutations.rs", "payment/reconciliation.rs",
+    "wallet/key.rs",
+})
+
 INGESTOR_SOURCE_ALLOWLISTS = {
-    "deploy/mock-payer-quantstream-ingest-service-golang": {
+    "deploy/mock-payer-quantstream-service-golang": {
         "main.go", "pkg/agent/mcp.go", "pkg/handler/ingestion.go",
         "pkg/job/ingestion_job.go", "pkg/route/ingestion.go",
     },
-    "deploy/mock-payer-quantstream-ingest-service-rust/src": {
+    "deploy/mock-payer-quantstream-service-rust/src": {
         "lib.rs", "main.rs", "agent/mod.rs", "agent/mcp.rs", "handler/mod.rs",
         "handler/ingestion.rs", "job/mod.rs", "job/ingestion_job.rs", "route/mod.rs",
         "route/ingestion.rs",
     },
-    "deploy/mock-payer-quantstream-ingest-service-python/app": {
+    "deploy/mock-payer-quantstream-service-python/app": {
         "__init__.py", "main.py", "agent/__init__.py", "agent/mcp.py",
         "handler/__init__.py", "handler/ingestion.py", "job/__init__.py", "job/ingestion_job.py",
         "route/__init__.py", "route/ingestion.py",
     },
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e": {
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e": {
         "Application.java", "agent/MCPHelper.java", "handler/IngestionHandler.java",
         "job/IngestionJob.java", "route/IngestionController.java",
     },
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src": {
+    "deploy/mock-payer-quantstream-service-typescript/src": {
         "main.ts", "agent/mcp.ts", "handler/ingestion.ts", "job/ingestion_job.ts",
         "route/ingestion.ts",
     },
 }
 
 INGESTOR_TEST_ROOTS = {
-    "deploy/mock-payer-quantstream-ingest-service-golang":
-        "deploy/mock-payer-quantstream-ingest-service-golang/tests",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src":
-        "deploy/mock-payer-quantstream-ingest-service-rust/tests",
-    "deploy/mock-payer-quantstream-ingest-service-python/app":
-        "deploy/mock-payer-quantstream-ingest-service-python/tests",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e":
-        "deploy/mock-payer-quantstream-ingest-service-java/tests/io/agentvault/e2e",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src":
-        "deploy/mock-payer-quantstream-ingest-service-typescript/tests",
+    "deploy/mock-payer-quantstream-service-golang":
+        "deploy/mock-payer-quantstream-service-golang/tests",
+    "deploy/mock-payer-quantstream-service-rust/src":
+        "deploy/mock-payer-quantstream-service-rust/tests",
+    "deploy/mock-payer-quantstream-service-python/app":
+        "deploy/mock-payer-quantstream-service-python/tests",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e":
+        "deploy/mock-payer-quantstream-service-java/tests/io/agentvault/e2e",
+    "deploy/mock-payer-quantstream-service-typescript/src":
+        "deploy/mock-payer-quantstream-service-typescript/tests",
 }
 
 PAYEE_SOURCE_ALLOWLISTS = {
@@ -243,7 +324,7 @@ PAYEE_SOURCE_ALLOWLISTS = {
     },
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e": {
         "Application.java", "server/MarketPulseServer.java", "handler/FeedHandler.java", "route/FeedController.java",
-        "storage/FeedSQLiteStorage.java",
+        "storage/FeedSqliteRepository.java",
     },
     "deploy/mock-payee-marketpulse-typescript-service/src": {
         "main.ts", "server.ts", "handler/feed.ts", "route/feed.ts", "storage/feed.ts",
@@ -289,7 +370,7 @@ SDK_MODEL_CONTRACTS = {
                            "type ReportOutboundResponseRequest", "type ReportOutboundResponseResponse",
                            "type BalanceQuery", "type PaymentBalance", "type PayerRequestContext",
                            "type PayerHTTPRequest", "type PayerHTTPResponse", "type AuthorizedPayment"),
-        "model/payee.go": ("type ResolveOfferRequest", "type PaymentOffer", "type PayeeOperation",
+        "model/payee.go": ("type ResolvePriceRequest", "type PaymentPrice", "type PayeeOperation",
                            "type CreateChallengeRequest", "type VerifyPaymentRequest", "type PaymentVerification",
                            "type SettlePaymentRequest", "type SettledIncomingPayment",
                            "type HTTPProtectionRequest", "type MCPProtectionRequest", "type ProtectionOutcome"),
@@ -307,7 +388,7 @@ SDK_MODEL_CONTRACTS = {
                            "pub struct BalanceQuery", "pub struct PaymentBalance", "pub struct PayerRequestContext",
                            "pub struct PayerHttpRequest", "pub struct PayerHttpResponse",
                            "pub struct AuthorizedPayment"),
-        "model/payee.rs": ("pub struct ResolveOfferRequest", "pub struct PaymentOffer", "pub struct PayeeOperation",
+        "model/payee.rs": ("pub struct ResolvePriceRequest", "pub struct PaymentPrice", "pub struct PayeeOperation",
                            "pub struct CreateChallengeRequest", "pub struct VerifyPaymentRequest",
                            "pub struct PaymentVerification", "pub struct SettlePaymentRequest",
                             "pub struct SettledIncomingPayment",
@@ -325,7 +406,7 @@ SDK_MODEL_CONTRACTS = {
                            "class ReportOutboundResponseRequest", "class ReportOutboundResponseResponse",
                            "class BalanceQuery", "class PaymentBalance", "class PayerRequestContext",
                            "class PayerHttpRequest", "class PayerHttpResponse", "class AuthorizedPayment"),
-        "model/payee.py": ("class ResolveOfferRequest", "class PaymentOffer", "class PayeeOperation",
+        "model/payee.py": ("class ResolvePriceRequest", "class PaymentPrice", "class PayeeOperation",
                            "class CreateChallengeRequest", "class VerifyPaymentRequest", "class PaymentVerification",
                            "class SettlePaymentRequest", "class SettledIncomingPayment",
                            "class HttpProtectionRequest", "class McpProtectionRequest", "class ProtectionOutcome"),
@@ -339,11 +420,11 @@ SDK_MODEL_CONTRACTS = {
                               "interface SubmitApprovalDecisionRequest"),
         "model/payer.ts": ("type AuthorizationOutcome", "interface PaymentRequired",
                            "interface AuthorizePaymentRequest", "interface AuthorizePaymentResponse",
-                           "type ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
+                           "interface ReportOutboundResponseRequest", "interface ReportOutboundResponseResponse",
                            "interface BalanceQuery", "interface PaymentBalance", "class PayerRequestContext",
                            "interface PayerHttpRequest", "interface PayerHttpResponse",
                            "interface AuthorizedPayment"),
-        "model/payee.ts": ("interface ResolveOfferRequest", "interface PaymentOffer", "interface PayeeOperation",
+        "model/payee.ts": ("interface ResolvePriceRequest", "interface PaymentPrice", "interface PayeeOperation",
                            "interface CreateChallengeRequest", "interface VerifyPaymentRequest",
                            "interface PaymentVerification", "interface SettlePaymentRequest",
                            "interface SettledIncomingPayment",
@@ -363,7 +444,7 @@ SDK_MODEL_CONTRACTS = {
                              "record ReportOutboundResponseResponse", "record BalanceQuery",
                              "record PaymentBalance", "record PayerRequestContext", "record PayerHttpRequest",
                              "record PayerHttpResponse", "record AuthorizedPayment"),
-        "model/Payee.java": ("record ResolveOfferRequest", "record PaymentOffer", "record PayeeOperation",
+        "model/Payee.java": ("record ResolvePriceRequest", "record PaymentPrice", "record PayeeOperation",
                              "record CreateChallengeRequest", "record VerifyPaymentRequest",
                              "record PaymentVerification", "record SettlePaymentRequest",
                              "record SettledIncomingPayment", "record HttpProtectionRequest",
@@ -375,19 +456,19 @@ SDK_LOGICAL_CONTRACTS = {
     "golang/pkg": {
         "agentvault.go": ("type AgentVault", "Payer(", "Payee(", "GetPendingApprovals", "SubmitApprovalDecision"),
         "model/payer.go": ("type PayerRequestContext", "type PayerHTTPRequest", "type PayerHTTPResponse", "type AuthorizedPayment", "type BalanceQuery"),
-        "model/payee.go": ("type PayeeOperation", "type ResolveOfferRequest", "type ProtectionOutcome"),
+        "model/payee.go": ("type PayeeOperation", "type ResolvePriceRequest", "type ProtectionOutcome"),
         "payer/payer.go": ("type PayerMiddleware", "Authorize(", "Report(", "CredentialHeader(", "GetPayment(", "GetReceipt(", "GetBalance(",
                             "protocolHint != \"\" && intent.Protocol != protocolHint", "intent.ScenarioID != m.config.ScenarioID",
                             "intent.WalletID == nil", "intent.PolicyID == \"\"",
                             "intent.RunID != operation.RunID", "DeliveryRetries", "StatusServiceUnavailable"),
         "payer/standard.go": ("type StandardPayerMiddleware", "*PayerMiddleware", "RoundTrip(", "StatusPaymentRequired", "CheckRedirect", "m.Deliver("),
         "payer/payer_test.go": ("ForwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
-        "payee/payee.go": ("type PayeeMiddleware", "ErrInvalidPayment", "Challenge(", "Protect(", "ResolveOffer(", "GetReceipt(",
+        "payee/payee.go": ("type PayeeMiddleware", "ErrInvalidPayment", "Challenge(", "Protect(", "ResolvePrice(", "GetReceipt(",
                             "OperationContext: settlementContext",
                             "intent.Asset != challenge.Asset", "payment.Intent.Status != model.PaymentStatusSettled",
                             "payment.Receipt.Status != model.PaymentStatusSettled"),
         "payee/gin.go": ("type GinPayeeMiddleware", "Handler() gin.HandlerFunc", "NewMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
-        "payee/standard.go": ("type StandardPayeeMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
+        "payee/standard.go": ("type StdHttpMiddleware", "*PayeeMiddleware", "NewStandardMCPToolRoute", "parseMCPCall", "errors.Is(err, ErrInvalidPayment)"),
         "payee/payee_test.go": ("RejectsInvalidPaymentBeforeSettlement", "/api/v1/payee/verify", "ErrInvalidPayment"),
         "transport/transport.go": ("type Transport interface",),
         "transport/grpc.go": ("type GrpcVaultTransport",),
@@ -396,14 +477,14 @@ SDK_LOGICAL_CONTRACTS = {
     "rust/src": {
         "agentvault.rs": ("pub struct AgentVault", "pub fn payer", "pub fn payee", "get_pending_approvals", "submit_approval_decision"),
         "model/payer.rs": ("pub struct PayerRequestContext", "pub struct PayerHttpRequest", "pub struct PayerHttpResponse", "pub struct AuthorizedPayment", "pub struct BalanceQuery"),
-        "model/payee.rs": ("pub struct PayeeOperation", "pub struct ResolveOfferRequest", "pub enum ProtectionOutcome"),
+        "model/payee.rs": ("pub struct PayeeOperation", "pub struct ResolvePriceRequest", "pub enum ProtectionOutcome"),
         "payer/payer.rs": ("pub struct PayerMiddleware", "pub async fn authorize", "pub async fn report", "pub fn credential_header", "pub async fn get_payment", "pub async fn get_receipt", "pub async fn get_balance",
                             "protocol_hint.is_some_and", "intent.scenario_id != config.scenario_id",
                             "intent.wallet_id.as_deref().is_none_or", "intent.policy_id.as_deref().is_none_or",
                             "intent.run_id != context.run_id", "delivery_retries", "view.status != 503"),
         "payer/standard.rs": ("pub struct ReqwestPayerMiddleware", "impl<T> Middleware", "Policy::none", ".deliver(&context"),
         "payer/payer_test.rs": ("payer_forwards_captured_protocol_hint_without_local_projection", "payment-protocol", "mpp"),
-        "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_offer", "pub async fn get_receipt",
+        "payee/payee.rs": ("pub struct PayeeMiddleware", "pub async fn challenge", "pub async fn protect", "pub async fn resolve_price", "pub async fn get_receipt",
                             "OperationContext::new(operation.scenario_id.clone(), operation.run_id.clone())",
                             "intent.asset != challenge.asset", "payment.intent.status != crate::PaymentStatus::Settled",
                             "payment.receipt.status != crate::PaymentStatus::Settled"),
@@ -416,7 +497,7 @@ SDK_LOGICAL_CONTRACTS = {
     "python/agentvault": {
         "agentvault.py": ("class AgentVault", "def payer", "def payee", "def get_pending_approvals", "def submit_approval_decision"),
         "model/payer.py": ("class PayerRequestContext", "class PayerHttpRequest", "class PayerHttpResponse", "class AuthorizedPayment", "class BalanceQuery"),
-        "model/payee.py": ("class PayeeOperation", "class ResolveOfferRequest"),
+        "model/payee.py": ("class PayeeOperation", "class ResolvePriceRequest"),
         "payer/payer.py": ("class PayerMiddleware", "def authorize", "def report", "def credential_header", "def get_payment", "def get_receipt", "def get_balance",
                             "required.protocol_hint is not None and intent.protocol != required.protocol_hint",
                             "intent.scenario_id != self.config.scenario_id", "not intent.wallet_id",
@@ -424,7 +505,7 @@ SDK_LOGICAL_CONTRACTS = {
                             "self.config.delivery_retries", "response_view.status != 503"),
         "payer/standard.py": ("class HttpxPayerMiddleware", "async def request", "follow_redirects=False", "stream=True", "_read_bounded", "self.core.deliver("),
         "payer/payer_test.py": ("test_captured_protocol_hint_is_checked_against_vault_result", "payment-protocol", "mpp"),
-        "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_offer", "def get_receipt",
+        "payee/payee.py": ("class PayeeMiddleware", "def challenge", "def protect", "def resolve_price", "def get_receipt",
                             "operation.settlement_context(), verification.intent.id",
                             "intent.asset != challenge.asset", "intent.status.value != \"settled\"",
                             "receipt.status.value != \"settled\""),
@@ -437,7 +518,7 @@ SDK_LOGICAL_CONTRACTS = {
     "typescript/src/agentvault": {
         "agentvault.ts": ("class AgentVault", "payer(", "payee(", "getPendingApprovals", "submitApprovalDecision"),
         "model/payer.ts": ("class PayerRequestContext", "interface PayerHttpRequest", "interface PayerHttpResponse", "interface AuthorizedPayment", "interface BalanceQuery"),
-        "model/payee.ts": ("interface PayeeOperation", "interface ResolveOfferRequest", "type ProtectionOutcome"),
+        "model/payee.ts": ("interface PayeeOperation", "interface ResolvePriceRequest", "type ProtectionOutcome"),
         "payer/payer.ts": ("class PayerMiddleware", "async authorize", "async report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
                             "protocolHint !== null && intent.protocol !== protocolHint",
                             "intent.scenario_id !== this.config.scenarioId", "!intent.wallet_id",
@@ -445,7 +526,7 @@ SDK_LOGICAL_CONTRACTS = {
                             "this.config.deliveryRetries", "responseView.status !== 503"),
         "payer/standard.ts": ("class FetchPayerMiddleware", "async request", "redirect: 'manual'", "this.core.deliver("),
         "payer/payer_test.ts": ("forwards captured protocol hints without local projections", "payment-protocol", "mpp"),
-        "payee/payee.ts": ("class PayeeMiddleware", "class InvalidPaymentError", "async challenge", "async protect", "resolveOffer", "getReceipt",
+        "payee/payee.ts": ("class PayeeMiddleware", "class InvalidPaymentError", "async challenge", "async protect", "resolvePrice", "getReceipt",
                             "const settlement = operationContext(operation)",
                             "!sameAsset(intent.asset, challenge.asset)", "intent.status !== 'settled'",
                             "receipt.status !== 'settled'"),
@@ -458,21 +539,22 @@ SDK_LOGICAL_CONTRACTS = {
     "java/src/io/agentvault/sdk": {
         "AgentVault.java": ("class AgentVault", "payer(", "payee(", "getPendingApprovals", "submitApprovalDecision"),
         "model/Payer.java": ("record PayerRequestContext", "record PayerHttpRequest", "record PayerHttpResponse", "record AuthorizedPayment", "record BalanceQuery"),
-        "model/Payee.java": ("record PayeeOperation", "record ResolveOfferRequest", "interface ProtectionOutcome"),
-        "payer/PayerMiddleware.java": ("class PayerMiddleware", "SpringInterceptorPayerMiddleware spring()", "AuthorizedPayment authorize", "void report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
+        "model/Payee.java": ("record PayeeOperation", "record ResolvePriceRequest", "interface ProtectionOutcome"),
+        "payer/PayerMiddleware.java": ("class PayerMiddleware", "SpringRestPayerMiddleware spring()", "AuthorizedPayment authorize", "void report", "credentialHeader", "getPayment", "getReceipt", "getBalance",
                             "challenge.protocolHint() != null", "!config.scenarioId().equals(intent.scenarioId())",
                             "intent.walletId() == null || intent.walletId().isBlank()",
                             "intent.policyId() == null || intent.policyId().isBlank()",
                             "!context.runId().equals(intent.runId())", "config.deliveryRetries()", "view.status() != 503"),
-        "payer/SpringInterceptorPayerMiddleware.java": ("class SpringInterceptorPayerMiddleware", "intercept(", "HttpClient.Redirect.NEVER", "value() != 402", "core.deliver("),
+        "payer/SpringRestPayerMiddleware.java": ("class SpringRestPayerMiddleware", "intercept(", "HttpClient.Redirect.NEVER", "value() != 402", "core.deliver("),
         "payer/PayerMiddlewareTest.java": ("forwardsCapturedProtocolHintWithoutLocalProjection", "payment-protocol", "mpp"),
-        "payee/PayeeMiddleware.java": ("class PayeeMiddleware", "challenge(", "protect(", "resolveOffer", "getReceipt",
+        "payee/PayeeMiddleware.java": ("class PayeeMiddleware", "challenge(", "protect(", "resolvePrice", "getReceipt",
                             "new SettlePaymentRequest(settlement, verification.intent().id()",
                             "!challenge.asset().equals(intent.asset())", "payment.intent().status() != Base.PaymentStatus.SETTLED",
                             "payment.receipt().status() != Base.PaymentStatus.SETTLED"),
         "payee/SpringInterceptorPayeeMiddleware.java": ("class SpringInterceptorPayeeMiddleware", "doFilterInternal", "mcpTool", "mcpCall"),
         "payee/PayeeMiddlewareTest.java": ("rejectsInvalidPaymentBeforeSettlement", "/api/v1/payee/verify", "SecurityException"),
         "transport/VaultTransport.java": ("interface VaultTransport",),
+        "transport/AsyncVaultTransport.java": ("interface AsyncVaultTransport extends VaultTransport", "CompletableFuture"),
         "transport/GrpcVaultTransport.java": ("class GrpcVaultTransport",),
         "transport/MqttVaultTransport.java": ("class MqttVaultTransport", "maxResponseBytes"),
     },
@@ -495,19 +577,19 @@ JOB_CONTRACTS = {
 }
 
 JOB_FILES = {
-    "golang": "deploy/mock-payer-quantstream-ingest-service-golang/pkg/job/ingestion_job.go",
-    "rust": "deploy/mock-payer-quantstream-ingest-service-rust/src/job/ingestion_job.rs",
-    "python": "deploy/mock-payer-quantstream-ingest-service-python/app/job/ingestion_job.py",
-    "java": "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/job/IngestionJob.java",
-    "typescript": "deploy/mock-payer-quantstream-ingest-service-typescript/src/job/ingestion_job.ts",
+    "golang": "deploy/mock-payer-quantstream-service-golang/pkg/job/ingestion_job.go",
+    "rust": "deploy/mock-payer-quantstream-service-rust/src/job/ingestion_job.rs",
+    "python": "deploy/mock-payer-quantstream-service-python/app/job/ingestion_job.py",
+    "java": "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/job/IngestionJob.java",
+    "typescript": "deploy/mock-payer-quantstream-service-typescript/src/job/ingestion_job.ts",
 }
 
 MCP_FILES = {
-    "golang": "deploy/mock-payer-quantstream-ingest-service-golang/pkg/agent/mcp.go",
-    "rust": "deploy/mock-payer-quantstream-ingest-service-rust/src/agent/mcp.rs",
-    "python": "deploy/mock-payer-quantstream-ingest-service-python/app/agent/mcp.py",
-    "java": "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/agent/MCPHelper.java",
-    "typescript": "deploy/mock-payer-quantstream-ingest-service-typescript/src/agent/mcp.ts",
+    "golang": "deploy/mock-payer-quantstream-service-golang/pkg/agent/mcp.go",
+    "rust": "deploy/mock-payer-quantstream-service-rust/src/agent/mcp.rs",
+    "python": "deploy/mock-payer-quantstream-service-python/app/agent/mcp.py",
+    "java": "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/agent/MCPHelper.java",
+    "typescript": "deploy/mock-payer-quantstream-service-typescript/src/agent/mcp.ts",
 }
 
 MCP_CONTRACTS = {
@@ -553,23 +635,23 @@ PAYER_FORBIDDEN_CHAIN_PATTERNS = (
 PAYEE_FRAMEWORK_CONTRACTS = {
     "deploy/mock-payee-marketpulse-golang-service/pkg/server.go": (
         "GinPayeeMiddleware", "VaultTransportConfig", "NewFromConfig",
-        "NewFeedSQLiteStorage", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
+        "NewFeedSqliteRepository", "NewFeedHandler", "NewFeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-rust-service/src/server.rs": (
         "AxumPayeeMiddleware", "VaultTransportConfig", "AgentVault::from_config",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-python-service/app/server.py": (
         "FastAPI", "FastPayeeMiddleware", "VaultTransportConfig", "AgentVault.from_config",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", '"/mcp"',
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java": (
         "MarketPulseServer", "SpringInterceptorPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
-        "FeedSQLiteStorage", "McpEndpoint", '"/mcp"',
+        "FeedSqliteRepository", "McpEndpoint", '"/mcp"',
     ),
     "deploy/mock-payee-marketpulse-typescript-service/src/server.ts": (
         "ExpressPayeeMiddleware", "VaultTransportConfig", "AgentVault.fromConfig",
-        "FeedSQLiteStorage", "FeedHandler", "FeedRouter", "'/mcp'",
+        "FeedSqliteRepository", "FeedHandler", "FeedRouter", "'/mcp'",
     ),
 }
 
@@ -590,18 +672,18 @@ PAYEE_ROUTE_FILES = (
 )
 
 PAYER_ROUTE_FILES = (
-    "deploy/mock-payer-quantstream-ingest-service-golang/pkg/route/ingestion.go",
-    "deploy/mock-payer-quantstream-ingest-service-rust/src/route/ingestion.rs",
-    "deploy/mock-payer-quantstream-ingest-service-python/app/route/ingestion.py",
-    "deploy/mock-payer-quantstream-ingest-service-java/src/io/agentvault/e2e/route/IngestionController.java",
-    "deploy/mock-payer-quantstream-ingest-service-typescript/src/route/ingestion.ts",
+    "deploy/mock-payer-quantstream-service-golang/pkg/route/ingestion.go",
+    "deploy/mock-payer-quantstream-service-rust/src/route/ingestion.rs",
+    "deploy/mock-payer-quantstream-service-python/app/route/ingestion.py",
+    "deploy/mock-payer-quantstream-service-java/src/io/agentvault/e2e/route/IngestionController.java",
+    "deploy/mock-payer-quantstream-service-typescript/src/route/ingestion.ts",
 )
 
 LANGUAGE_IMAGE_COMPONENTS = (
     *(f"mock-payee-marketpulse-{language}-service" for language in (
         "rust", "golang", "java", "python", "typescript",
     )),
-    *(f"mock-payer-quantstream-ingest-service-{language}" for language in (
+    *(f"mock-payer-quantstream-service-{language}" for language in (
         "rust", "golang", "java", "python", "typescript",
     )),
 )
@@ -645,6 +727,8 @@ def verify(_context: VerificationContext) -> str:
     forbidden_entry = E2E_ROOT / "deploy" / "e2e.sh"
     if forbidden_entry.exists():
         raise RuntimeError("runner.py must be the only outer E2E orchestrator; delete deploy/e2e.sh")
+    if (E2E_ROOT / "tests").exists():
+        raise RuntimeError("top-level e2e/tests duplicates runner scenarios; keep checks in verifier scenarios")
     outer_python = sorted(path.name for path in E2E_ROOT.glob("*.py"))
     if outer_python != ["runner.py"]:
         raise RuntimeError(f"runner.py must be the only outer Python entry: {outer_python}")
@@ -665,15 +749,18 @@ def verify(_context: VerificationContext) -> str:
             raise RuntimeError(f"the auditor does not mount {language} payer evidence read-only")
         if f":/evidence/marketpulse-{language}:ro" not in compose:
             raise RuntimeError(f"the auditor does not mount {language} payee evidence read-only")
-    _verify_sdk_sources()
-    _verify_ingestor_sources()
-    _verify_ingestion_contracts()
-    _verify_payer_selection_boundary()
-    _verify_payer_chain_boundary()
-    _verify_wallet_pool_contract()
-    _verify_run_identity_contract()
-    _verify_kubernetes_namespace_boundaries()
-    _verify_runtime_image_boundaries()
+    StructureVerifier._verify_global_e2e_layout()
+    StructureVerifier._verify_root_rust_layout()
+    StructureVerifier._verify_shared_sdk_test_contracts()
+    StructureVerifier._verify_sdk_sources()
+    StructureVerifier._verify_ingestor_sources()
+    StructureVerifier._verify_ingestion_contracts()
+    StructureVerifier._verify_payer_selection_boundary()
+    StructureVerifier._verify_payer_chain_boundary()
+    StructureVerifier._verify_wallet_pool_contract()
+    StructureVerifier._verify_run_identity_contract()
+    StructureVerifier._verify_kubernetes_namespace_boundaries()
+    StructureVerifier._verify_runtime_image_boundaries()
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
@@ -682,378 +769,692 @@ def verify(_context: VerificationContext) -> str:
     )
 
 
-def _verify_runtime_image_boundaries() -> None:
-    errors: list[str] = []
-    for component in LANGUAGE_IMAGE_COMPONENTS:
-        dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
-        stages = [
-            line.strip()
-            for line in dockerfile.read_text(encoding="utf-8").splitlines()
-            if line.strip().startswith("FROM ")
-        ]
-        if len(stages) != 2 or " AS builder" not in stages[0]:
-            errors.append(f"{component} must have exactly one builder and one runtime stage")
-        elif "_RUNTIME_IMAGE}" not in stages[1] or "_BUILD_IMAGE}" in stages[1]:
-            errors.append(f"{component} runtime stage must not reuse its build image")
-    if errors:
-        raise RuntimeError("; ".join(errors))
-
-
-def _verify_kubernetes_namespace_boundaries() -> None:
-    namespace_manifest = (E2E_ROOT / "deploy" / "namespaces.yaml").read_text(encoding="utf-8")
-    declared = frozenset(re.findall(r"(?m)^  name: (e2e-agentvault-[a-z0-9-]+)$", namespace_manifest))
-    if declared != REQUIRED_E2E_NAMESPACES:
-        missing = sorted(REQUIRED_E2E_NAMESPACES - declared)
-        extra = sorted(declared - REQUIRED_E2E_NAMESPACES)
-        raise RuntimeError(f"invalid E2E namespaces: missing={missing}, extra={extra}")
-
-    errors: list[str] = []
-    agentvault_values = (E2E_ROOT / "common" / "agentvault-values.yaml").read_text(encoding="utf-8")
-    if not re.search(r"(?m)^fullnameOverride: agentvault$", agentvault_values):
-        errors.append("AgentVault E2E resources must use the production-style agentvault name")
-    for namespace, components in E2E_NAMESPACE_GROUPS.items():
-        for component in components:
-            chart_root = E2E_ROOT / "deploy" / component / "helm"
-            chart = (chart_root / "Chart.yaml").read_text(encoding="utf-8")
-            annotation = f"agentvault.io/e2e-namespace: {namespace}"
-            if annotation not in chart:
-                errors.append(f"{component} must target {namespace}")
-            name_match = re.search(r"(?m)^name: ([a-z0-9-]+)$", chart)
-            if name_match is None or name_match.group(1).startswith("e2e-"):
-                errors.append(f"{component} must use a production-style Chart name")
-            template = (chart_root / "templates" / "resources.yaml").read_text(encoding="utf-8")
-            if 'index .Chart.Annotations "agentvault.io/e2e-namespace"' not in template:
-                errors.append(f"{component} does not source its namespace from the Chart contract")
-            if template.count("namespace: {{ $namespace }}") != 4:
-                errors.append(f"{component} must namespace its workload, ConfigMap, and Service")
-            if 'hasPrefix "e2e-agentvault-" $namespace' not in template:
-                errors.append(f"{component} does not reject a non-E2E namespace")
-            if "ne .Release.Namespace $namespace" not in template:
-                errors.append(f"{component} does not bind Helm release state to its resource namespace")
-            if "{{- $name := .Chart.Name -}}" not in template:
-                errors.append(f"{component} must not prefix resource names with its E2E release")
-    if errors:
-        raise RuntimeError("; ".join(errors))
-
-
-def _verify_sdk_sources() -> None:
-    adapters = REPOSITORY_ROOT / "src" / "adapters"
-    errors: list[str] = []
-    source_text: list[str] = []
-    for relative_root, expected in SDK_SOURCE_ALLOWLISTS.items():
-        root = adapters / relative_root
-        actual = {
-            path.relative_to(root).as_posix()
-            for path in root.rglob("*")
+class StructureVerifier:
+    @staticmethod
+    def _verify_global_e2e_layout() -> None:
+        common_root = E2E_ROOT / "common"
+        invalid_common = sorted(
+            path.relative_to(E2E_ROOT).as_posix()
+            for path in common_root.rglob("*")
             if path.is_file()
-            and path.suffix in SOURCE_SUFFIXES
-            and "tests" not in path.relative_to(root).parts
+            and "__pycache__" not in path.parts
+            and path.suffix != ".py"
+        )
+        if invalid_common:
+            raise RuntimeError("E2E common may contain only Python source: " + ", ".join(invalid_common))
+
+        deployer_root = E2E_ROOT / "deploy" / "deployer"
+        expected_deployer_files = {"__init__.py", "base.py", "docker.py", "kubernetes.py"}
+        actual_deployer_files = {
+            path.name
+            for path in deployer_root.iterdir()
+            if path.is_file() and path.suffix == ".py"
         }
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
-        if missing:
-            errors.append(f"{relative_root} missing: {', '.join(missing)}")
-        if extra:
-            errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
-        _verify_test_mirror(adapters, relative_root, root, errors)
-        source_text.extend(path.read_text(encoding="utf-8") for path in root.rglob("*")
-                           if path.is_file() and path.suffix in SOURCE_SUFFIXES)
-    joined = "\n".join(source_text)
-    stale = [symbol for symbol in FORBIDDEN_SDK_SYMBOLS if symbol in joined]
-    if stale:
-        errors.append("forbidden obsolete SDK symbols: " + ", ".join(stale))
-    stale_patterns = [pattern for pattern in FORBIDDEN_SDK_PATTERNS if re.search(pattern, joined)]
-    if stale_patterns:
-        errors.append("forbidden divergent SDK patterns: " + ", ".join(stale_patterns))
-    for relative_root, contracts in SDK_MODEL_CONTRACTS.items():
-        root = adapters / relative_root
-        for relative_file, required_tokens in contracts.items():
-            content = (root / relative_file).read_text(encoding="utf-8")
-            missing = [token for token in required_tokens if token not in content]
-            if missing:
-                errors.append(f"{relative_root}/{relative_file} misses DTO parity: {', '.join(missing)}")
-    for relative_root, contracts in SDK_LOGICAL_CONTRACTS.items():
-        root = adapters / relative_root
-        for relative_file, required_tokens in contracts.items():
-            source = root / relative_file
-            if not source.is_file():
-                source = adapters / SDK_TEST_ROOTS[relative_root] / relative_file
-            content = source.read_text(encoding="utf-8")
-            missing = [token for token in required_tokens if token not in content]
-            if missing:
-                errors.append(f"{relative_root}/{relative_file} misses logic: {', '.join(missing)}")
-    for relative_root, (relative_file, declarations) in MIDDLEWARE_MODEL_DECLARATIONS.items():
-        content = (adapters / relative_root / relative_file).read_text(encoding="utf-8")
-        duplicated = [declaration for declaration in declarations if declaration in content]
-        if duplicated:
-            errors.append(f"{relative_root}/{relative_file} redeclares model types: {', '.join(duplicated)}")
-    if errors:
-        raise RuntimeError("; ".join(errors))
+        if actual_deployer_files != expected_deployer_files:
+            raise RuntimeError(
+                "E2E deployer modules drifted: "
+                f"expected={sorted(expected_deployer_files)}, actual={sorted(actual_deployer_files)}"
+            )
+
+        duplicate_requirements = sorted(path.name for path in E2E_ROOT.glob("requirements-*.txt"))
+        if duplicate_requirements:
+            raise RuntimeError(
+                "requirements.txt must be the unique E2E dependency definition: "
+                + ", ".join(duplicate_requirements)
+            )
+
+        config_root = E2E_ROOT / "config"
+        redundant_values = sorted(
+            path.relative_to(E2E_ROOT).as_posix()
+            for path in E2E_ROOT.rglob("*.yaml")
+            if path.name in {"helm-values.yaml", "kubernetes-values.yaml"}
+        )
+        if redundant_values:
+            raise RuntimeError(
+                "ambiguous helm-values.yaml/kubernetes-values.yaml files are forbidden: "
+                + ", ".join(redundant_values)
+            )
+
+        actual_config_files = {
+            path.relative_to(config_root).as_posix()
+            for path in config_root.rglob("*")
+            if path.is_file()
+        }
+        expected_config_files = {"agentvault/init.import.yaml", "agentvault/values-override.yaml"}
+        if actual_config_files != expected_config_files:
+            raise RuntimeError(
+                "E2E config must contain only AgentVault runtime configuration: "
+                f"expected={sorted(expected_config_files)}, actual={sorted(actual_config_files)}"
+            )
+
+        shared_deploy_contracts = {
+            "agentvault-helm-shared": {"local-envoy.configmap.yaml"},
+            "mock-payee-marketpulse-config": {
+                "local-envoy.configmap.yaml",
+                "values-shared-override.yaml",
+            },
+            "mock-payer-quantstream-config": {
+                "local-envoy.configmap.yaml",
+                "values-shared-override.yaml",
+            },
+        }
+        for component, expected_names in shared_deploy_contracts.items():
+            component_root = E2E_ROOT / "deploy" / component
+            actual_names = {path.name for path in component_root.iterdir() if path.is_file()}
+            if actual_names != expected_names:
+                raise RuntimeError(
+                    f"E2E shared Helm assets drifted for {component}: "
+                    f"expected={sorted(expected_names)}, actual={sorted(actual_names)}"
+                )
+
+        import_source = (config_root / "agentvault" / "init.import.yaml").read_text(encoding="utf-8")
+        if re.search(r"(?m)^---\s*\n\s*\{", import_source):
+            raise RuntimeError("init.import.yaml must use native YAML mappings, not JSON documents")
 
 
-def _verify_test_mirror(adapters, relative_root: str, source_root, errors: list[str]) -> None:
-    test_root = adapters / SDK_TEST_ROOTS[relative_root]
-    sources = {
-        path.relative_to(source_root)
-        for path in source_root.rglob("*")
-        if path.is_file()
-        and path.suffix in SOURCE_SUFFIXES
-        and path.name != "__init__.py"
-        and test_root not in path.parents
-    }
-    if relative_root.startswith("java/"):
-        expected = {path.with_name(f"{path.stem}Test.java") for path in sources}
-    else:
-        expected = {path.with_name(f"{path.stem}_test{path.suffix}") for path in sources}
-    actual = {
-        path.relative_to(test_root)
-        for path in test_root.rglob("*")
-        if path.is_file() and path.suffix in SOURCE_SUFFIXES and path.name != "__init__.py"
-    }
-    missing = sorted(path.as_posix() for path in expected - actual)
-    extra = sorted(path.as_posix() for path in actual - expected)
-    if missing:
-        errors.append(f"{relative_root} tests missing: {', '.join(missing)}")
-    if extra:
-        errors.append(f"{relative_root} has orphan tests: {', '.join(extra)}")
+    @staticmethod
+    def _verify_shared_sdk_test_contracts() -> None:
+        adapters = REPOSITORY_ROOT / "src" / "adapters"
+        legacy_roots = (adapters / "fixtures", adapters / "tests" / "fixtures")
+        if any(root.exists() for root in legacy_roots):
+            raise RuntimeError("shared SDK test contracts must live directly under src/adapters/tests")
 
-
-def _verify_ingestion_contracts() -> None:
-    for language, required_tokens in JOB_CONTRACTS.items():
-        job = (E2E_ROOT / JOB_FILES[language]).read_text(encoding="utf-8")
-        missing = [token for token in required_tokens if token not in job]
-        if missing:
-            raise RuntimeError(f"{language} ingestion job misses: {', '.join(missing)}")
-        service = (E2E_ROOT / MCP_FILES[language]).read_text(encoding="utf-8")
-        missing = [token for token in MCP_CONTRACTS[language] if token not in service]
-        if missing:
-            raise RuntimeError(f"{language} MCP helper misses: {', '.join(missing)}")
-        missing = [token for token in MCP_TRANSPORT_CONTRACTS[language] if token not in service]
-        if missing:
-            raise RuntimeError(f"{language} MCP helper misses dual transport evidence: {', '.join(missing)}")
-        if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(service):
-            raise RuntimeError(f"{language} MCP helper must create transports through the AgentVault facade")
-        for tool in ("marketpulse.yesterday_news", "marketpulse.realtime_news"):
-            if tool not in service:
-                raise RuntimeError(f"{language} MCP service does not register {tool}")
-    for relative_file, required_tokens in PAYEE_FRAMEWORK_CONTRACTS.items():
-        content = (E2E_ROOT / relative_file).read_text(encoding="utf-8")
-        missing = [token for token in required_tokens if token not in content]
-        if missing:
-            raise RuntimeError(f"{relative_file} misses Payee composition: {', '.join(missing)}")
-        language = PAYEE_FRAMEWORK_LANGUAGES[relative_file]
-        if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(content):
-            raise RuntimeError(f"{relative_file} must create transports through the AgentVault facade")
-    for relative_file in PAYEE_ROUTE_FILES + PAYER_ROUTE_FILES:
-        content = (E2E_ROOT / relative_file).read_text(encoding="utf-8")
-        missing = [path for path in ("/healthz", "/metrics") if path not in content]
-        if missing:
-            raise RuntimeError(f"{relative_file} misses operational routes: {', '.join(missing)}")
-        forbidden = [path for path in ("/mcp", "/api/v1/ingestion") if path in content]
-        if forbidden:
-            raise RuntimeError(f"{relative_file} owns non-operational routes: {', '.join(forbidden)}")
-
-
-def _verify_payer_selection_boundary() -> None:
-    """Keep wallet/policy inputs behind AgentVault's trusted authorization boundary."""
-    violations: list[str] = []
-    for root in sorted((E2E_ROOT / "deploy").glob("mock-payer-quantstream-ingest-service-*")):
-        for path in root.rglob("*"):
-            if not path.is_file() or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts):
-                continue
+        contract_root = adapters / "tests"
+        actual = {path.name for path in contract_root.iterdir()}
+        if actual != SHARED_SDK_TEST_CONTRACTS:
+            raise RuntimeError(
+                "shared SDK test contracts drifted: "
+                f"expected={sorted(SHARED_SDK_TEST_CONTRACTS)}, actual={sorted(actual)}"
+            )
+        for contract in sorted(contract_root.iterdir()):
             try:
-                content = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
+                json.loads(contract.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as error:
+                raise RuntimeError(f"invalid shared SDK test contract {contract.name}: {error}") from error
+
+        consumers = {
+            "golang": adapters / "golang" / "tests",
+            "rust": adapters / "rust" / "tests",
+            "python": adapters / "python" / "tests",
+            "typescript": adapters / "typescript" / "tests",
+            "java": adapters / "java" / "test",
+        }
+        for language, root in consumers.items():
+            sources = [
+                path.read_text(encoding="utf-8")
+                for path in root.rglob("*")
+                if path.is_file() and path.suffix in SOURCE_SUFFIXES
+            ]
+            if language == "java":
+                sources.append((adapters / "java" / "pom.xml").read_text(encoding="utf-8"))
+            combined = "\n".join(sources)
+            missing = sorted(name for name in SHARED_SDK_TEST_CONTRACTS if name not in combined)
+            if missing:
+                raise RuntimeError(
+                    f"{language} tests do not consume shared SDK contracts: {', '.join(missing)}"
+                )
+
+
+    @staticmethod
+    def _exact_rust_sources(package: str, expected: frozenset[str]) -> None:
+        source_root = REPOSITORY_ROOT / "src" / package
+        actual = {path.relative_to(source_root).as_posix() for path in source_root.rglob("*.rs")}
+        if actual != expected:
+            raise RuntimeError(f"{package} source layout: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
+
+
+    @staticmethod
+    def _root_rust_test_mirror(package: str, expected: frozenset[str]) -> None:
+        test_root = REPOSITORY_ROOT / "tests" / package
+        wanted = {name.removesuffix(".rs") + "_test.rs" for name in expected}
+        actual = {path.relative_to(test_root).as_posix() for path in test_root.rglob("*.rs")}
+        if actual != wanted:
+            raise RuntimeError(f"{package} test mirror: missing={sorted(wanted-actual)}, orphan={sorted(actual-wanted)}")
+
+
+    @staticmethod
+    def _verify_source_limits() -> None:
+        oversized = []
+        for path in (REPOSITORY_ROOT / "src").rglob("*"):
+            relative = path.relative_to(REPOSITORY_ROOT / "src")
+            if not path.is_file() or path.suffix not in SOURCE_SUFFIXES or GENERATED_DIRECTORIES.intersection(relative.parts):
                 continue
-            found = [token for token in PAYER_FORBIDDEN_SELECTION_TOKENS if token in content]
-            if found:
-                label = path.relative_to(E2E_ROOT).as_posix()
-                violations.append(f"{label}: {', '.join(found)}")
-    if violations:
-        raise RuntimeError(
-            "payer services must submit scenario + challenge and let AgentVault select wallets: "
-            + "; ".join(violations)
-        )
-
-
-def _verify_payer_chain_boundary() -> None:
-    """Payer applications consume SDK results and never own chain connectivity."""
-    violations: list[str] = []
-    for root in sorted((E2E_ROOT / "deploy").glob("mock-payer-quantstream-ingest-service-*")):
-        for path in root.rglob("*"):
-            if (
-                not path.is_file()
-                or path.suffix not in SOURCE_SUFFIXES
-                or "tests" in path.relative_to(root).parts
-                or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts)
-            ):
+            if {"tests", "test"}.intersection(relative.parts):
                 continue
-            content = path.read_text(encoding="utf-8")
-            found = [pattern.pattern for pattern in PAYER_FORBIDDEN_CHAIN_PATTERNS if pattern.search(content)]
-            if found:
-                violations.append(f"{path.relative_to(E2E_ROOT).as_posix()}: {', '.join(found)}")
-    if violations:
-        raise RuntimeError(
-            "payer services must not connect to chains; AgentVault owns signing and balance observation: "
-            + "; ".join(violations)
-        )
+            lines = len(path.read_text(encoding="utf-8").splitlines())
+            if lines > 800:
+                oversized.append(f"{relative}:{lines}")
+        if oversized:
+            raise RuntimeError("formal source must stay within 800 lines: " + ", ".join(sorted(oversized)))
 
 
-def _verify_wallet_pool_contract() -> None:
-    """Require five isolated Payer identities with two local wallets each."""
-    manifest = json.loads((E2E_ROOT / "common/contract/scenario.json").read_text(encoding="utf-8"))
-    wallets = {item.get("id"): item for item in manifest.get("wallets", [])}
-    policies = {item.get("id"): item for item in manifest.get("policies", [])}
-    scenarios = {item.get("id"): item for item in manifest.get("scenarios", [])}
-    clients = {item.get("id"): item for item in manifest.get("clients", [])}
-    approvers = {
-        (item.get("scenario_id"), item.get("auth_principal"))
-        for item in manifest.get("approvers", [])
-    }
-    expected_wallet_ids: set[str] = set()
-    private_key_envs: set[str] = set()
-    for identity in PAYER_IDENTITIES.values():
-        if identity.client_id not in clients:
-            raise RuntimeError(f"missing isolated Payer client: {identity.client_id}")
-        scenario = scenarios.get(identity.scenario_id)
-        if not isinstance(scenario, dict) or scenario.get("client_id") != identity.client_id:
-            raise RuntimeError(f"{identity.scenario_id} must belong only to {identity.client_id}")
-        policy = policies.get(identity.policy_id)
-        if not isinstance(policy, dict) or policy.get("scenario_id") != identity.scenario_id:
-            raise RuntimeError(f"{identity.policy_id} must belong only to {identity.scenario_id}")
-        if set(policy.get("wallet_ids", [])) != set(identity.wallet_ids):
-            raise RuntimeError(f"{identity.policy_id} must expose exactly its two isolated wallet members")
-        if (identity.scenario_id, identity.approver_principal) not in approvers:
-            raise RuntimeError(f"missing isolated approver for {identity.scenario_id}")
-        for wallet_id, expected_key_env in zip(
-            identity.wallet_ids,
-            (identity.primary_agentvault_key_env, identity.secondary_agentvault_key_env),
-            strict=True,
-        ):
-            wallet = wallets.get(wallet_id)
-            if (
-                not isinstance(wallet, dict)
-                or wallet.get("custody") != "local"
-                or wallet.get("private_key_env") != expected_key_env
-            ):
-                raise RuntimeError(f"{wallet_id} must be an independently signable local E2E wallet")
-            expected_wallet_ids.add(wallet_id)
-            private_key_envs.add(expected_key_env)
-    if len(expected_wallet_ids) != 10 or len(private_key_envs) != 10:
-        raise RuntimeError("the five Payer services must own ten distinct wallets and private-key bindings")
-    actual_local_wallets = {
-        wallet_id for wallet_id, wallet in wallets.items() if isinstance(wallet, dict) and wallet.get("custody") == "local"
-    }
-    if actual_local_wallets != expected_wallet_ids:
-        raise RuntimeError(
-            f"unexpected local E2E wallets: expected={sorted(expected_wallet_ids)} actual={sorted(actual_local_wallets)}"
-        )
+    @staticmethod
+    def _verify_handler_domains() -> None:
+        root = REPOSITORY_ROOT / "src" / "handler"
+        for name, handler in ROOT_HANDLER_TYPES.items():
+            code = (root / f"{name}.rs").read_text(encoding="utf-8")
+            structs = re.findall(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)", code)
+            repository = f"I{name.title()}Repository" if name != "client" else "IClientRepository"
+            if structs != [handler] or len(code.splitlines()) > 250:
+                raise RuntimeError(f"handler/{name}.rs requires only {handler} within 250 lines: {structs}")
+            if f"dyn {repository}" not in code:
+                raise RuntimeError(f"handler/{name}.rs must inject dyn {repository}")
+            if re.search(r"sqlx::|reqwest::|RpcClient|FacilitatorProvider|\bquery(?:_as|_scalar)?\(", code):
+                raise RuntimeError(f"handler/{name}.rs must delegate persistence and external integrations")
+        ledger = (root / "ledger.rs").read_text(encoding="utf-8")
+        if re.search(r"pub\s+(?:async\s+)?fn\s+(?:update|delete|upsert)", ledger):
+            raise RuntimeError("LedgerHandler must expose append/query only")
 
 
-def _verify_run_identity_contract() -> None:
-    """Keep `run_id` as the only durable business retry and deduplication key."""
-    roots = (REPOSITORY_ROOT / "src" / "adapters", E2E_ROOT / "deploy")
-    violations: list[str] = []
-    allowed_suffixes = SOURCE_SUFFIXES | {".json", ".mjs", ".sh", ".yaml"}
-    for root in roots:
-        for path in root.rglob("*"):
-            if (
-                not path.is_file()
-                or path.suffix not in allowed_suffixes
-                or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts)
-            ):
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            found = [pattern.pattern for pattern in FORBIDDEN_RUN_ID_ALIASES if pattern.search(content)]
-            if found:
-                violations.append(f"{path.relative_to(REPOSITORY_ROOT).as_posix()}: {', '.join(found)}")
-    if violations:
-        raise RuntimeError(
-            "run_id is the only business idempotency identity; remove alternate key fields: "
-            + "; ".join(violations)
-        )
-    mqtt_schema = json.loads(
-        (E2E_ROOT / "common/contract/payment-mqtt.schema.json").read_text(encoding="utf-8")
-    )
-    approval = mqtt_schema.get("$defs", {}).get("approvalRequired", {})
-    if "runId" not in approval.get("required", []) or "runId" not in approval.get("properties", {}):
-        raise RuntimeError("MQTT approval_required must carry the canonical business runId")
+    @staticmethod
+    def _verify_storage_boundaries() -> None:
+        root = REPOSITORY_ROOT / "src" / "storage"
+        for dialect, base in (("postgres", "PostgresRepository"), ("sqlite", "SqliteRepository")):
+            code = (root / f"{dialect}.rs").read_text(encoding="utf-8")
+            if re.search(r"crate::model|utils::storage|\bpay_\w+|\bPayment(?:Status|Direction|EventType|Intent)|\bWalletCustody", code):
+                raise RuntimeError(f"{dialect} base must be independent of business models, schema and codecs")
+            if re.search(r"impl\s+I(?:Approval|Approver|Client|Event|Intent|Ledger|Outbox|Policy|Price|Scenario|Signing|Wallet|WalletBalance)Repository\s+for\s+", code):
+                raise RuntimeError(f"{dialect} base must not implement domain ports")
+            for domain in STORAGE_DOMAINS:
+                code = (root / domain / f"{dialect}.rs").read_text(encoding="utf-8")
+                repository = f"{domain.title()}{dialect.title()}Repository"
+                composed = "BaseRepository" if f"{base} as BaseRepository" in code else base
+                if len(code.splitlines()) > 250 or not re.search(rf"struct\s+{repository}\s*\{{\s*base:\s*{composed}\s*,", code):
+                    raise RuntimeError(f"storage/{domain}/{dialect}.rs must compose {base} within 250 lines")
+        utils = REPOSITORY_ROOT / "src" / "utils"
+        code = (utils / "storage.rs").read_text(encoding="utf-8")
+        if len(code.splitlines()) > 500 or re.search(r"sqlx::(?:query|raw_sql)|\.fetch_(?:one|all|optional)\(|\.execute\(", code):
+            raise RuntimeError("utils/storage.rs must remain shared codecs/validation within 500 lines, without SQL execution")
+        if list(utils.glob("*_repository.rs")) or any("WalletKeyRepository" in p.read_text() for p in utils.glob("*.rs")):
+            raise RuntimeError("domain repository and custody SQL operations belong under storage, never utils")
+        entity = (root / "entity.rs").read_text()
+        if "macro_rules! repository_entity" not in entity or "const COLUMNS" not in entity:
+            raise RuntimeError("CRUD requires compile-time entity fields and typed bindings")
+        price = (REPOSITORY_ROOT / "src/model/domain/price.rs").read_text()
+        domain = (REPOSITORY_ROOT / "src/model/domain/mod.rs").read_text()
+        if '"pay_price"' not in price or "pub struct PaymentPrice" not in price or re.search(r"pub\s+type\s+PaymentPrice\s*=", domain):
+            raise RuntimeError("pricing must use only pay_price/PaymentPrice without a second type name")
+        for package in ("handler", "storage", "payment", "controller"):
+            for path in (REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
+                if re.search(r"\bpay_offer\b", path.read_text()):
+                    raise RuntimeError(f"runtime SQL must use canonical pay_price: {path}")
 
 
-def _verify_ingestor_sources() -> None:
-    errors: list[str] = []
-    for relative_root, expected in INGESTOR_SOURCE_ALLOWLISTS.items():
-        root = E2E_ROOT / relative_root
-        actual = {
-            path.relative_to(root).as_posix()
-            for path in root.rglob("*")
+    @staticmethod
+    def _verify_root_rust_layout() -> None:
+        layouts = {
+            "cmd": ROOT_CMD_FILES, "handler": ROOT_HANDLER_FILES, "storage": ROOT_STORAGE_FILES,
+            "config": ROOT_CONFIG_FILES, "payment": ROOT_PAYMENT_FILES, "job": ROOT_JOB_FILES,
+            "controller": ROOT_CONTROLLER_FILES, "transport": ROOT_TRANSPORT_FILES,
+            "protocol": ROOT_PROTOCOL_FILES, "apm": ROOT_APM_FILES, "utils": ROOT_UTILS_FILES,
+            "model": ROOT_MODEL_FILES | {f"domain/{name}" for name in DOMAIN_MODEL_FILES},
+        }
+        for package, expected in layouts.items():
+            StructureVerifier._exact_rust_sources(package, expected)
+            StructureVerifier._root_rust_test_mirror(package, expected)
+        StructureVerifier._verify_handler_domains()
+        StructureVerifier._verify_controller_boundaries()
+        StructureVerifier._verify_storage_boundaries()
+        StructureVerifier._verify_source_limits()
+        StructureVerifier._verify_canonical_repository_names()
+        for package in ("handler", "storage", "payment", "job", "config"):
+            for path in (REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
+                if re.search(r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?fn\s", path.read_text()):
+                    raise RuntimeError(f"domain operations must be associated methods: {path}")
+        console = (REPOSITORY_ROOT / "src/cmd/console.rs").read_text()
+        forbidden = (".load_active_key(", ".list_key_versions(", ".rotate(", "wallet_payment_signer(")
+        required = ("enum WalletCommand", "Create {", "List {", "Get { id: String }")
+        if any(token in console for token in forbidden) or any(token not in console for token in required):
+            raise RuntimeError("console wallet access must remain create plus public metadata only")
+
+    @staticmethod
+    def _verify_canonical_repository_names() -> None:
+        for root in (REPOSITORY_ROOT / "src", E2E_ROOT / "deploy"):
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in SOURCE_SUFFIXES or GENERATED_DIRECTORIES.intersection(path.parts):
+                    continue
+                if {"tests", "test"}.intersection(path.relative_to(root).parts):
+                    continue
+                code = path.read_text(encoding="utf-8")
+                if re.search(r"\b(?:struct|class|trait|type|interface)\s+\w+Storage\b|pub\s+use\s+\w+\s+as\s+\w+Storage\b", code):
+                    raise RuntimeError(f"persistence types must use their canonical Repository name: {path}")
+                if re.search(r"\b(?:BasePostgresRepository|BaseSqliteRepository|PaymentOffer|OfferSpec)\b", code):
+                    raise RuntimeError(f"obsolete persistence/price alias must be removed: {path}")
+
+    @staticmethod
+    def _verify_controller_boundaries() -> None:
+        root = REPOSITORY_ROOT / "src" / "controller"
+        for file, expected in (("grpc.rs", "GrpcController"), ("mqtt.rs", "MqttController")):
+            code = (root / file).read_text()
+            structs = re.findall(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)", code)
+            if structs != [expected]:
+                raise RuntimeError(f"controller/{file} must contain only the {expected} listener: {structs}")
+        api = (root / "api.rs").read_text()
+        required = ("struct ApiController", "struct ApiError", "management_router", '"/prices/resolve"')
+        if any(token not in api for token in required):
+            raise RuntimeError("API must register canonical payment/pricing and independent management routes")
+        if "LocalController" in (root / "mod.rs").read_text():
+            raise RuntimeError("the removed local transport must not remain exposed")
+        for package in ("controller", "transport"):
+            for path in (REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
+                if re.search(r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?fn\s", path.read_text()):
+                    raise RuntimeError(f"transport/controller helpers must be associated methods: {path}")
+
+
+    @staticmethod
+    def _verify_runtime_image_boundaries() -> None:
+        errors: list[str] = []
+        for component in LANGUAGE_IMAGE_COMPONENTS:
+            dockerfile = E2E_ROOT / "deploy" / component / "Dockerfile"
+            stages = [
+                line.strip()
+                for line in dockerfile.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("FROM ")
+            ]
+            if len(stages) != 2 or " AS builder" not in stages[0]:
+                errors.append(f"{component} must have exactly one builder and one runtime stage")
+            elif "_RUNTIME_IMAGE}" not in stages[1] or "_BUILD_IMAGE}" in stages[1]:
+                errors.append(f"{component} runtime stage must not reuse its build image")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+
+    @staticmethod
+    def _verify_kubernetes_namespace_boundaries() -> None:
+        namespace_manifest = (E2E_ROOT / "deploy" / "namespaces.yaml").read_text(encoding="utf-8")
+        declared = frozenset(re.findall(r"(?m)^  name: (e2e-agentvault-[a-z0-9-]+)$", namespace_manifest))
+        if declared != REQUIRED_E2E_NAMESPACES:
+            missing = sorted(REQUIRED_E2E_NAMESPACES - declared)
+            extra = sorted(declared - REQUIRED_E2E_NAMESPACES)
+            raise RuntimeError(f"invalid E2E namespaces: missing={missing}, extra={extra}")
+
+        errors: list[str] = []
+        agentvault_values = (
+            E2E_ROOT / "config" / "agentvault" / "values-override.yaml"
+        ).read_text(encoding="utf-8")
+        if not re.search(r"(?m)^    fullnameOverride: agentvault$", agentvault_values):
+            errors.append("AgentVault E2E resources must use the production-style agentvault name")
+        for namespace, components in E2E_NAMESPACE_GROUPS.items():
+            for component in components:
+                chart_root = E2E_ROOT / "deploy" / component / "helm"
+                chart = (chart_root / "Chart.yaml").read_text(encoding="utf-8")
+                annotation = f"agentvault.io/e2e-namespace: {namespace}"
+                if annotation not in chart:
+                    errors.append(f"{component} must target {namespace}")
+                name_match = re.search(r"(?m)^name: ([a-z0-9-]+)$", chart)
+                if name_match is None or name_match.group(1).startswith("e2e-"):
+                    errors.append(f"{component} must use a production-style Chart name")
+                template = (chart_root / "templates" / "resources.yaml").read_text(encoding="utf-8")
+                if 'index .Chart.Annotations "agentvault.io/e2e-namespace"' not in template:
+                    errors.append(f"{component} does not source its namespace from the Chart contract")
+                if template.count("namespace: {{ $namespace }}") != 4:
+                    errors.append(f"{component} must namespace its workload, ConfigMap, and Service")
+                if 'hasPrefix "e2e-agentvault-" $namespace' not in template:
+                    errors.append(f"{component} does not reject a non-E2E namespace")
+                if "ne .Release.Namespace $namespace" not in template:
+                    errors.append(f"{component} does not bind Helm release state to its resource namespace")
+                if "{{- $name := .Chart.Name -}}" not in template:
+                    errors.append(f"{component} must not prefix resource names with its E2E release")
+                if (
+                    component.startswith("mock-payer-quantstream-service-")
+                    and "with .Values.initContainers" not in template
+                ):
+                    errors.append(f"{component} must support the loopback transport sidecar")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+
+    @staticmethod
+    def _verify_sdk_sources() -> None:
+        adapters = REPOSITORY_ROOT / "src" / "adapters"
+        errors: list[str] = []
+        source_text: list[str] = []
+        for relative_root, expected in SDK_SOURCE_ALLOWLISTS.items():
+            root = adapters / relative_root
+            actual = {
+                path.relative_to(root).as_posix()
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.suffix in SOURCE_SUFFIXES
+                and "tests" not in path.relative_to(root).parts
+            }
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            if missing:
+                errors.append(f"{relative_root} missing: {', '.join(missing)}")
+            if extra:
+                errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
+            StructureVerifier._verify_test_mirror(adapters, relative_root, root, errors)
+            source_text.extend(path.read_text(encoding="utf-8") for path in root.rglob("*")
+                               if path.is_file() and path.suffix in SOURCE_SUFFIXES)
+        joined = "\n".join(source_text)
+        stale = [symbol for symbol in FORBIDDEN_SDK_SYMBOLS if symbol in joined]
+        if stale:
+            errors.append("forbidden obsolete SDK symbols: " + ", ".join(stale))
+        stale_patterns = [pattern for pattern in FORBIDDEN_SDK_PATTERNS if re.search(pattern, joined)]
+        if stale_patterns:
+            errors.append("forbidden divergent SDK patterns: " + ", ".join(stale_patterns))
+        for relative_root, contracts in SDK_MODEL_CONTRACTS.items():
+            root = adapters / relative_root
+            for relative_file, required_tokens in contracts.items():
+                content = (root / relative_file).read_text(encoding="utf-8")
+                missing = [token for token in required_tokens
+                           if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)]
+                if missing:
+                    errors.append(f"{relative_root}/{relative_file} misses DTO parity: {', '.join(missing)}")
+        for relative_root, contracts in SDK_LOGICAL_CONTRACTS.items():
+            root = adapters / relative_root
+            for relative_file, required_tokens in contracts.items():
+                source = root / relative_file
+                if not source.is_file():
+                    source = adapters / SDK_TEST_ROOTS[relative_root] / relative_file
+                content = source.read_text(encoding="utf-8")
+                missing = [token for token in required_tokens
+                           if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)]
+                if missing:
+                    errors.append(f"{relative_root}/{relative_file} misses logic: {', '.join(missing)}")
+        for relative_root, (relative_file, declarations) in MIDDLEWARE_MODEL_DECLARATIONS.items():
+            content = (adapters / relative_root / relative_file).read_text(encoding="utf-8")
+            duplicated = [declaration for declaration in declarations if declaration in content]
+            if duplicated:
+                errors.append(f"{relative_root}/{relative_file} redeclares model types: {', '.join(duplicated)}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+
+    @staticmethod
+    def _verify_test_mirror(adapters, relative_root: str, source_root, errors: list[str]) -> None:
+        test_root = adapters / SDK_TEST_ROOTS[relative_root]
+        sources = {
+            path.relative_to(source_root)
+            for path in source_root.rglob("*")
             if path.is_file()
             and path.suffix in SOURCE_SUFFIXES
-            and "tests" not in path.relative_to(root).parts
+            and path.name != "__init__.py"
+            and test_root not in path.parents
         }
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
-        if missing:
-            errors.append(f"{relative_root} missing: {', '.join(missing)}")
-        if extra:
-            errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
-        _verify_component_test_mirror(
-            root,
-            E2E_ROOT / INGESTOR_TEST_ROOTS[relative_root],
-            relative_root.endswith("/e2e"),
-            errors,
-            relative_root,
-        )
-    for relative_root, expected in PAYEE_SOURCE_ALLOWLISTS.items():
-        root = E2E_ROOT / relative_root
+        if relative_root.startswith("java/"):
+            expected = {path.with_name(f"{path.stem}Test.java") for path in sources}
+        else:
+            expected = {path.with_name(f"{path.stem}_test{path.suffix}") for path in sources}
         actual = {
-            path.relative_to(root).as_posix()
-            for path in root.rglob("*")
+            path.relative_to(test_root)
+            for path in test_root.rglob("*")
+            if path.is_file() and path.suffix in SOURCE_SUFFIXES and path.name != "__init__.py"
+        }
+        missing = sorted(path.as_posix() for path in expected - actual)
+        extra = sorted(path.as_posix() for path in actual - expected)
+        if missing:
+            errors.append(f"{relative_root} tests missing: {', '.join(missing)}")
+        if extra:
+            errors.append(f"{relative_root} has orphan tests: {', '.join(extra)}")
+
+
+    @staticmethod
+    def _verify_ingestion_contracts() -> None:
+        for language, required_tokens in JOB_CONTRACTS.items():
+            job = (E2E_ROOT / JOB_FILES[language]).read_text(encoding="utf-8")
+            missing = [token for token in required_tokens if token not in job]
+            if missing:
+                raise RuntimeError(f"{language} ingestion job misses: {', '.join(missing)}")
+            service = (E2E_ROOT / MCP_FILES[language]).read_text(encoding="utf-8")
+            missing = [token for token in MCP_CONTRACTS[language] if token not in service]
+            if missing:
+                raise RuntimeError(f"{language} MCP helper misses: {', '.join(missing)}")
+            missing = [token for token in MCP_TRANSPORT_CONTRACTS[language] if token not in service]
+            if missing:
+                raise RuntimeError(f"{language} MCP helper misses dual transport evidence: {', '.join(missing)}")
+            if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(service):
+                raise RuntimeError(f"{language} MCP helper must create transports through the AgentVault facade")
+            for tool in ("marketpulse.yesterday_news", "marketpulse.realtime_news"):
+                if tool not in service:
+                    raise RuntimeError(f"{language} MCP service does not register {tool}")
+        for relative_file, required_tokens in PAYEE_FRAMEWORK_CONTRACTS.items():
+            content = (E2E_ROOT / relative_file).read_text(encoding="utf-8")
+            missing = [token for token in required_tokens
+                           if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)]
+            if missing:
+                raise RuntimeError(f"{relative_file} misses Payee composition: {', '.join(missing)}")
+            language = PAYEE_FRAMEWORK_LANGUAGES[relative_file]
+            if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(content):
+                raise RuntimeError(f"{relative_file} must create transports through the AgentVault facade")
+        for relative_file in PAYEE_ROUTE_FILES + PAYER_ROUTE_FILES:
+            content = (E2E_ROOT / relative_file).read_text(encoding="utf-8")
+            missing = [path for path in ("/healthz", "/metrics") if path not in content]
+            if missing:
+                raise RuntimeError(f"{relative_file} misses operational routes: {', '.join(missing)}")
+            forbidden = [path for path in ("/mcp", "/api/v1/ingestion") if path in content]
+            if forbidden:
+                raise RuntimeError(f"{relative_file} owns non-operational routes: {', '.join(forbidden)}")
+
+
+    @staticmethod
+    def _verify_payer_selection_boundary() -> None:
+        """Keep wallet/policy inputs behind AgentVault's trusted authorization boundary."""
+        violations: list[str] = []
+        for component in LANGUAGE_IMAGE_COMPONENTS:
+            if not component.startswith("mock-payer-quantstream-service-"):
+                continue
+            root = E2E_ROOT / "deploy" / component
+            for path in root.rglob("*"):
+                if not path.is_file() or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts):
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                found = [token for token in PAYER_FORBIDDEN_SELECTION_TOKENS if token in content]
+                if found:
+                    label = path.relative_to(E2E_ROOT).as_posix()
+                    violations.append(f"{label}: {', '.join(found)}")
+        if violations:
+            raise RuntimeError(
+                "payer services must submit scenario + challenge and let AgentVault select wallets: "
+                + "; ".join(violations)
+            )
+
+
+    @staticmethod
+    def _verify_payer_chain_boundary() -> None:
+        """Payer applications consume SDK results and never own chain connectivity."""
+        violations: list[str] = []
+        for component in LANGUAGE_IMAGE_COMPONENTS:
+            if not component.startswith("mock-payer-quantstream-service-"):
+                continue
+            root = E2E_ROOT / "deploy" / component
+            for path in root.rglob("*"):
+                if (
+                    not path.is_file()
+                    or path.suffix not in SOURCE_SUFFIXES
+                    or "tests" in path.relative_to(root).parts
+                    or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts)
+                ):
+                    continue
+                content = path.read_text(encoding="utf-8")
+                found = [pattern.pattern for pattern in PAYER_FORBIDDEN_CHAIN_PATTERNS if pattern.search(content)]
+                if found:
+                    violations.append(f"{path.relative_to(E2E_ROOT).as_posix()}: {', '.join(found)}")
+        if violations:
+            raise RuntimeError(
+                "payer services must not connect to chains; AgentVault owns signing and balance observation: "
+                + "; ".join(violations)
+            )
+
+
+    @staticmethod
+    def _verify_wallet_pool_contract() -> None:
+        """Require five isolated Payer identities with two local wallets each."""
+        manifest = ConsoleResourceFixture.load_agentvault_resources(E2E_ROOT / "config/agentvault/init.import.yaml")
+        wallets = {item.get("id"): item for item in manifest.get("wallets", [])}
+        policies = {item.get("id"): item for item in manifest.get("policies", [])}
+        scenarios = {item.get("id"): item for item in manifest.get("scenarios", [])}
+        clients = {item.get("id"): item for item in manifest.get("clients", [])}
+        approvers = {
+            (item.get("scenario_id"), item.get("auth_principal"))
+            for item in manifest.get("approvers", [])
+        }
+        expected_wallet_ids: set[str] = set()
+        private_key_envs: set[str] = set()
+        for identity in PAYER_IDENTITIES.values():
+            if identity.client_id not in clients:
+                raise RuntimeError(f"missing isolated Payer client: {identity.client_id}")
+            scenario = scenarios.get(identity.scenario_id)
+            if not isinstance(scenario, dict) or scenario.get("client_id") != identity.client_id:
+                raise RuntimeError(f"{identity.scenario_id} must belong only to {identity.client_id}")
+            policy = policies.get(identity.policy_id)
+            if not isinstance(policy, dict) or policy.get("scenario_id") != identity.scenario_id:
+                raise RuntimeError(f"{identity.policy_id} must belong only to {identity.scenario_id}")
+            if set(policy.get("wallet_ids", [])) != set(identity.wallet_ids):
+                raise RuntimeError(f"{identity.policy_id} must expose exactly its two isolated wallet members")
+            if (identity.scenario_id, identity.approver_principal) not in approvers:
+                raise RuntimeError(f"missing isolated approver for {identity.scenario_id}")
+            for wallet_id, expected_key_env in zip(
+                identity.wallet_ids,
+                (identity.primary_agentvault_key_env, identity.secondary_agentvault_key_env),
+                strict=True,
+            ):
+                wallet = wallets.get(wallet_id)
+                if (
+                    not isinstance(wallet, dict)
+                    or wallet.get("custody") != "local"
+                    or wallet.get("private_key_env") != expected_key_env
+                ):
+                    raise RuntimeError(f"{wallet_id} must be an independently signable local E2E wallet")
+                expected_wallet_ids.add(wallet_id)
+                private_key_envs.add(expected_key_env)
+        if len(expected_wallet_ids) != 10 or len(private_key_envs) != 10:
+            raise RuntimeError("the five Payer services must own ten distinct wallets and private-key bindings")
+        actual_local_wallets = {
+            wallet_id for wallet_id, wallet in wallets.items() if isinstance(wallet, dict) and wallet.get("custody") == "local"
+        }
+        if actual_local_wallets != expected_wallet_ids:
+            raise RuntimeError(
+                f"unexpected local E2E wallets: expected={sorted(expected_wallet_ids)} actual={sorted(actual_local_wallets)}"
+            )
+
+
+    @staticmethod
+    def _verify_run_identity_contract() -> None:
+        """Keep `run_id` as the only durable business retry and deduplication key."""
+        roots = (REPOSITORY_ROOT / "src" / "adapters", E2E_ROOT / "deploy")
+        violations: list[str] = []
+        allowed_suffixes = SOURCE_SUFFIXES | {".json", ".mjs", ".sh", ".yaml"}
+        for root in roots:
+            for path in root.rglob("*"):
+                if (
+                    not path.is_file()
+                    or path.suffix not in allowed_suffixes
+                    or GENERATED_DIRECTORIES.intersection(path.relative_to(root).parts)
+                ):
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                found = [pattern.pattern for pattern in FORBIDDEN_RUN_ID_ALIASES if pattern.search(content)]
+                if found:
+                    violations.append(f"{path.relative_to(REPOSITORY_ROOT).as_posix()}: {', '.join(found)}")
+        if violations:
+            raise RuntimeError(
+                "run_id is the only business idempotency identity; remove alternate key fields: "
+                + "; ".join(violations)
+            )
+        mqtt_source = "\n".join(
+            (REPOSITORY_ROOT / "src" / relative).read_text(encoding="utf-8")
+            for relative in ("model/mqtt.rs", "transport/mqtt/delivery.rs")
+        )
+        payment_source = (REPOSITORY_ROOT / "src" / "payment" / "authorization.rs").read_text(
+            encoding="utf-8"
+        )
+        mqtt_contract = (
+            "struct ApprovalRequiredEnvelope",
+            '#[serde(rename_all = "camelCase")]',
+            "run_id: String",
+            'required_payload_string(&message.payload, "run_id")?',
+            "if run_id != message.run_id",
+            "run_id: run_id.to_owned()",
+        )
+        missing = [token for token in mqtt_contract if token not in mqtt_source]
+        if missing or '"run_id": intent.run_id' not in payment_source:
+            raise RuntimeError(
+                "production MQTT approval_required must serialize and verify the canonical runId: "
+                + ", ".join(missing or ["payment outbox run_id"])
+            )
+
+
+    @staticmethod
+    def _verify_ingestor_sources() -> None:
+        errors: list[str] = []
+        for relative_root, expected in INGESTOR_SOURCE_ALLOWLISTS.items():
+            root = E2E_ROOT / relative_root
+            actual = {
+                path.relative_to(root).as_posix()
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.suffix in SOURCE_SUFFIXES
+                and "tests" not in path.relative_to(root).parts
+            }
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            if missing:
+                errors.append(f"{relative_root} missing: {', '.join(missing)}")
+            if extra:
+                errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
+            StructureVerifier._verify_component_test_mirror(
+                root,
+                E2E_ROOT / INGESTOR_TEST_ROOTS[relative_root],
+                relative_root.endswith("/e2e"),
+                errors,
+                relative_root,
+            )
+        for relative_root, expected in PAYEE_SOURCE_ALLOWLISTS.items():
+            root = E2E_ROOT / relative_root
+            actual = {
+                path.relative_to(root).as_posix()
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.suffix in SOURCE_SUFFIXES
+                and "tests" not in path.relative_to(root).parts
+            }
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            if missing:
+                errors.append(f"{relative_root} missing: {', '.join(missing)}")
+            if extra:
+                errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
+            StructureVerifier._verify_component_test_mirror(
+                root,
+                E2E_ROOT / PAYEE_TEST_ROOTS[relative_root],
+                relative_root.endswith("/e2e"),
+                errors,
+                relative_root,
+            )
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+
+    @staticmethod
+    def _verify_component_test_mirror(source_root, test_root, java: bool, errors: list[str], label: str) -> None:
+        sources = {
+            path.relative_to(source_root)
+            for path in source_root.rglob("*")
             if path.is_file()
             and path.suffix in SOURCE_SUFFIXES
-            and "tests" not in path.relative_to(root).parts
+            and path.name != "__init__.py"
+            and test_root not in path.parents
         }
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
+        if java:
+            expected = {path.with_name(f"{path.stem}Test.java") for path in sources}
+        else:
+            expected = {path.with_name(f"{path.stem}_test{path.suffix}") for path in sources}
+        actual = {
+            path.relative_to(test_root)
+            for path in test_root.rglob("*")
+            if path.is_file() and path.suffix in SOURCE_SUFFIXES and path.name != "__init__.py"
+        }
+        missing = sorted(path.as_posix() for path in expected - actual)
+        extra = sorted(path.as_posix() for path in actual - expected)
         if missing:
-            errors.append(f"{relative_root} missing: {', '.join(missing)}")
+            errors.append(f"{label} tests missing: {', '.join(missing)}")
         if extra:
-            errors.append(f"{relative_root} has redundant source: {', '.join(extra)}")
-        _verify_component_test_mirror(
-            root,
-            E2E_ROOT / PAYEE_TEST_ROOTS[relative_root],
-            relative_root.endswith("/e2e"),
-            errors,
-            relative_root,
-        )
-    if errors:
-        raise RuntimeError("; ".join(errors))
-
-
-def _verify_component_test_mirror(source_root, test_root, java: bool, errors: list[str], label: str) -> None:
-    sources = {
-        path.relative_to(source_root)
-        for path in source_root.rglob("*")
-        if path.is_file()
-        and path.suffix in SOURCE_SUFFIXES
-        and path.name != "__init__.py"
-        and test_root not in path.parents
-    }
-    if java:
-        expected = {path.with_name(f"{path.stem}Test.java") for path in sources}
-    else:
-        expected = {path.with_name(f"{path.stem}_test{path.suffix}") for path in sources}
-    actual = {
-        path.relative_to(test_root)
-        for path in test_root.rglob("*")
-        if path.is_file() and path.suffix in SOURCE_SUFFIXES and path.name != "__init__.py"
-    }
-    missing = sorted(path.as_posix() for path in expected - actual)
-    extra = sorted(path.as_posix() for path in actual - expected)
-    if missing:
-        errors.append(f"{label} tests missing: {', '.join(missing)}")
-    if extra:
-        errors.append(f"{label} has orphan tests: {', '.join(extra)}")
+            errors.append(f"{label} has orphan tests: {', '.join(extra)}")

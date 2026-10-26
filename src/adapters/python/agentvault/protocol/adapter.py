@@ -91,6 +91,30 @@ class PaymentProtocol(ABC):
     def mcp_merchant_evidence(self, meta: object, limit: int) -> MerchantEvidence | None:
         return None
 
+    def a2a_extension(self) -> str:
+        return ""
+
+    def a2a_challenge(self, message: dict, limit: int) -> HttpResponse | None:
+        return None
+
+    def a2a_presented_credential(self, message: dict, limit: int) -> object | None:
+        return None
+
+    def a2a_strip_credential(self, message: dict) -> None:
+        pass
+
+    def a2a_apply_credential(self, message: dict, credential: PaymentCredential) -> None:
+        raise ValueError(f"protocol does not support A2A: {self.name}")
+
+    def a2a_payment_required(self, challenge: PaymentChallenge, task: object, rejected: bool) -> McpPaymentRequired:
+        raise ValueError(f"protocol does not support A2A: {self.name}")
+
+    def a2a_evidence(self, message: dict, limit: int) -> MerchantEvidence | None:
+        return None
+
+    def a2a_inject_receipt(self, message: dict, challenge: PaymentChallenge, payment: SettledIncomingPayment) -> None:
+        raise ValueError(f"protocol does not support A2A: {self.name}")
+
 
 class ProtocolRegistry:
     def __init__(self, adapters: Mapping[str, PaymentProtocol]) -> None:
@@ -211,6 +235,46 @@ class ProtocolRegistry:
             except ValueError:
                 continue
         return tuple(keys)
+
+    def a2a_challenge(self, message: dict, limit: int) -> tuple[PaymentProtocol, HttpResponse] | None:
+        for name in self._priority:
+            adapter = self.get(name)
+            value = adapter.a2a_challenge(message, limit)
+            if value is not None:
+                return adapter, value
+        return None
+
+    def a2a_credential(self, message: dict, limit: int) -> tuple[str, object | None]:
+        selected, credential = "", None
+        for name in self._priority:
+            value = self.get(name).a2a_presented_credential(message, limit)
+            if value is not None:
+                if selected:
+                    raise ValueError("multiple A2A payment credentials")
+                selected, credential = name, value
+        return selected, credential
+
+    def a2a_strip_credentials(self, message: dict) -> None:
+        for name in self._priority:
+            self.get(name).a2a_strip_credential(message)
+
+    def a2a_evidence(self, message: dict, limit: int) -> tuple[str, MerchantEvidence | None]:
+        selected, evidence = "", None
+        for name in self._priority:
+            value = self.get(name).a2a_evidence(message, limit)
+            if value is not None:
+                if selected:
+                    raise ValueError("multiple A2A payment receipts")
+                selected, evidence = name, value
+        return selected, evidence
+
+    def a2a_extensions(self, existing: str = "") -> str:
+        values = [value.strip() for value in existing.split(",") if value.strip()]
+        for name in self._priority:
+            extension = self.get(name).a2a_extension()
+            if extension and extension not in values:
+                values.append(extension)
+        return ", ".join(values)
 
 
 class PaymentProtocolFactory:

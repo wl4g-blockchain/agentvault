@@ -12,6 +12,9 @@ const buildResult = process.env.AGENTVAULT_BUILD_RESULT;
 const dockerE2eResult = process.env.AGENTVAULT_E2E_DOCKER_RESULT;
 const dockerE2eSummary = process.env.AGENTVAULT_E2E_DOCKER_SUMMARY_BASE64;
 const dockerE2eEvidenceUrl = process.env.AGENTVAULT_E2E_DOCKER_EVIDENCE_URL;
+const kubernetesE2eResult = process.env.AGENTVAULT_E2E_KUBERNETES_RESULT;
+const kubernetesE2eSummary = process.env.AGENTVAULT_E2E_KUBERNETES_SUMMARY_BASE64;
+const kubernetesE2eEvidenceUrl = process.env.AGENTVAULT_E2E_KUBERNETES_EVIDENCE_URL;
 const headSha = process.env.AGENTVAULT_HEAD_SHA;
 const releaseResult = process.env.AGENTVAULT_RELEASE_RESULT;
 const prepareResult = process.env.AGENTVAULT_PREPARE_RESULT;
@@ -56,14 +59,152 @@ const decodeSummary = (encoded) => {
   const summary = Buffer.from(encoded, "base64").toString("utf8").trim();
   if (!summary) return undefined;
   if (summary.length > 20_000) {
-    return `${summary.slice(0, 20_000)}\n\n[Summary truncated; see the evidence artifact for the complete report.]`;
+    return "> Summary exceeds the comment limit; see the evidence artifact for the complete report.";
   }
   return summary;
 };
 
+// Summary links address files inside a downloaded artifact. GitHub cannot serve
+// those paths beneath the artifact URL, and PR-relative links point elsewhere.
+const isExternalLink = (destination) => /^(?:https?:|mailto:)/i.test(destination);
+const inlineCode = (value) => {
+  const runs = value.match(/`+/g) || [];
+  const delimiter = "`".repeat(Math.max(0, ...runs.map((run) => run.length)) + 1);
+  const content = value.replaceAll("|", "\\|");
+  return `${delimiter} ${content} ${delimiter}`;
+};
+
+const closingDelimiter = (line, start, open, close) => {
+  let depth = 0;
+  for (let index = start; index < line.length; index += 1) {
+    if (line[index] === "\\") { index += 1; continue; }
+    if (line[index] === open) depth += 1;
+    if (line[index] === close && --depth === 0) return index;
+  }
+  return -1;
+};
+
+const parseLinkDestination = (target) => {
+  const destination = target.match(/^(?:<([^<>]*)>|(\S+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?$/);
+  return destination ? { path: destination[1] ?? destination[2], target } : undefined;
+};
+const referenceKey = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
+const referenceDefinition = (line) => line.match(/^ {0,3}\[([^\]]+)\]:\s*(.+)$/);
+const summaryLink = (label, { path, target }, image, artifactUrl) => {
+  if (isExternalLink(path)) return `${image ? "!" : ""}[${label}](${target})`;
+  return label === path ? `[${inlineCode(path)}](${artifactUrl})`
+    : `[${label}](${artifactUrl}) (${inlineCode(path)})`;
+};
+
+const rewriteSummaryLine = (line, artifactUrl, references) => {
+  let rendered = "";
+  for (let index = 0; index < line.length;) {
+    if (line[index] === "\\") {
+      rendered += line.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (line[index] === "`") {
+      const delimiter = line.slice(index).match(/^`+/)[0];
+      let end = line.indexOf(delimiter, index + delimiter.length);
+      while (end !== -1 && (line[end - 1] === "`" || line[end + delimiter.length] === "`")) {
+        end = line.indexOf(delimiter, end + delimiter.length);
+      }
+      if (end !== -1) {
+        rendered += line.slice(index, end + delimiter.length);
+        index = end + delimiter.length;
+        continue;
+      }
+      rendered += delimiter;
+      index += delimiter.length;
+      continue;
+    }
+    const image = line[index] === "!" && line[index + 1] === "[";
+    const start = image ? index + 1 : index;
+    if (line[start] === "[") {
+      const labelEnd = closingDelimiter(line, start, "[", "]");
+      if (labelEnd !== -1) {
+        const label = line.slice(start + 1, labelEnd);
+        let targetEnd = labelEnd;
+        let destination;
+        if (line[labelEnd + 1] === "(") {
+          targetEnd = closingDelimiter(line, labelEnd + 1, "(", ")");
+          if (targetEnd !== -1) destination = parseLinkDestination(line.slice(labelEnd + 2, targetEnd).trim());
+        } else {
+          let key = label;
+          if (line[labelEnd + 1] === "[") {
+            targetEnd = closingDelimiter(line, labelEnd + 1, "[", "]");
+            if (targetEnd !== -1) key = line.slice(labelEnd + 2, targetEnd) || label;
+          }
+          if (targetEnd !== -1) destination = references.get(referenceKey(key));
+        }
+        if (destination) {
+          rendered += summaryLink(label, destination, image, artifactUrl);
+          index = targetEnd + 1;
+          continue;
+        }
+      }
+    }
+    rendered += line[index];
+    index += 1;
+  }
+  return rendered;
+};
+
+const mapSummaryLines = (summary, transform) => {
+  let fence;
+  return summary.split("\n").map((line) => {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence.character && marker[1].length >= fence.length && !marker[2].trim()) {
+        fence = undefined;
+      }
+      return line;
+    }
+    if (marker) {
+      fence = { character: marker[1][0], length: marker[1].length };
+      return line;
+    }
+    return transform(line);
+  }).join("\n");
+};
+
+const renderSummary = (summary, artifactUrl) => {
+  // Resolve references per report before joining backends. Shared definition
+  // labels would otherwise make Kubernetes links use Docker's first definition.
+  const references = new Map();
+  mapSummaryLines(summary, (line) => {
+    const reference = referenceDefinition(line);
+    const destination = reference && parseLinkDestination(reference[2]);
+    if (destination && !references.has(referenceKey(reference[1]))) {
+      references.set(referenceKey(reference[1]), destination);
+    }
+    return line;
+  });
+  return mapSummaryLines(summary, (line) => {
+    const reference = referenceDefinition(line);
+    if (reference && references.has(referenceKey(reference[1]))) return "";
+    return rewriteSummaryLine(line, artifactUrl, references);
+  });
+};
+
+const renderE2e = (backend, result, encodedSummary, evidenceUrl) => {
+  const artifactUrl = evidenceUrl || `${runUrl}#artifacts`;
+  const summary = decodeSummary(encodedSummary);
+  const details = ["", `### ${backend} E2E`, "", `- Status: ${resultIcon(result)} ${displayResult(result)}`];
+  if (evidenceUrl) details.push(`- Evidence: [reports artifact](${evidenceUrl})`);
+  if (result === "skipped") details.push("- This backend did not run; no payment result is established.");
+  else if (result === "cancelled") details.push("- Cancelled before completion; partial reports do not establish a pass.");
+  if (summary) {
+    details.push("", `#### ${backend} E2E summary`, "", renderSummary(summary, artifactUrl));
+  } else if (result !== "skipped") {
+    details.push(`- No summary was produced; inspect the [Actions log](${runUrl}).`);
+  }
+  return details;
+};
+
 const renderCi = () => {
   const artifactUrl = `${runUrl}#artifacts`;
-  const summary = decodeSummary(dockerE2eSummary);
   const details = [
     marker,
     ...(runMarker ? [runMarker] : []),
@@ -74,59 +215,39 @@ const renderCi = () => {
   ];
 
   if (phase === "started") {
-    details.push("- Status: ⏳ CI started: building dirty images, validating all SDKs, then running the real Rust/Go simple Docker E2E matrix.");
+    details.push("- Status: ⏳ CI started: build dirty images and validate all SDKs, then run the real Rust/Go Docker and Kubernetes E2E matrices in parallel.");
     return details.join("\n");
   }
 
   details.push(`- Build / UT / IT: ${resultIcon(buildResult)} ${displayResult(buildResult)}`);
   if (buildResult === "success" && dirtyTag) {
-    details.push(
-      "",
-      "### PR artifacts",
-      "",
-      `- Runtime: \`${runtimeImage}:${dirtyTag}\``,
-      `- Web: \`${webImage}:${dirtyTag}\``,
-    );
-    if (dirtyChartVersion) {
-      details.push(`- Helm chart: [\`agentvault-${dirtyChartVersion}.tgz\`](${artifactUrl})`);
-    }
+    details.push("", "### PR artifacts", "", `- Runtime: \`${runtimeImage}:${dirtyTag}\``, `- Web: \`${webImage}:${dirtyTag}\``);
+    if (dirtyChartVersion) details.push(`- Helm chart: [\`agentvault-${dirtyChartVersion}.tgz\`](${artifactUrl})`);
   }
 
   if (phase === "build") {
     if (buildResult === "success") {
-      details.push("", "- Status: ⏳ Dirty images and the chart package are ready; the Docker E2E matrix is running.");
+      details.push("", "- Status: ⏳ Dirty images and the chart package are ready; Docker and Kubernetes E2E are starting or running in parallel.");
     } else if (buildResult === "cancelled") {
-      details.push("", "- Status: 🚫 The build/test job was cancelled before completion; unfinished checks and E2E did not run.");
+      details.push("", "- Status: 🚫 The build/test job was cancelled; Docker and Kubernetes E2E did not run.");
     } else if (buildResult === "skipped") {
-      details.push("", "- Status: ⏭️ The build/test job was skipped; E2E did not run.");
+      details.push("", "- Status: ⏭️ The build/test job was skipped; Docker and Kubernetes E2E did not run.");
+    } else if (failed(buildResult)) {
+      details.push("", "- Status: ❌ The build/test job failed; Docker and Kubernetes E2E did not run.");
     } else {
-      details.push("", "- Status: ❌ The build/test job failed; E2E did not run.");
+      details.push("", "- Status: ⏳ Build and validation are pending; both E2E backends depend on their success.");
     }
     return details.join("\n");
   }
 
-  details.push(`- Rust/Go MarketPulse/QuantStream Docker E2E: ${resultIcon(dockerE2eResult)} ${displayResult(dockerE2eResult)}`);
-  if (dockerE2eResult === "skipped") {
-    details.push("  - E2E did not start because the build stage did not succeed.");
-  } else if (dockerE2eResult === "cancelled") {
-    details.push("  - E2E was cancelled before completion; no test failure is being reported.");
-  } else {
-    if (dockerE2eEvidenceUrl) {
-      details.push(`  - Evidence: [reports](${dockerE2eEvidenceUrl})`);
-    }
-    if (summary) {
-      details.push("", "### Docker E2E summary", "", "```text", summary.replaceAll("```", "``\\`"), "```");
-    } else {
-      details.push(`  - No E2E report was produced; inspect the [Actions log](${runUrl}).`);
-    }
-  }
-
-  const passed = buildResult === "success" && dockerE2eResult === "success";
-  if (passed) {
+  details.push(...renderE2e("Docker", dockerE2eResult, dockerE2eSummary, dockerE2eEvidenceUrl));
+  details.push(...renderE2e("Kubernetes", kubernetesE2eResult, kubernetesE2eSummary, kubernetesE2eEvidenceUrl));
+  const results = [buildResult, dockerE2eResult, kubernetesE2eResult];
+  if (results.every((result) => result === "success")) {
     details.push("", "**CI completed successfully.**");
-  } else if (failed(buildResult) || failed(dockerE2eResult)) {
-    details.push("", `**CI failed.** Review the [Actions log](${runUrl})${dockerE2eEvidenceUrl ? " and E2E evidence" : ""}.`);
-  } else if (buildResult === "cancelled" || dockerE2eResult === "cancelled") {
+  } else if (results.some(failed)) {
+    details.push("", `**CI failed.** Review the [Actions log](${runUrl}) and each backend's evidence.`);
+  } else if (results.includes("cancelled")) {
     details.push("", "**CI was cancelled before completion; this is not a test failure.**");
   } else {
     details.push("", `**CI did not complete all required stages.** Review the [Actions log](${runUrl}).`);

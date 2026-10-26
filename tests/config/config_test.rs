@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn hierarchical_environment_overrides_yaml_and_preserves_defaults() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(file.path(), "server:\n  port: 8088\nlogging:\n  level: warn\n").unwrap();
+    let overrides = [
+        ("AGENTVAULT__SERVER__PORT", "8099"),
+        ("AGENTVAULT__SERVER__SERVICE_NAME", "env-service"),
+        ("AGENTVAULT__MGMT__OTEL__ENABLED", "true"),
+        ("AGENTVAULT__LOGGING__LEVEL", "debug"),
+        ("AGENTVAULT__STORAGE__POSTGRES__MAX_CONNECTIONS", "23"),
+        ("AGENTVAULT__CACHE__MEMORY__MAX_ENTRIES", "321"),
+        ("AGENTVAULT__AGENTVAULT__KEY_MANAGEMENT__IMPORT_SESSION_TTL", "90s"),
+        ("AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED", "true"),
+        ("AGENTVAULT__AGENTVAULT__WALLET_BALANCE_SYNC__INTERVAL", "17s"),
+        ("AGENTVAULT__STORAGE__POSTGRES__URL", "do-not-log"),
+    ];
+    let loaded = AppConfig::load_with_environment(
+        file.path(),
+        overrides
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(loaded.server.port, 8099);
+    assert_eq!(loaded.server.service_name, "env-service");
+    assert!(loaded.mgmt.otel.enabled);
+    assert_eq!(loaded.logging.level, "debug");
+    assert_eq!(loaded.storage.postgres.max_connections, 23);
+    assert_eq!(loaded.cache.memory.max_entries, 321);
+    assert_eq!(
+        loaded.agentvault.key_management.import_session_ttl,
+        Duration::from_secs(90)
+    );
+    assert!(loaded.agentvault.transport.grpc.enabled);
+    assert_eq!(loaded.agentvault.wallet_balance_sync.interval, Duration::from_secs(17));
+    assert_eq!(loaded.storage.postgres.url.env, "AGENTVAULT__STORAGE__POSTGRES__URL");
+    assert_eq!(
+        loaded.server.request.timeout,
+        AppConfig::default().server.request.timeout
+    );
+}
+
+#[test]
+fn sensitive_field_paths_and_projection_selector_are_excluded_from_configuration() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(file.path(), "server:\n  port: 8088\n").unwrap();
+    let inputs = [
+        ("AGENTVAULT_SERVER_PORT", "9999"),
+        ("AGENTVAULT__STORAGE__POSTGRES__URL", "do-not-log"),
+        ("AGENTVAULT__SECRETS__ENV_FILE", "/projection/env"),
+    ];
+    let loaded = AppConfig::load_with_environment(
+        file.path(),
+        inputs
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(loaded.server.port, 8088);
+    assert_eq!(
+        loaded.agentvault.key_management.keys["wallet-kek-v1"].env,
+        "AGENTVAULT__AGENTVAULT__KEY_MANAGEMENT__KEYS__WALLET_KEK_V1"
+    );
+}
+
+#[test]
+fn hierarchical_environment_rejects_unknown_config_fields() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(file.path(), "{}\n").unwrap();
+    let source = [("AGENTVAULT__SERVER__UNKNOWN_FIELD".to_owned(), "true".to_owned())]
+        .into_iter()
+        .collect();
+    assert!(AppConfig::load_with_environment(file.path(), source).is_err());
+}
+
+#[test]
 fn rejects_config_without_a_data_plane() {
     let mut config = AppConfig::default();
     config.server.enabled = false;
@@ -60,6 +137,21 @@ fn rejects_listener_address_collisions() {
     config.agentvault.transport.grpc.enabled = true;
     config.agentvault.transport.grpc.host = config.server.host;
     config.agentvault.transport.grpc.port = config.server.port;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("listeners")
+    ));
+    for host in ["0.0.0.0", "::"] {
+        config.server.host = host.parse().unwrap();
+        config.agentvault.transport.grpc.host = "127.0.0.1".parse().unwrap();
+        assert!(matches!(
+            config.validate_for_serve(),
+            Err(Error::Config(message)) if message.contains("listeners")
+        ));
+    }
+    config.agentvault.transport.grpc.enabled = false;
+    config.mgmt.host = "127.0.0.1".parse().unwrap();
+    config.mgmt.port = config.server.port;
     assert!(matches!(
         config.validate_for_serve(),
         Err(Error::Config(message)) if message.contains("listeners")
@@ -125,6 +217,23 @@ fn canonical_yaml_is_valid() {
 }
 
 #[test]
+fn canonical_yaml_explicitly_documents_every_storage_and_cache_provider() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("etc/agentvault.yaml");
+    let document = ConfigLoader::builder().add_source(File::from(path)).build().unwrap();
+    let storage = document.get_table("storage").unwrap();
+    let cache = document.get_table("cache").unwrap();
+
+    assert_eq!(
+        storage.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["postgres".to_owned(), "provider".to_owned(), "sqlite".to_owned(),])
+    );
+    assert_eq!(
+        cache.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["memory".to_owned(), "provider".to_owned(), "redis".to_owned(),])
+    );
+}
+
+#[test]
 fn docker_yaml_uses_the_same_typed_contract() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("deploy/docker/config/agentvault.yaml");
     AppConfig::load(path).unwrap().validate_for_serve().unwrap();
@@ -186,11 +295,11 @@ fn top_level_storage_and_cache_support_external_provider_refs() {
     let mut config = AppConfig::default();
     config.agentvault.payee.enabled = true;
     config.storage.provider = StorageProvider::Postgres;
-    config.storage.postgres.dsn.env = "AGENTVAULT_STORAGE_POSTGRES_URL".to_owned();
+    config.storage.postgres.url.env = "AGENTVAULT__STORAGE__POSTGRES__URL".to_owned();
     config.cache.provider = CacheProvider::Redis;
     config.cache.redis.urls = vec![SecretRefConfig {
         file: String::new(),
-        env: "AGENTVAULT_CACHE_REDIS_URL".to_owned(),
+        env: "AGENTVAULT__CACHE__REDIS__URLS".to_owned(),
     }];
     config.agentvault.payee.x402.enabled = true;
     config.agentvault.payee.x402.assets = vec![X402AssetConfig {
@@ -220,20 +329,41 @@ fn top_level_storage_and_cache_support_external_provider_refs() {
 }
 
 #[test]
-fn component_instance_keys_and_provider_names_fail_closed() {
-    let mut config = AppConfig::default();
-    config.storage.instance_key = "unsafe/key".to_owned();
-    assert!(matches!(config.validate(), Err(Error::Config(message)) if message.contains("instance_key")));
-
-    let mut config = AppConfig::default();
-    config.cache.instance_key.clear();
-    assert!(matches!(config.validate(), Err(Error::Config(message)) if message.contains("instance_key")));
-
+fn unknown_provider_names_fail_closed() {
     for document in ["storage:\n  provider: oracle\n", "cache:\n  provider: memcached\n"] {
         let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
         std::fs::write(file.path(), document).unwrap();
         assert!(AppConfig::load(file.path()).is_err());
     }
+}
+
+#[test]
+fn removed_storage_and_cache_instance_keys_fail_closed() {
+    for document in [
+        "storage:\n  instance_key: primary\n",
+        "cache:\n  instance_key: primary\n",
+    ] {
+        let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+        std::fs::write(file.path(), document).unwrap();
+        assert!(AppConfig::load(file.path()).is_err());
+    }
+}
+
+#[test]
+fn wallet_import_session_ttl_is_short_and_bounded_by_the_selected_cache() {
+    let mut config = AppConfig::default();
+    config.agentvault.key_management.import_session_ttl = Duration::from_secs(29);
+    assert!(matches!(
+        config.validate(),
+        Err(Error::Config(message)) if message.contains("import_session_ttl")
+    ));
+
+    config.agentvault.key_management.import_session_ttl = Duration::from_mins(2);
+    config.cache.memory.default_ttl = Duration::from_mins(1);
+    assert!(matches!(
+        config.validate(),
+        Err(Error::Config(message)) if message.contains("import_session_ttl")
+    ));
 }
 
 #[test]
@@ -435,7 +565,7 @@ fn rejects_remote_plain_http_provider() {
     };
 
     assert!(matches!(
-        validate_external_provider("agentvault.payee.x402.facilitator", &provider),
+        ConfigValidation::validate_external_provider("agentvault.payee.x402.facilitator", &provider),
         Err(Error::Config(message)) if message.contains("HTTPS")
     ));
 }
@@ -449,7 +579,7 @@ fn permits_explicit_loopback_development_provider() {
         ..ExternalProviderConfig::default()
     };
 
-    validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
+    ConfigValidation::validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
 }
 
 #[test]
@@ -457,8 +587,23 @@ fn trace_context_headers_are_transport_owned() {
     for name in ["traceparent", "tracestate"] {
         let headers = BTreeMap::from([(name.to_owned(), SecretHeaderConfig::default())]);
         assert!(matches!(
-            validate_secret_headers("agentvault.chains.test.rpc", &headers),
+            ConfigValidation::validate_secret_headers("agentvault.chains.test.rpc", &headers),
             Err(Error::Config(message)) if message.contains("unsafe secret header")
         ));
     }
+}
+
+#[test]
+fn removed_local_listener_environment_cannot_silently_create_a_ghost_transport() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(file.path(), "{}").unwrap();
+    let error = AppConfig::load_with_environment(
+        file.path(),
+        std::collections::HashMap::from([(
+            "AGENTVAULT__AGENTVAULT__TRANSPORT__LOCAL__ENABLED".to_owned(),
+            "true".to_owned(),
+        )]),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("local"));
 }

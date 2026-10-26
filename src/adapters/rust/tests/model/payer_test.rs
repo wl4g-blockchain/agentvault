@@ -16,18 +16,20 @@ fn payer_context_and_origin_binding_are_stable() {
 }
 
 #[test]
-fn outbound_evidence_supports_legacy_x402_and_protocol_wires() {
+fn outbound_evidence_requires_protocol_receipts() {
     let context = OperationContext::new("scenario", "run").expect("context");
-    let legacy = ReportOutboundResponseRequest::legacy(context.clone(), "legacy");
-    assert!(legacy.validate().is_ok());
-    let legacy = serde_json::to_value(legacy).expect("legacy JSON");
-    assert_eq!(legacy["payment_response"], "legacy");
-    assert!(legacy.get("protocol").is_none());
-
-    let modern = ReportOutboundResponseRequest::protocol(context, "mpp", "payment-receipt", "receipt");
-    assert!(modern.validate().is_ok());
-    let modern = serde_json::to_value(modern).expect("modern JSON");
-    assert_eq!(modern["protocol"], "mpp");
-    assert_eq!(modern["evidence"]["header_name"], "payment-receipt");
-    assert!(modern.get("payment_response").is_none());
+    for (protocol, header) in [("x402", "payment-response"), ("mpp", "payment-receipt")] {
+        let request = ReportOutboundResponseRequest::new(context.clone(), protocol, header, "receipt");
+        assert!(request.validate().is_ok());
+        let wire = serde_json::to_value(request).expect("JSON");
+        assert_eq!(wire["protocol"], protocol);
+        assert_eq!(wire["evidence"]["header_name"], header);
+        assert!(wire.get("payment_response").is_none());
+    }
+    assert!(
+        serde_json::from_value::<ReportOutboundResponseRequest>(serde_json::json!({
+            "scenario_id": "scenario", "run_id": "run", "payment_response": "receipt"
+        }))
+        .is_err()
+    );
 }

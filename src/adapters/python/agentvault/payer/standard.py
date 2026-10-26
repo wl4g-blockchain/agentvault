@@ -10,6 +10,7 @@ import httpx
 
 from ..model import PayerHttpRequest, PayerHttpResponse, PayerRequestContext
 from .payer import PayerMiddleware
+from ..model.a2a import A2ACall
 
 _LOG = logging.getLogger("agentvault.sdk")
 
@@ -55,17 +56,29 @@ class HttpxPayerMiddleware:
             content = json.dumps(kwargs.pop("json"), separators=(",", ":"))
             if not any(name.lower() == "content-type" for name in request_headers):
                 request_headers["content-type"] = "application/json"
-        request_body = _body_bytes(content)
+        request_body = HttpxPayerMiddleware._body_bytes(content)
         mcp_request = self._mcp_request(method, request_headers, request_body)
+        a2a_call = A2ACall.parse(request_body, self.core.config.max_challenge_bytes) if method.upper() == "POST" else None
+        a2a = self.core.a2a() if a2a_call is not None else None
+        if a2a_call is not None:
+            for name, value in list(request_headers.items()):
+                if name.lower() == "x-run-id" and value != operation.run_id:
+                    raise ValueError("A2A run_id conflicts with paid operation")
+                if name.lower() == "x-run-id":
+                    request_headers.pop(name)
+            request_headers["x-run-id"] = operation.run_id
+            existing = next((value for name, value in request_headers.items() if name.lower() == "x-a2a-extensions"), "")
+            request_headers = {name: value for name, value in request_headers.items() if name.lower() != "x-a2a-extensions"}
+            request_headers["x-a2a-extensions"] = self.core._protocols.a2a_extensions(existing)
         first = await self._send(method, url, request_headers, content, stream=True, **kwargs)
         if first.status_code != 402:
-            if mcp_request is None or not first.headers.get(
+            if (mcp_request is None and a2a_call is None) or not first.headers.get(
                 "content-type", ""
             ).lower().startswith("application/json"):
                 await first.aread()
                 return first
             try:
-                first_body = await _read_bounded(
+                first_body = await HttpxPayerMiddleware._read_bounded(
                     first, self.core.config.max_challenge_bytes
                 )
             finally:
@@ -74,14 +87,14 @@ class HttpxPayerMiddleware:
                 message = json.loads(first_body)
             except (UnicodeDecodeError, ValueError):
                 return self._buffered(first, first_body)
-            request_id = self.core._mcp_call_id(request_body)
+            request_id = a2a_call.envelope["id"] if a2a_call else self.core._mcp_call_id(request_body)
             if request_id is None or not self.core._bound_mcp_response(
                 message, request_id, require_result=False
             ):
                 return self._buffered(first, first_body)
-            origin = _canonical_origin(url)
+            origin = HttpxPayerMiddleware._canonical_origin(url)
             authorized = await asyncio.to_thread(
-                self.core.authorize_mcp,
+                a2a.authorize if a2a else self.core.authorize_mcp,
                 PayerHttpRequest(
                     method, url, origin, request_headers, request_body, False
                 ),
@@ -91,16 +104,17 @@ class HttpxPayerMiddleware:
             )
             if authorized is None:
                 return self._buffered(first, first_body)
-            _event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
-            _event(
+            HttpxPayerMiddleware._event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
+            HttpxPayerMiddleware._event(
                 "agentvault.sdk.payer.signed",
                 run_id=operation.run_id,
                 intent_id=authorized.intent.id,
             )
-            metadata = self.core.mcp_credential(authorized, origin)
-            paid_body = self._attach_mcp_credential(
-                mcp_request, metadata.key, metadata.value
-            )
+            if a2a is not None:
+                paid_body = a2a.credential(authorized, a2a_call, message, origin)
+            else:
+                metadata = self.core.mcp_credential(authorized, origin)
+                paid_body = self._attach_mcp_credential(mcp_request, metadata.key, metadata.value)
             paid_response_body: bytes | None = None
 
             async def report_mcp(response: httpx.Response) -> None:
@@ -111,13 +125,16 @@ class HttpxPayerMiddleware:
                     "content-type", ""
                 ).lower().startswith("application/json"):
                     raise RuntimeError("paid MCP response must be application/json")
-                paid_response_body = await _read_bounded(
+                paid_response_body = await HttpxPayerMiddleware._read_bounded(
                     response, self.core.config.max_challenge_bytes
                 )
                 try:
                     paid_message = json.loads(paid_response_body)
                 except (UnicodeDecodeError, ValueError) as error:
                     raise RuntimeError("paid MCP response is not valid JSON") from error
+                if a2a is not None:
+                    await asyncio.to_thread(a2a.report, operation, authorized, a2a_call, paid_message, response.headers)
+                    return
                 if not self.core._bound_mcp_response(
                     paid_message, request_id, require_result=True
                 ):
@@ -145,22 +162,22 @@ class HttpxPayerMiddleware:
                 await response.aclose()
                 return buffered
             return response
-        _event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
-        origin = _canonical_origin(url)
+        HttpxPayerMiddleware._event("agentvault.sdk.payer.payment_required", run_id=operation.run_id)
+        origin = HttpxPayerMiddleware._canonical_origin(url)
         try:
-            challenge_body = await _read_bounded(first, self.core.config.max_challenge_bytes)
+            challenge_body = await HttpxPayerMiddleware._read_bounded(first, self.core.config.max_challenge_bytes)
         finally:
             await first.aclose()
-        _event("agentvault.sdk.payer.signing_requested", run_id=operation.run_id)
+        HttpxPayerMiddleware._event("agentvault.sdk.payer.signing_requested", run_id=operation.run_id)
         authorized = await asyncio.to_thread(
             self.core.authorize,
-            PayerHttpRequest(method, url, origin, request_headers, _body_bytes(content), False),
+            PayerHttpRequest(method, url, origin, request_headers, HttpxPayerMiddleware._body_bytes(content), False),
             PayerHttpResponse(first.status_code, dict(first.headers), challenge_body),
             operation,
         )
         if authorized is None:
             raise RuntimeError("AgentVault did not authorize the 402 challenge")
-        _event("agentvault.sdk.payer.signed", run_id=operation.run_id,
+        HttpxPayerMiddleware._event("agentvault.sdk.payer.signed", run_id=operation.run_id,
                intent_id=authorized.intent.id)
         name, value = self.core.credential_header(authorized, origin, request_headers)
         paid_headers = {**request_headers, name: value}
@@ -249,40 +266,44 @@ class HttpxPayerMiddleware:
         )
 
 
-async def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
-    declared = response.headers.get("content-length")
-    if declared is not None:
-        try:
-            if int(declared) > maximum:
+    @staticmethod
+    async def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > maximum:
+                    raise RuntimeError("payment challenge exceeds configured limit")
+            except ValueError as error:
+                raise RuntimeError("payment challenge content-length is invalid") from error
+        chunks: list[bytes] = []
+        length = 0
+        async for chunk in response.aiter_bytes():
+            length += len(chunk)
+            if length > maximum:
                 raise RuntimeError("payment challenge exceeds configured limit")
-        except ValueError as error:
-            raise RuntimeError("payment challenge content-length is invalid") from error
-    chunks: list[bytes] = []
-    length = 0
-    async for chunk in response.aiter_bytes():
-        length += len(chunk)
-        if length > maximum:
-            raise RuntimeError("payment challenge exceeds configured limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
+            chunks.append(chunk)
+        return b"".join(chunks)
 
 
-def _canonical_origin(url: str) -> str:
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username:
-        raise ValueError("paid request URL must be absolute HTTP(S) without userinfo")
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    @staticmethod
+    def _canonical_origin(url: str) -> str:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username:
+            raise ValueError("paid request URL must be absolute HTTP(S) without userinfo")
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
 
 
-def _body_bytes(value: bytes | str | None) -> bytes:
-    if value is None:
-        return b""
-    return value if isinstance(value, bytes) else value.encode()
+    @staticmethod
+    def _body_bytes(value: bytes | str | None) -> bytes:
+        if value is None:
+            return b""
+        return value if isinstance(value, bytes) else value.encode()
 
 
-def _event(name: str, **fields: object) -> None:
-    rendered = " ".join(
-        f"{key.replace('_', '.')}={value}" for key, value in sorted(fields.items())
-    )
-    message = f"{name} {rendered}" if rendered else name
-    _LOG.info(message, extra={"event_name": name, **fields})
+    @staticmethod
+    def _event(name: str, **fields: object) -> None:
+        rendered = " ".join(
+            f"{key.replace('_', '.')}={value}" for key, value in sorted(fields.items())
+        )
+        message = f"{name} {rendered}" if rendered else name
+        _LOG.info(message, extra={"event_name": name, **fields})

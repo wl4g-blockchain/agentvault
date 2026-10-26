@@ -28,7 +28,7 @@ func TestGinPayeeMiddlewareBypassesFreeToolOnProtectedMCPRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(NewGinPayeeMiddleware(&PayeeMiddleware{}, NewMCPToolRoute(
-		"/mcp", "marketpulse.realtime_news", "scenario", "offer",
+		"/mcp", "marketpulse.realtime_news", "scenario", "price",
 		"mcp://marketpulse/realtime", "https://marketpulse.example",
 	)).Handler())
 	router.POST("/mcp", func(context *gin.Context) { context.Status(http.StatusNoContent) })
@@ -51,7 +51,7 @@ func TestGinPayeeMiddlewareCompletesOfficialMCPFlows(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			router := gin.New()
 			router.Use(NewGinPayeeMiddleware(core, NewMCPToolRouteWithProtocol(
-				"/mcp", "marketpulse.realtime", "scenario", "offer",
+				"/mcp", "marketpulse.realtime", "scenario", "price",
 				"mcp://tool/marketpulse.realtime", "https://marketpulse.example", protocolName,
 			)).Handler())
 			var handlerCalls int
@@ -132,7 +132,7 @@ func TestGinPayeeMiddlewarePreservesPaidMCPBusinessFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(NewGinPayeeMiddleware(core, NewMCPToolRoute(
-		"/mcp", "marketpulse.realtime", "scenario", "offer",
+		"/mcp", "marketpulse.realtime", "scenario", "price",
 		"mcp://tool/marketpulse.realtime", "https://marketpulse.example",
 	)).Handler())
 	router.POST("/mcp", func(context *gin.Context) {

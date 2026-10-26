@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SettledIncomingPayment } from '@agentvault/sdk';
 import type { Request, RequestHandler, Response } from 'express';
-import type { FeedSQLiteStorage, NewsItem } from '../storage/feed.js';
+import type { FeedSqliteRepository, NewsItem } from '../storage/feed.js';
 
 interface RpcRequest {
   jsonrpc?: string;
@@ -12,7 +12,7 @@ interface RpcRequest {
 
 export class FeedHandler {
   constructor(
-    private readonly storage: FeedSQLiteStorage,
+    private readonly storage: FeedSqliteRepository,
     private readonly allowFailureInjection: boolean,
   ) {}
 

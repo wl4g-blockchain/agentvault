@@ -1,12 +1,12 @@
 package model
 
-// PayeeOperation is the stable business identity and server-owned Offer
+// PayeeOperation is the stable business identity and server-owned Price
 // binding for one inbound request. Framework adapters only populate it; the
 // shared PayeeMiddleware owns challenge, verification, and settlement.
 type PayeeOperation struct {
 	ScenarioID        string
 	RunID             string
-	OfferID           string
+	PriceID           string
 	Resource          string
 	Origin            string
 	Protocol          string
@@ -17,7 +17,7 @@ type PayeeOperation struct {
 func (operation PayeeOperation) Validate() error {
 	for name, value := range map[string]string{
 		"scenario_id": operation.ScenarioID, "run_id": operation.RunID,
-		"offer_id": operation.OfferID,
+		"price_id": operation.PriceID,
 		"resource": operation.Resource, "origin": operation.Origin,
 		"protocol": operation.Protocol, "request_hash": operation.RequestHash,
 	} {
@@ -36,13 +36,13 @@ func (operation PayeeOperation) SettlementContext() (OperationContext, error) {
 	return NewOperationContext(operation.ScenarioID, operation.RunID)
 }
 
-type ResolveOfferRequest struct {
+type ResolvePriceRequest struct {
 	ScenarioID string `json:"scenario_id"`
 	Resource   string `json:"resource"`
 	Protocol   string `json:"protocol,omitempty"`
 }
 
-type PaymentOffer struct {
+type PaymentPrice struct {
 	ID         string        `json:"id"`
 	ScenarioID string        `json:"scenario_id"`
 	Resource   string        `json:"resource"`
@@ -57,7 +57,7 @@ type PaymentOffer struct {
 
 type CreateChallengeRequest struct {
 	OperationContext
-	OfferID     string `json:"offer_id"`
+	PriceID     string `json:"price_id"`
 	Resource    string `json:"resource"`
 	Origin      string `json:"origin"`
 	Protocol    string `json:"protocol"`

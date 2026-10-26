@@ -141,7 +141,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: src/adapters/python/pyproject.toml
+          cache-dependency-path: |
+            src/adapters/python/pyproject.toml
+            use-cases/marketpulse-feed-subscription/e2e/requirements.txt
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -153,6 +155,7 @@ jobs:
           make fmt-check
           make lint
           CARGO_BUILD_JOBS=4 cargo test --all-targets --locked
+          cargo test --locked --lib payment::wallet_import::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
 
       - name: Verify Rust SDK
         env:
@@ -172,6 +175,8 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src/adapters/python
         run: |
+          python3 -m pip install --disable-pip-version-check \
+            --requirement use-cases/marketpulse-feed-subscription/e2e/requirements.txt
           python3 -m pip install --disable-pip-version-check --editable 'src/adapters/python[test]'
           for suite in tests/agentvault tests/agentvault/config tests/agentvault/model \
             tests/agentvault/payer tests/agentvault/payee tests/agentvault/protocol \
@@ -198,15 +203,22 @@ jobs:
           npm test
           npm run build
 
-      - name: Verify E2E source and deployment contracts
+      - name: Verify CI comments and Kubernetes evidence contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/use-cases/marketpulse-feed-subscription/e2e
         run: |
-          PYTHONPATH=use-cases/marketpulse-feed-subscription/e2e \
-            python3 -m unittest discover \
-              -s use-cases/marketpulse-feed-subscription/e2e/tests \
-              -t use-cases/marketpulse-feed-subscription/e2e \
-              -p '*_test.py' -v
+          node --test tests/.github/scripts/upsert-pr-status-comment_test.mjs
+          python3 -m unittest discover \
+            -s tests/use-cases/marketpulse-feed-subscription/e2e/deploy/deployer -p '*_test.py' -v
+          python3 -m unittest discover \
+            -s tests/use-cases/marketpulse-feed-subscription/e2e/common -p '*_test.py' -v
+
+      - name: Verify E2E source and deployment contracts
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
-            --scenario structure --scenario infrastructure --cleanup-after-run
+            --scenario structure --scenario infrastructure --scenario a2a --cleanup-after-run
 
       - name: Package dirty Helm chart
         env:
@@ -261,7 +273,7 @@ jobs:
             echo "::warning title=AgentVault PR CI comment::Could not publish the CI status comment."
 
   e2e-docker:
-    name: Simple MarketPulse SDK Matrix E2E
+    name: Docker MarketPulse SDK Matrix E2E
     needs: build-and-test
     runs-on: ${{ vars.AGENTVAULT_E2E_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -295,6 +307,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install E2E runner dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check \
+            --requirement use-cases/marketpulse-feed-subscription/e2e/requirements.txt
+
       - name: Install Helm
         uses: azure/setup-helm@v4
         with:
@@ -318,9 +335,12 @@ jobs:
           # Compose 2.38.2 does not forward network.host to Buildx Bake 0.38.
           COMPOSE_BAKE: "false"
         run: |
+          set -o pipefail
+          mkdir -p use-cases/marketpulse-feed-subscription/e2e/reports
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
             --scenario matrix --e2e-sdk-scope simple \
-            --reuse-build --cleanup-after-run --timeout 150m
+            --reuse-build --cleanup-after-run --timeout 150m \
+            2>&1 | tee use-cases/marketpulse-feed-subscription/e2e/reports/ci-docker-runner.log
 
       - name: Capture E2E summary
         id: summary
@@ -345,9 +365,151 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  e2e-kubernetes:
+    name: Kubernetes MarketPulse SDK Matrix E2E
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      summary_base64: ${{ steps.summary.outputs.base64 }}
+      evidence_url: ${{ steps.evidence.outputs.artifact-url }}
+    env:
+      E2E_AGENTVAULT_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_RUNNER_PREBUILT_AGENTVAULT: "1"
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      E2E_QUANTSTREAM_UI_IMAGE: localhost/quantstream-admin-ui-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_MARKETPULSE_RUST_IMAGE: localhost/marketpulse-rust-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_MARKETPULSE_GOLANG_IMAGE: localhost/marketpulse-golang-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_QUANTSTREAM_RUST_IMAGE: localhost/quantstream-ingestor-rust-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_QUANTSTREAM_GOLANG_IMAGE: localhost/quantstream-ingestor-golang-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_AUDITOR_IMAGE: docker.io/library/python:3.12-slim
+    steps:
+      - name: Reclaim ephemeral runner disk
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+          tool-cache: true
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install E2E runner dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check \
+            --requirement use-cases/marketpulse-feed-subscription/e2e/requirements.txt
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Verify Docker Compose
+        run: docker compose version
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and verify the immutable dirty runtime
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docker pull "${E2E_AGENTVAULT_IMAGE}"
+          revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${E2E_AGENTVAULT_IMAGE}")
+          test "${revision}" = "${HEAD_SHA}"
+
+      - name: Create an isolated pinned K3s cluster
+        run: |
+          curl --fail --silent --show-error --location https://get.k3s.io \
+            --output "${RUNNER_TEMP}/install-k3s.sh"
+          sudo env INSTALL_K3S_VERSION=v1.35.4+k3s1 INSTALL_K3S_SYMLINK=force \
+            sh "${RUNNER_TEMP}/install-k3s.sh" server --node-name=agentvault-ci --disable=traefik --disable=servicelb
+          sudo k3s kubectl wait --for=create node/agentvault-ci --timeout=120s
+          sudo k3s kubectl wait --for=condition=Ready node/agentvault-ci --timeout=120s
+          sudo k3s kubectl --namespace kube-system wait --for=create deployment/local-path-provisioner --timeout=120s
+          sudo k3s kubectl --namespace kube-system rollout status deployment/local-path-provisioner --timeout=120s
+
+      - name: Run the Rust and Go SDK matrix on Kubernetes
+        env:
+          # Compose 2.38.2 does not forward network.host to Buildx Bake 0.38.
+          COMPOSE_BAKE: "false"
+        run: |
+          set -o pipefail
+          mkdir -p use-cases/marketpulse-feed-subscription/e2e/reports
+          python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
+            --deployer kubernetes --scenario matrix --e2e-sdk-scope simple --matrix-workers 1 \
+            --reuse-build --cleanup-after-run --timeout 30m \
+            2>&1 | tee use-cases/marketpulse-feed-subscription/e2e/reports/ci-kubernetes-runner.log
+
+      - name: Capture Kubernetes startup and runtime diagnostics
+        if: failure()
+        run: |
+          if ! command -v k3s >/dev/null || ! sudo test -f "${KUBECONFIG}"; then
+            exit 0
+          fi
+          diagnostics=use-cases/marketpulse-feed-subscription/e2e/reports/kubernetes-startup
+          mkdir -p "${diagnostics}"
+          sudo timeout 20s k3s kubectl get nodes --output=wide > "${diagnostics}/nodes.txt" 2>&1 || true
+          sudo timeout 20s k3s kubectl get pods,jobs,persistentvolumeclaims --all-namespaces --output=wide \
+            > "${diagnostics}/workloads.txt" 2>&1 || true
+          sudo timeout 20s k3s kubectl get events --all-namespaces --sort-by=.lastTimestamp \
+            > "${diagnostics}/events.txt" 2>&1 || true
+          systemctl show k3s --property=ActiveState --property=SubState \
+            > "${diagnostics}/service.txt" 2>&1 || true
+          sudo journalctl --unit=k3s --no-pager --lines=200 \
+            | grep --invert-match --ignore-case --extended-regexp 'token|password|secret|authorization|bearer' \
+            > "${diagnostics}/service.log" || true
+
+      - name: Capture E2E summary
+        id: summary
+        if: always()
+        run: |
+          summary=$(find use-cases/marketpulse-feed-subscription/e2e/reports \
+            -mindepth 2 -maxdepth 2 -name summary.md -printf '%T@ %p\n' \
+            2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)
+          if [[ -z "${summary}" || ! -s "${summary}" ]]; then
+            echo "::error title=Missing E2E summary::The E2E job did not produce a non-empty summary.md."
+            exit 1
+          fi
+          echo "base64=$(base64 -w 0 "${summary}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload E2E evidence
+        id: evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketpulse-e2e-kubernetes-${{ needs.build-and-test.outputs.dirty_tag }}
+          path: use-cases/marketpulse-feed-subscription/e2e/reports/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the isolated CI cluster
+        if: always()
+        run: |
+          if [[ -x /usr/local/bin/k3s-uninstall.sh ]]; then
+            sudo /usr/local/bin/k3s-uninstall.sh
+          fi
+
   comment-final:
     name: Report PR CI result
-    needs: [build-and-test, comment-build, e2e-docker]
+    needs: [build-and-test, comment-build, e2e-docker, e2e-kubernetes]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -371,6 +533,9 @@ jobs:
           AGENTVAULT_E2E_DOCKER_RESULT: ${{ needs.e2e-docker.result }}
           AGENTVAULT_E2E_DOCKER_SUMMARY_BASE64: ${{ needs.e2e-docker.outputs.summary_base64 }}
           AGENTVAULT_E2E_DOCKER_EVIDENCE_URL: ${{ needs.e2e-docker.outputs.evidence_url }}
+          AGENTVAULT_E2E_KUBERNETES_RESULT: ${{ needs.e2e-kubernetes.result }}
+          AGENTVAULT_E2E_KUBERNETES_SUMMARY_BASE64: ${{ needs.e2e-kubernetes.outputs.summary_base64 }}
+          AGENTVAULT_E2E_KUBERNETES_EVIDENCE_URL: ${{ needs.e2e-kubernetes.outputs.evidence_url }}
           AGENTVAULT_DIRTY_TAG: ${{ needs.build-and-test.outputs.dirty_tag }}
           AGENTVAULT_DIRTY_CHART_VERSION: ${{ needs.build-and-test.outputs.dirty_chart_version }}
         run: |

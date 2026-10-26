@@ -141,6 +141,41 @@ pub trait PaymentProtocol: Send + Sync {
         Ok(None)
     }
 
+    fn a2a_extension(&self) -> &'static str {
+        ""
+    }
+    fn a2a_challenge(&self, _message: &Value, _limit: usize) -> Result<Option<ProtocolHttpResponse>> {
+        Ok(None)
+    }
+    fn presented_a2a_credential(&self, _message: &Value, _limit: usize) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    fn a2a_strip_credential(&self, _message: &mut Value) -> Result<()> {
+        Ok(())
+    }
+    fn a2a_apply_credential(&self, _message: &mut Value, _credential: &PaymentCredential) -> Result<()> {
+        Err(crate::A2aCall::invalid("A2A unsupported"))
+    }
+    fn a2a_payment_required(
+        &self,
+        _challenge: &PaymentChallenge,
+        _task: &a2a_types::Task,
+        _rejected: bool,
+    ) -> Result<ProtocolMcpPaymentRequired> {
+        Err(crate::A2aCall::invalid("A2A unsupported"))
+    }
+    fn a2a_evidence(&self, _message: &Value, _limit: usize) -> Result<Option<MerchantEvidence>> {
+        Ok(None)
+    }
+    fn a2a_inject_receipt(
+        &self,
+        _message: &mut Value,
+        _challenge: &PaymentChallenge,
+        _payment: &SettledIncomingPayment,
+    ) -> Result<()> {
+        Err(crate::A2aCall::invalid("A2A unsupported"))
+    }
+
     fn header<'a>(&self, headers: &'a BTreeMap<String, String>, wanted: &str) -> Option<&'a str> {
         headers
             .iter()
@@ -156,6 +191,62 @@ pub struct ProtocolRegistry {
 }
 
 impl ProtocolRegistry {
+    pub fn a2a_extensions(&self, existing: &str) -> String {
+        let mut values: Vec<_> = existing.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        for name in &self.priority {
+            if let Ok(adapter) = self.get(name) {
+                let uri = adapter.a2a_extension();
+                if !uri.is_empty() && !values.contains(&uri) {
+                    values.push(uri);
+                }
+            }
+        }
+        values.join(", ")
+    }
+    pub fn a2a_challenge(
+        &self,
+        message: &Value,
+        limit: usize,
+    ) -> Result<Option<(&dyn PaymentProtocol, ProtocolHttpResponse)>> {
+        for name in &self.priority {
+            let adapter = self.get(name)?;
+            if let Some(value) = adapter.a2a_challenge(message, limit)? {
+                return Ok(Some((adapter, value)));
+            }
+        }
+        Ok(None)
+    }
+    pub fn a2a_credential(&self, message: &Value, limit: usize) -> Result<Option<(String, Value)>> {
+        let mut selected = None;
+        for name in &self.priority {
+            if let Some(value) = self.get(name)?.presented_a2a_credential(message, limit)? {
+                if selected.is_some() {
+                    return Err(crate::A2aCall::invalid("multiple A2A credentials"));
+                }
+                selected = Some((name.clone(), value));
+            }
+        }
+        Ok(selected)
+    }
+    pub fn a2a_strip_credentials(&self, message: &mut Value) -> Result<()> {
+        for name in &self.priority {
+            self.get(name)?.a2a_strip_credential(message)?;
+        }
+        Ok(())
+    }
+    pub fn a2a_evidence(&self, message: &Value, limit: usize) -> Result<Option<(String, MerchantEvidence)>> {
+        let mut selected = None;
+        for name in &self.priority {
+            if let Some(value) = self.get(name)?.a2a_evidence(message, limit)? {
+                if selected.is_some() {
+                    return Err(crate::A2aCall::invalid("multiple A2A receipts"));
+                }
+                selected = Some((name.clone(), value));
+            }
+        }
+        Ok(selected)
+    }
+
     pub fn get(&self, name: &str) -> Result<&dyn PaymentProtocol> {
         self.adapters
             .get(name)

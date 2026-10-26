@@ -36,6 +36,7 @@ type mcpCall struct {
 	CredentialProtocol string
 	CredentialPayload  any
 	CanonicalBody      []byte
+	a2a                *a2aPaymentCall
 }
 
 // PayeeMiddleware owns challenge, credential verification, and settlement.
@@ -65,7 +66,7 @@ func (middleware *PayeeMiddleware) Gin(routes ...GinPayeeRoute) *GinPayeeMiddlew
 	return NewGinPayeeMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
 }
 
-func (middleware *PayeeMiddleware) Standard(routes ...StandardPayeeRoute) *StandardPayeeMiddleware {
+func (middleware *PayeeMiddleware) Standard(routes ...StandardPayeeRoute) *StdHttpMiddleware {
 	return NewStdHttpMiddleware(middleware, routes...).WithMaxBodyBytes(middleware.config.MaxBodyBytes)
 }
 
@@ -97,7 +98,7 @@ func (middleware *PayeeMiddleware) PresentedCredential(
 	if middleware == nil || adapter == nil {
 		return nil, errors.New("payee payment protocol is not configured")
 	}
-	normalized, err := normalizeCredentialHeaders(headers, adapter.CredentialHeaderNames())
+	normalized, err := (PayeeMiddleware{}).normalizeCredentialHeaders(headers, adapter.CredentialHeaderNames())
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +118,7 @@ func (middleware *PayeeMiddleware) PresentedCredentialForProtocol(
 	if _, err := middleware.protocols.Get(protocolName); err != nil {
 		return nil, err
 	}
-	normalized, err := normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
+	normalized, err := (PayeeMiddleware{}).normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +132,7 @@ func (middleware *PayeeMiddleware) PresentedCredentialForProtocol(
 	return payload, nil
 }
 
-func normalizeCredentialHeaders(headers map[string][]string, names []string) (map[string]string, error) {
+func (PayeeMiddleware) normalizeCredentialHeaders(headers map[string][]string, names []string) (map[string]string, error) {
 	normalized := make(map[string]string, len(names))
 	for name, values := range headers {
 		owned := false
@@ -198,7 +199,7 @@ func (middleware *PayeeMiddleware) requestHash(request *http.Request, body []byt
 }
 
 func (middleware *PayeeMiddleware) hasMCPHTTPPaymentCredential(headers http.Header) (bool, error) {
-	normalized, err := normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
+	normalized, err := (PayeeMiddleware{}).normalizeCredentialHeaders(headers, middleware.protocols.CredentialHeaderNames())
 	if err != nil {
 		return false, err
 	}
@@ -307,7 +308,17 @@ func (middleware *PayeeMiddleware) encodeMCPPaymentRequired(
 	if call == nil {
 		return nil, errors.New("MCP call context is missing")
 	}
-	wire, err := middleware.mcpPaymentRequired(challenge, rejected)
+	var wire protocol.MCPPaymentRequired
+	var err error
+	if call.a2a != nil {
+		var adapter protocol.A2AAdapter
+		adapter, err = middleware.protocols.A2A(challenge.Protocol)
+		if err == nil {
+			wire, err = adapter.A2APaymentRequired(challenge, call.a2a.task, rejected)
+		}
+	} else {
+		wire, err = middleware.mcpPaymentRequired(challenge, rejected)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -323,6 +334,9 @@ func (middleware *PayeeMiddleware) encodeMCPPaymentRequired(
 	if err != nil || int64(len(body)) > middleware.config.MaxBodyBytes {
 		return nil, errors.New("MCP payment challenge is invalid or oversized")
 	}
+	if err := middleware.persistA2ATask(call, body); err != nil {
+		return nil, err
+	}
 	return body, nil
 }
 
@@ -332,6 +346,9 @@ func (middleware *PayeeMiddleware) injectMCPReceipt(
 	payment *model.SettledIncomingPayment,
 	body []byte,
 ) ([]byte, error) {
+	if call.a2a != nil {
+		return middleware.injectA2AReceipt(call, challenge, payment, body)
+	}
 	message, meta, err := middleware.decodeMCPResponse(call, body, true)
 	if err != nil {
 		return nil, err
@@ -402,13 +419,13 @@ func (middleware *PayeeMiddleware) Challenge(ctx context.Context, operation mode
 	}
 	challenge, err := middleware.createChallenge(ctx, model.CreateChallengeRequest{
 		OperationContext: operationContext,
-		OfferID:          operation.OfferID, Resource: operation.Resource, Origin: operation.Origin,
+		PriceID:          operation.PriceID, Resource: operation.Resource, Origin: operation.Origin,
 		Protocol: operation.Protocol, RequestHash: operation.RequestHash,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := validateChallengeBinding(operation, challenge); err != nil {
+	if err := (PayeeMiddleware{}).validateChallengeBinding(operation, challenge); err != nil {
 		return nil, err
 	}
 	return challenge, nil
@@ -449,7 +466,7 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	if verification.VerificationRef == "" {
 		return nil, errors.New("valid AgentVault verification omitted verification_ref")
 	}
-	if err := validateVerificationBinding(operation, challenge, verification); err != nil {
+	if err := (PayeeMiddleware{}).validateVerificationBinding(operation, challenge, verification); err != nil {
 		return nil, err
 	}
 	slog.Info("payee middleware verified payment credential",
@@ -467,7 +484,7 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	if err != nil {
 		return nil, err
 	}
-	if err := validateSettlementBinding(operation, verification, payment); err != nil {
+	if err := (PayeeMiddleware{}).validateSettlementBinding(operation, verification, payment); err != nil {
 		return nil, err
 	}
 	slog.Info("payee middleware settled payment",
@@ -476,8 +493,8 @@ func (middleware *PayeeMiddleware) Protect(ctx context.Context, operation model.
 	return &model.ProtectionOutcome{Outcome: "authorized", Challenge: challenge, Payment: payment}, nil
 }
 
-func validateChallengeBinding(operation model.PayeeOperation, challenge *model.PaymentChallenge) error {
-	if challenge == nil || challenge.ScenarioID != operation.ScenarioID || challenge.OfferID != operation.OfferID ||
+func (PayeeMiddleware) validateChallengeBinding(operation model.PayeeOperation, challenge *model.PaymentChallenge) error {
+	if challenge == nil || challenge.ScenarioID != operation.ScenarioID || challenge.PriceID != operation.PriceID ||
 		challenge.Resource != operation.Resource || challenge.Protocol != operation.Protocol {
 		return errors.New("AgentVault challenge is not bound to the protected operation")
 	}
@@ -493,11 +510,11 @@ func validateChallengeBinding(operation model.PayeeOperation, challenge *model.P
 	return nil
 }
 
-func validateVerificationBinding(operation model.PayeeOperation, challenge *model.PaymentChallenge,
+func (PayeeMiddleware) validateVerificationBinding(operation model.PayeeOperation, challenge *model.PaymentChallenge,
 	verification *model.PaymentVerification) error {
 	intent := verification.Intent
 	if intent.ID == "" || intent.Direction != model.PaymentDirectionInbound || intent.ScenarioID != operation.ScenarioID ||
-		intent.OfferID != operation.OfferID || intent.Resource != operation.Resource || intent.Protocol != operation.Protocol ||
+		intent.PriceID != operation.PriceID || intent.Resource != operation.Resource || intent.Protocol != operation.Protocol ||
 		intent.ChallengeHash != challenge.ChallengeHash || intent.RequestHash != operation.RequestHash ||
 		intent.Asset != challenge.Asset || intent.Amount != challenge.Amount || intent.Recipient != challenge.Recipient {
 		return errors.New("AgentVault verification is not bound to the protected operation")
@@ -505,11 +522,11 @@ func validateVerificationBinding(operation model.PayeeOperation, challenge *mode
 	return nil
 }
 
-func validateSettlementBinding(operation model.PayeeOperation, verification *model.PaymentVerification,
+func (PayeeMiddleware) validateSettlementBinding(operation model.PayeeOperation, verification *model.PaymentVerification,
 	payment *model.SettledIncomingPayment) error {
 	verified := verification.Intent
 	if payment == nil || payment.Intent.ID != verified.ID || payment.Intent.Direction != model.PaymentDirectionInbound ||
-		payment.Intent.ScenarioID != verified.ScenarioID || payment.Intent.OfferID != verified.OfferID ||
+		payment.Intent.ScenarioID != verified.ScenarioID || payment.Intent.PriceID != verified.PriceID ||
 		payment.Intent.Resource != verified.Resource || payment.Intent.Protocol != verified.Protocol ||
 		payment.Intent.ChallengeHash != verified.ChallengeHash || payment.Intent.RequestHash != verified.RequestHash ||
 		payment.Intent.Asset != verified.Asset || payment.Intent.Amount != verified.Amount ||
@@ -525,15 +542,15 @@ func validateSettlementBinding(operation model.PayeeOperation, verification *mod
 	return nil
 }
 
-func (middleware *PayeeMiddleware) ResolveOffer(ctx context.Context, request model.ResolveOfferRequest) (*model.PaymentOffer, error) {
+func (middleware *PayeeMiddleware) ResolvePrice(ctx context.Context, request model.ResolvePriceRequest) (*model.PaymentPrice, error) {
 	if err := model.Required("scenario_id", request.ScenarioID); err != nil {
 		return nil, err
 	}
 	if err := model.Required("resource", request.Resource); err != nil {
 		return nil, err
 	}
-	var result model.PaymentOffer
-	if err := middleware.api.Post(ctx, "/api/v1/offers/resolve", request, &result); err != nil {
+	var result model.PaymentPrice
+	if err := middleware.api.Post(ctx, "/api/v1/prices/resolve", request, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -544,7 +561,7 @@ func (middleware *PayeeMiddleware) createChallenge(ctx context.Context, request 
 		return nil, err
 	}
 	for name, value := range map[string]string{
-		"offer_id": request.OfferID, "resource": request.Resource, "origin": request.Origin,
+		"price_id": request.PriceID, "resource": request.Resource, "origin": request.Origin,
 		"protocol": request.Protocol, "request_hash": request.RequestHash,
 	} {
 		if err := model.Required(name, value); err != nil {

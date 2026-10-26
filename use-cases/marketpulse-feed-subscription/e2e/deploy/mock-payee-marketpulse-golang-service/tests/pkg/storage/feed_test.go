@@ -7,8 +7,8 @@ import (
 	"github.com/wl4g-blockchain/agentvault/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-golang-service/pkg/storage"
 )
 
-func TestFeedSQLiteStorageSeedsOneHundredRows(t *testing.T) {
-	database, err := storage.NewFeedSQLiteStorage(filepath.Join(t.TempDir(), "marketpulse.sqlite3"))
+func TestFeedSqliteRepositorySeedsOneHundredRows(t *testing.T) {
+	database, err := storage.NewFeedSqliteRepository(filepath.Join(t.TempDir(), "marketpulse.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
 	}

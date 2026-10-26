@@ -29,7 +29,7 @@ extensions for the business handler:
 let layer = vault.payee(PayeeConfig::default())?.axum(vec![
     AxumPayeeRoute::mcp_tool(
         "/mcp", "marketpulse.realtime_news", scenario_id,
-        offer_id, "mcp://marketpulse/realtime-news", public_origin,
+        price_id, "mcp://marketpulse/realtime-news", public_origin,
     ),
 ]);
 let app = Router::new().route("/mcp", post(mcp)).layer(layer);

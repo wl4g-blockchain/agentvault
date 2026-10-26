@@ -39,7 +39,7 @@ PAYMENT_EVENT = f"{PREFIX}/{CLIENT_ID}/payments/events/+"
 COMMAND_FILTERS = [
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/authorize",
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/outbound-response",
-    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/resolve-offer",
+    f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/resolve-price",
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/create-challenge",
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/verify-payment",
     f"$share/{CONSUMER_GROUP}/{PREFIX}/+/commands/settle-payment",
