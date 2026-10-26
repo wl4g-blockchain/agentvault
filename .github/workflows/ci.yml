@@ -442,6 +442,7 @@ jobs:
           sudo env INSTALL_K3S_VERSION=v1.35.4+k3s1 INSTALL_K3S_SYMLINK=force \
             sh "${RUNNER_TEMP}/install-k3s.sh" server --disable=traefik --disable=servicelb
           sudo k3s kubectl wait --for=condition=Ready node --all --timeout=120s
+          sudo k3s kubectl --namespace kube-system wait --for=create deployment/local-path-provisioner --timeout=120s
           sudo k3s kubectl --namespace kube-system rollout status deployment/local-path-provisioner --timeout=120s
 
       - name: Run the Rust and Go SDK matrix on Kubernetes
@@ -455,6 +456,25 @@ jobs:
             --deployer kubernetes --scenario matrix --e2e-sdk-scope simple --matrix-workers 1 \
             --reuse-build --cleanup-after-run --timeout 30m \
             2>&1 | tee use-cases/marketpulse-feed-subscription/e2e/reports/ci-kubernetes-runner.log
+
+      - name: Capture Kubernetes startup and runtime diagnostics
+        if: failure()
+        run: |
+          if ! command -v k3s >/dev/null || ! sudo test -f "${KUBECONFIG}"; then
+            exit 0
+          fi
+          diagnostics=use-cases/marketpulse-feed-subscription/e2e/reports/kubernetes-startup
+          mkdir -p "${diagnostics}"
+          sudo timeout 20s k3s kubectl get nodes --output=wide > "${diagnostics}/nodes.txt" 2>&1 || true
+          sudo timeout 20s k3s kubectl get pods,jobs,persistentvolumeclaims --all-namespaces --output=wide \
+            > "${diagnostics}/workloads.txt" 2>&1 || true
+          sudo timeout 20s k3s kubectl get events --all-namespaces --sort-by=.lastTimestamp \
+            > "${diagnostics}/events.txt" 2>&1 || true
+          systemctl show k3s --property=ActiveState --property=SubState \
+            > "${diagnostics}/service.txt" 2>&1 || true
+          sudo journalctl --unit=k3s --no-pager --lines=200 \
+            | grep --invert-match --ignore-case --extended-regexp 'token|password|secret|authorization|bearer' \
+            > "${diagnostics}/service.log" || true
 
       - name: Capture E2E summary
         id: summary
