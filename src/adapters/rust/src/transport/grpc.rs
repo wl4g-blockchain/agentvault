@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 
 use crate::{GrpcConfig, HttpMethod, TransportError, TransportRequest, TransportResponse, VaultTransport};
 
-use crate::transport_mqtt::producer_trace_context;
+use crate::transport_core::ProducerTraceContext;
 
 #[allow(clippy::default_trait_access, clippy::doc_markdown)]
 mod wire {
@@ -60,7 +60,7 @@ impl GrpcVaultTransport {
     /// Creates a lazy gRPC channel. Remote endpoints must use HTTPS; plaintext
     /// HTTP/2 is accepted only for loopback development endpoints.
     pub fn new(config: GrpcConfig) -> Result<Self, TransportError> {
-        validate_config(&config)?;
+        Self::validate_config(&config)?;
         let scheme = if config.tls { "https" } else { "http" };
         let mut endpoint = Endpoint::from_shared(format!("{scheme}://{}", config.endpoint))
             .map_err(|_| TransportError::new("invalid AgentVault gRPC endpoint"))?
@@ -84,7 +84,7 @@ impl GrpcVaultTransport {
 
 impl VaultTransport for GrpcVaultTransport {
     async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
-        let trace = producer_trace_context(&request.headers);
+        let trace = ProducerTraceContext::new(&request.headers);
         let wire_headers = request
             .headers
             .iter()
@@ -173,30 +173,34 @@ impl VaultTransport for GrpcVaultTransport {
     }
 }
 
-fn validate_config(config: &GrpcConfig) -> Result<(), TransportError> {
-    if config.request_timeout.is_zero() || config.max_message_bytes == 0 {
-        return Err(TransportError::new("invalid AgentVault gRPC transport limits"));
-    }
-    let uri = http::Uri::from_str(&format!("http://{}", config.endpoint))
-        .map_err(|_| TransportError::new("invalid AgentVault gRPC endpoint"))?;
-    let authority = uri
-        .authority()
-        .ok_or_else(|| TransportError::new("AgentVault gRPC endpoint requires an authority"))?;
-    if uri.path_and_query().is_some_and(|value| value.as_str() != "/")
-        || (!config.tls && !is_loopback(authority.host()))
-    {
-        return Err(TransportError::new("unsafe AgentVault gRPC endpoint"));
-    }
-    if let Some(token) = &config.authguard_bearer {
-        if token.trim().is_empty() || token.chars().any(char::is_control) {
-            return Err(TransportError::new("invalid AuthGuard bearer credential"));
+impl GrpcVaultTransport {
+    fn validate_config(config: &GrpcConfig) -> Result<(), TransportError> {
+        if config.request_timeout.is_zero() || config.max_message_bytes == 0 {
+            return Err(TransportError::new("invalid AgentVault gRPC transport limits"));
         }
+        let uri = http::Uri::from_str(&format!("http://{}", config.endpoint))
+            .map_err(|_| TransportError::new("invalid AgentVault gRPC endpoint"))?;
+        let authority = uri
+            .authority()
+            .ok_or_else(|| TransportError::new("AgentVault gRPC endpoint requires an authority"))?;
+        if uri.path_and_query().is_some_and(|value| value.as_str() != "/")
+            || (!config.tls && !Self::is_loopback(authority.host()))
+        {
+            return Err(TransportError::new("unsafe AgentVault gRPC endpoint"));
+        }
+        if let Some(token) = &config.authguard_bearer {
+            if token.trim().is_empty() || token.chars().any(char::is_control) {
+                return Err(TransportError::new("invalid AuthGuard bearer credential"));
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
-fn is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || IpAddr::from_str(host).is_ok_and(|address| address.is_loopback())
+impl GrpcVaultTransport {
+    fn is_loopback(host: &str) -> bool {
+        host.eq_ignore_ascii_case("localhost") || IpAddr::from_str(host).is_ok_and(|address| address.is_loopback())
+    }
 }
 
 #[cfg(test)]

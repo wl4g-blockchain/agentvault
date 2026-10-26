@@ -1,15 +1,16 @@
+import { A2APayeeMiddleware } from './a2a.js';
 import type { PayeeConfig } from '../config/config.js';
 import { PaymentCredential, required, type PaymentChallenge, type PaymentReceipt } from '../model/base.js';
 import {
   operationContext,
   validatePayeeOperation,
-  validateResolveOfferRequest,
+  validateResolvePriceRequest,
   type CreateChallengeRequest,
   type PayeeOperation,
-  type PaymentOffer,
+  type PaymentPrice,
   type PaymentVerification,
   type ProtectionOutcome,
-  type ResolveOfferRequest,
+  type ResolvePriceRequest,
   type SettlePaymentRequest,
   type SettledIncomingPayment,
   type VerifyPaymentRequest,
@@ -34,6 +35,8 @@ export class InvalidPaymentError extends Error {
 export class PayeeMiddleware {
   readonly config: Required<PayeeConfig>;
   private readonly protocols: ProtocolRegistry;
+
+  a2a(): A2APayeeMiddleware { return new A2APayeeMiddleware(this, this.protocols); }
 
   constructor(private readonly transport: VaultTransport, config: PayeeConfig = {}) {
     if (!transport) throw new Error('AgentVault transport is not configured');
@@ -206,8 +209,8 @@ export class PayeeMiddleware {
     return { outcome: 'authorized', challenge, payment };
   }
 
-  resolveOffer(request: ResolveOfferRequest): Promise<PaymentOffer> {
-    validateResolveOfferRequest(request);
+  resolvePrice(request: ResolvePriceRequest): Promise<PaymentPrice> {
+    validateResolvePriceRequest(request);
     const body: Record<string, string> = { scenario_id: request.scenarioId, resource: request.resource };
     if (request.protocol) body.protocol = request.protocol;
     return this.transport.request('POST', '/api/v1/offers/resolve', body);

@@ -124,6 +124,8 @@ SCENARIOS = (
     Scenario("full", "verifier.payment.s20_full", "payment", "s20_full.md", "run one language through the complete payment flow"),
     Scenario("mpp-tempo", "verifier.payment.s25_mpp_tempo", "payment", "s25_mpp_tempo.md", "run MPP Tempo charge, recovery, and gas accounting"),
     Scenario("x402-solana", "verifier.payment.s26_x402_solana", "payment", "s26_x402_solana.md", "run x402 v2 exact on a real local Solana validator"),
+    Scenario("a2a", "verifier.payment.s27_a2a", "payment", "s27_a2a.md", "run five native A2A SDK boundary suites with controlled Vault ports"),
+    Scenario("x402-evm", "verifier.payment.s28_x402_evm", "payment", "s28_x402_evm.md", "run complete x402 v2 EIP-3009 payments on local Anvil"),
     Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the selected SDK matrix scope"),
     Scenario("web", "verifier.web.s40_dashboard", "web", "s40_dashboard.md", "render Matrix evidence through real Chromium Dashboard journeys"),
 )

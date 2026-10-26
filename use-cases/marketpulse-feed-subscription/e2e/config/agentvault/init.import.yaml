@@ -454,7 +454,7 @@ data:
     approval_overage: '50000000'
 ---
 consoleVersion: core.agentvault.io/v1
-kind: Offer
+kind: Price
 metadata:
   name: offer-realtime-news
   status: active

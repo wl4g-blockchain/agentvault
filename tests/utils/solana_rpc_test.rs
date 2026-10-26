@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn rejects_unsafe_endpoint_limits_and_reserved_trace_headers() {
-    assert!(client(
+    assert!(SolanaRpcClient::build(
         "http://example.com",
         Duration::from_secs(1),
         1024,
@@ -10,7 +10,7 @@ fn rejects_unsafe_endpoint_limits_and_reserved_trace_headers() {
         true,
     )
     .is_err());
-    assert!(client(
+    assert!(SolanaRpcClient::build(
         "http://127.0.0.1:8899",
         Duration::from_secs(1),
         0,
@@ -19,7 +19,7 @@ fn rejects_unsafe_endpoint_limits_and_reserved_trace_headers() {
     )
     .is_err());
     for name in ["traceparent", "tracestate"] {
-        assert!(client(
+        assert!(SolanaRpcClient::build(
             "https://rpc.example",
             Duration::from_secs(1),
             1024,
@@ -47,7 +47,7 @@ async fn rejects_oversized_chunked_rpc_response() {
     let server = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    let rpc = client(
+    let rpc = SolanaRpcClient::build(
         &format!("http://{address}"),
         Duration::from_secs(2),
         128,

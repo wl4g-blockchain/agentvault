@@ -9,10 +9,14 @@ import com.stripe.mpp.Credential;
 import com.stripe.mpp.Json;
 import com.stripe.mpp.Receipt;
 import com.stripe.mpp.error.VerificationFailedException;
+
+import io.a2a.spec.Task;
+import io.agentvault.sdk.model.A2a;
 import io.agentvault.sdk.model.Base.HttpCredential;
 import io.agentvault.sdk.model.Base.PaymentChallenge;
 import io.agentvault.sdk.model.Base.PaymentCredential;
 import io.agentvault.sdk.model.Payee.SettledIncomingPayment;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -30,27 +34,37 @@ public final class MppAdapter implements PaymentProtocol {
     public static final int MCP_PAYMENT_REQUIRED_CODE = -32042;
     public static final int MCP_VERIFICATION_FAILED_CODE = -32043;
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern HEADER_PARAMETER = Pattern.compile(
-            "(?i)(?:^|,)\\s*header\\s*=\\s*\"([^\"]*)\"");
-    private static final Pattern HEADER_PARAMETER_NAME = Pattern.compile(
-            "(?i)(?:^|,)\\s*header\\s*=");
+    private static final Pattern HEADER_PARAMETER =
+            Pattern.compile("(?i)(?:^|,)\\s*header\\s*=\\s*\"([^\"]*)\"");
+    private static final Pattern HEADER_PARAMETER_NAME =
+            Pattern.compile("(?i)(?:^|,)\\s*header\\s*=");
 
-    @Override public String name() { return "mpp"; }
+    @Override
+    public String name() {
+        return "mpp";
+    }
 
-    @Override public java.util.List<String> credentialHeaderNames() {
+    @Override
+    public java.util.List<String> credentialHeaderNames() {
         return java.util.List.of("payment-authorization", "authorization");
     }
 
-    @Override public java.util.List<String> merchantEvidenceHeaderNames() {
+    @Override
+    public java.util.List<String> merchantEvidenceHeaderNames() {
         return java.util.List.of("payment-receipt");
     }
 
-    @Override public HttpCredential credential(PaymentCredential credential) {
+    @Override
+    public HttpCredential credential(PaymentCredential credential) {
         HttpCredential delivery = credential.http();
-        String headerName = delivery == null ? "" : delivery.headerName().toLowerCase(java.util.Locale.ROOT);
-        if (!name().equals(credential.protocol()) || delivery == null
-                || !("authorization".equals(headerName) || "payment-authorization".equals(headerName))) {
-            throw new IllegalArgumentException("MPP credential has no allowed Payment authorization delivery");
+        String headerName =
+                delivery == null ? "" : delivery.headerName().toLowerCase(java.util.Locale.ROOT);
+        if (!name().equals(credential.protocol())
+                || delivery == null
+                || !("authorization".equals(headerName)
+                        || "payment-authorization".equals(headerName))) {
+            throw new IllegalArgumentException(
+                    "MPP credential has no allowed Payment authorization delivery");
         }
         Credential parsed = parseCredential(delivery.headerValue(), "MPP credential");
         requireTempoCharge(parsed.challenge().method(), parsed.challenge().intent());
@@ -58,7 +72,8 @@ public final class MppAdapter implements PaymentProtocol {
         return delivery;
     }
 
-    @Override public MerchantEvidence merchantEvidence(Map<String, String> headers) {
+    @Override
+    public MerchantEvidence merchantEvidence(Map<String, String> headers) {
         String value = header(headers, "payment-receipt");
         if (value == null || value.isBlank()) return null;
         Receipt receipt = parseReceipt(value, "Payment-Receipt");
@@ -66,7 +81,8 @@ public final class MppAdapter implements PaymentProtocol {
         return new MerchantEvidence("payment-receipt", value);
     }
 
-    @Override public JsonNode presentedCredential(Map<String, String> headers, int limit) {
+    @Override
+    public JsonNode presentedCredential(Map<String, String> headers, int limit) {
         String dedicated = header(headers, "payment-authorization");
         String authorization = paymentAuthorization(header(headers, "authorization"));
         if (dedicated != null && authorization != null) {
@@ -77,14 +93,20 @@ public final class MppAdapter implements PaymentProtocol {
         boundedHeader(value, limit, "MPP Payment authorization");
         Credential parsed = parseCredential(value, "MPP Payment authorization");
         requireTempoCharge(parsed.challenge().method(), parsed.challenge().intent());
-        requireCredentialHeader(value, dedicated != null ? "Payment-Authorization" : "Authorization");
+        requireCredentialHeader(
+                value, dedicated != null ? "Payment-Authorization" : "Authorization");
         return JSON.createObjectNode().put("authorization", value);
     }
 
-    @Override public HttpResponse challenge(PaymentChallenge challenge) {
-        JsonNode value = challenge.payload() == null ? null : challenge.payload().get("www_authenticate");
-        if (!name().equals(challenge.protocol()) || value == null || !value.isTextual()
-                || value.textValue().indexOf('\r') >= 0 || value.textValue().indexOf('\n') >= 0) {
+    @Override
+    public HttpResponse challenge(PaymentChallenge challenge) {
+        JsonNode value =
+                challenge.payload() == null ? null : challenge.payload().get("www_authenticate");
+        if (!name().equals(challenge.protocol())
+                || value == null
+                || !value.isTextual()
+                || value.textValue().indexOf('\r') >= 0
+                || value.textValue().indexOf('\n') >= 0) {
             throw new IllegalArgumentException("MPP challenge has no valid WWW-Authenticate value");
         }
         String authenticate = value.textValue();
@@ -96,26 +118,43 @@ public final class MppAdapter implements PaymentProtocol {
                 "{\"error\":{\"code\":\"PAYMENT_REQUIRED\"}}".getBytes(StandardCharsets.UTF_8));
     }
 
-    @Override public HttpResponse receipt(SettledIncomingPayment payment) {
-        return new HttpResponse(Map.of(
-                "payment-receipt", paymentReceipt(payment).toPaymentReceipt(),
-                "cache-control", "private"), null, null);
+    @Override
+    public HttpResponse receipt(SettledIncomingPayment payment) {
+        return new HttpResponse(
+                Map.of(
+                        "payment-receipt",
+                        paymentReceipt(payment).toPaymentReceipt(),
+                        "cache-control",
+                        "private"),
+                null,
+                null);
     }
 
-    @Override public String mcpRequestMetadataKey() { return MCP_CREDENTIAL; }
+    @Override
+    public String mcpRequestMetadataKey() {
+        return MCP_CREDENTIAL;
+    }
 
-    @Override public String mcpRootRequestMetadataKey() { return MCP_CREDENTIAL; }
+    @Override
+    public String mcpRootRequestMetadataKey() {
+        return MCP_CREDENTIAL;
+    }
 
-    @Override public String mcpReceiptMetadataKey() { return MCP_RECEIPT; }
+    @Override
+    public String mcpReceiptMetadataKey() {
+        return MCP_RECEIPT;
+    }
 
-    @Override public HttpResponse mcpChallenge(JsonNode message, int limit) {
+    @Override
+    public HttpResponse mcpChallenge(JsonNode message, int limit) {
         boundedJson(message, limit, "MPP MCP message");
         if (message == null || !message.isObject()) return null;
         JsonNode errorData = null;
         JsonNode error = message.get("error");
-        if (error != null && error.isObject()
+        if (error != null
+                && error.isObject()
                 && (error.path("code").asInt() == MCP_PAYMENT_REQUIRED_CODE
-                    || error.path("code").asInt() == MCP_VERIFICATION_FAILED_CODE)) {
+                        || error.path("code").asInt() == MCP_VERIFICATION_FAILED_CODE)) {
             errorData = error.get("data");
             if (errorData == null || !errorData.isObject()) {
                 throw new IllegalArgumentException("MPP MCP error omitted challenge data");
@@ -131,7 +170,8 @@ public final class MppAdapter implements PaymentProtocol {
         }
         if (errorData == null && resultData == null) return null;
         if (errorData != null && resultData != null && !errorData.equals(resultData)) {
-            throw new IllegalArgumentException("MPP MCP error challenge conflicts with result metadata");
+            throw new IllegalArgumentException(
+                    "MPP MCP error challenge conflicts with result metadata");
         }
         McpChallenge projection = selectMcpChallenge(errorData != null ? errorData : resultData);
         return new HttpResponse(
@@ -140,12 +180,14 @@ public final class MppAdapter implements PaymentProtocol {
                 "{\"error\":{\"code\":\"PAYMENT_REQUIRED\"}}".getBytes(StandardCharsets.UTF_8));
     }
 
-    @Override public McpMetadata mcpCredential(PaymentCredential credential) {
+    @Override
+    public McpMetadata mcpCredential(PaymentCredential credential) {
         HttpCredential delivery = credential(credential);
         return new McpMetadata(MCP_CREDENTIAL, credentialEnvelope(delivery.headerValue()));
     }
 
-    @Override public JsonNode presentedMcpCredential(JsonNode meta, int limit) {
+    @Override
+    public JsonNode presentedMcpCredential(JsonNode meta, int limit) {
         requireObject(meta, "MCP params._meta");
         JsonNode value = meta.get(MCP_CREDENTIAL);
         if (value == null) return null;
@@ -157,24 +199,27 @@ public final class MppAdapter implements PaymentProtocol {
         return JSON.createObjectNode().put("authorization", credential.authorization());
     }
 
-    @Override public McpPaymentRequired mcpPaymentRequired(PaymentChallenge challenge) {
+    @Override
+    public McpPaymentRequired mcpPaymentRequired(PaymentChallenge challenge) {
         McpChallenge stored = storedMcpChallenge(challenge);
-        return McpPaymentRequired.error(paymentError(
-                MCP_PAYMENT_REQUIRED_CODE, "Payment Required", stored.wire(), null));
+        return McpPaymentRequired.error(
+                paymentError(MCP_PAYMENT_REQUIRED_CODE, "Payment Required", stored.wire(), null));
     }
 
-    @Override public McpPaymentRequired mcpPaymentRejected(PaymentChallenge challenge, String message) {
+    @Override
+    public McpPaymentRequired mcpPaymentRejected(PaymentChallenge challenge, String message) {
         McpChallenge stored = storedMcpChallenge(challenge);
         VerificationFailedException error = new VerificationFailedException(message);
-        return McpPaymentRequired.error(paymentError(
-                MCP_VERIFICATION_FAILED_CODE,
-                error.getMessage(),
-                stored.wire(),
-                JSON.valueToTree(error.toProblemDetails(stored.nativeChallenge().id()))));
+        return McpPaymentRequired.error(
+                paymentError(
+                        MCP_VERIFICATION_FAILED_CODE,
+                        error.getMessage(),
+                        stored.wire(),
+                        JSON.valueToTree(error.toProblemDetails(stored.nativeChallenge().id()))));
     }
 
-    @Override public McpMetadata mcpReceipt(
-            PaymentChallenge challenge, SettledIncomingPayment payment) {
+    @Override
+    public McpMetadata mcpReceipt(PaymentChallenge challenge, SettledIncomingPayment payment) {
         if (!name().equals(challenge.protocol())
                 || !challenge.challengeHash().equals(payment.intent().challengeHash())) {
             throw new IllegalArgumentException("MPP MCP receipt challenge binding is invalid");
@@ -186,7 +231,8 @@ public final class MppAdapter implements PaymentProtocol {
         return new McpMetadata(MCP_RECEIPT, value);
     }
 
-    @Override public MerchantEvidence mcpMerchantEvidence(JsonNode meta, int limit) {
+    @Override
+    public MerchantEvidence mcpMerchantEvidence(JsonNode meta, int limit) {
         requireObject(meta, "MCP result._meta");
         JsonNode value = meta.get(MCP_RECEIPT);
         if (value == null) return null;
@@ -200,7 +246,8 @@ public final class MppAdapter implements PaymentProtocol {
     }
 
     private McpChallenge storedMcpChallenge(PaymentChallenge challenge) {
-        JsonNode value = challenge.payload() == null ? null : challenge.payload().get("mcp_challenge");
+        JsonNode value =
+                challenge.payload() == null ? null : challenge.payload().get("mcp_challenge");
         if (!name().equals(challenge.protocol()) || value == null) {
             throw new IllegalArgumentException("MPP challenge protocol or payload is invalid");
         }
@@ -210,8 +257,11 @@ public final class MppAdapter implements PaymentProtocol {
     }
 
     private McpChallenge selectMcpChallenge(JsonNode data) {
-        if (data == null || !data.isObject() || data.path("httpStatus").asInt(-1) != 402
-                || !data.path("challenges").isArray() || data.path("challenges").isEmpty()) {
+        if (data == null
+                || !data.isObject()
+                || data.path("httpStatus").asInt(-1) != 402
+                || !data.path("challenges").isArray()
+                || data.path("challenges").isEmpty()) {
             throw new IllegalArgumentException(
                     "MPP MCP challenge must carry HTTP 402 and at least one challenge");
         }
@@ -236,28 +286,33 @@ public final class MppAdapter implements PaymentProtocol {
         }
         String header = value.has("header") ? text(value, "header") : null;
         if (header != null && !"payment-authorization".equalsIgnoreCase(header)) {
-            throw new IllegalArgumentException("MPP challenge selected an unsupported credential header");
+            throw new IllegalArgumentException(
+                    "MPP challenge selected an unsupported credential header");
         }
         Map<String, Object> requestMap = JSON.convertValue(request, Map.class);
         Map<String, Object> opaque = null;
         if (value.has("opaque") && !value.get("opaque").isNull()) {
             if (!value.get("opaque").isObject()) {
-                throw new IllegalArgumentException("MPP MCP challenge opaque value must be an object");
+                throw new IllegalArgumentException(
+                        "MPP MCP challenge opaque value must be an object");
             }
             opaque = JSON.convertValue(value.get("opaque"), Map.class);
         }
-        Challenge challenge = new Challenge(
-                text(value, "id"),
-                text(value, "method"),
-                text(value, "intent"),
-                requestMap,
-                text(value, "realm"),
-                Base64.getUrlEncoder().withoutPadding().encodeToString(
-                        Json.compact(requestMap).getBytes(StandardCharsets.UTF_8)),
-                optionalText(value, "digest"),
-                optionalText(value, "expires"),
-                optionalText(value, "description"),
-                opaque);
+        Challenge challenge =
+                new Challenge(
+                        text(value, "id"),
+                        text(value, "method"),
+                        text(value, "intent"),
+                        requestMap,
+                        text(value, "realm"),
+                        Base64.getUrlEncoder()
+                                .withoutPadding()
+                                .encodeToString(
+                                        Json.compact(requestMap).getBytes(StandardCharsets.UTF_8)),
+                        optionalText(value, "digest"),
+                        optionalText(value, "expires"),
+                        optionalText(value, "description"),
+                        opaque);
         requireTempoCharge(challenge.method(), challenge.intent());
         ObjectNode wire = value.deepCopy();
         if (header != null) wire.put("header", "Payment-Authorization");
@@ -284,19 +339,24 @@ public final class MppAdapter implements PaymentProtocol {
         try {
             ObjectNode envelope = authorizationEnvelope(authorization, "MPP credential");
             ObjectNode challenge = (ObjectNode) envelope.get("challenge");
-            byte[] requestJson = Base64.getUrlDecoder().decode(padBase64(text(challenge, "request")));
-            challenge.set("request", JSON.valueToTree(
-                    Json.parseMap(new String(requestJson, StandardCharsets.UTF_8))));
+            byte[] requestJson =
+                    Base64.getUrlDecoder().decode(padBase64(text(challenge, "request")));
+            challenge.set(
+                    "request",
+                    JSON.valueToTree(
+                            Json.parseMap(new String(requestJson, StandardCharsets.UTF_8))));
             return envelope;
         } catch (IllegalArgumentException error) {
-            throw new IllegalArgumentException("MPP credential cannot be projected to MCP metadata", error);
+            throw new IllegalArgumentException(
+                    "MPP credential cannot be projected to MCP metadata", error);
         }
     }
 
     private ObjectNode authorizationEnvelope(String value, String label) {
         parseCredential(value, label);
         String payment = paymentAuthorization(value);
-        if (payment == null) throw new IllegalArgumentException(label + " is not a Payment authorization");
+        if (payment == null)
+            throw new IllegalArgumentException(label + " is not a Payment authorization");
         try {
             byte[] decoded = Base64.getUrlDecoder().decode(padBase64(payment.substring(8).strip()));
             JsonNode envelope = JSON.readTree(decoded);
@@ -311,16 +371,19 @@ public final class MppAdapter implements PaymentProtocol {
 
     private String authorizationFromEnvelope(ObjectNode envelope) {
         try {
-            return "Payment " + Base64.getUrlEncoder().withoutPadding()
-                    .encodeToString(JSON.writeValueAsBytes(envelope));
+            return "Payment "
+                    + Base64.getUrlEncoder()
+                            .withoutPadding()
+                            .encodeToString(JSON.writeValueAsBytes(envelope));
         } catch (JsonProcessingException error) {
             throw new IllegalArgumentException("MPP MCP credential cannot be encoded", error);
         }
     }
 
     private void requireCredentialHeader(String authorization, String actual) {
-        String expected = challengedHeader(
-                authorizationEnvelope(authorization, "MPP credential").get("challenge"));
+        String expected =
+                challengedHeader(
+                        authorizationEnvelope(authorization, "MPP credential").get("challenge"));
         if (!expected.equalsIgnoreCase(actual)) {
             throw new IllegalArgumentException(
                     "MPP credential delivery does not match its challenged header");
@@ -331,7 +394,8 @@ public final class MppAdapter implements PaymentProtocol {
         JsonNode header = challenge.get("header");
         if (header == null || header.isNull()) return "Authorization";
         if (!header.isTextual() || !"payment-authorization".equalsIgnoreCase(header.textValue())) {
-            throw new IllegalArgumentException("MPP credential selected an unsupported credential header");
+            throw new IllegalArgumentException(
+                    "MPP credential selected an unsupported credential header");
         }
         return "Payment-Authorization";
     }
@@ -350,7 +414,8 @@ public final class MppAdapter implements PaymentProtocol {
             }
         }
         if (names != values) {
-            throw new IllegalArgumentException("MPP challenge selected an invalid credential header");
+            throw new IllegalArgumentException(
+                    "MPP challenge selected an invalid credential header");
         }
     }
 
@@ -375,13 +440,20 @@ public final class MppAdapter implements PaymentProtocol {
 
     private Receipt paymentReceipt(SettledIncomingPayment payment) {
         var receipt = payment.receipt();
-        if (!name().equals(receipt.protocol()) || receipt.transactionHash() == null
-                || receipt.transactionHash().isBlank() || receipt.confirmedAt() <= 0) {
+        if (!name().equals(receipt.protocol())
+                || receipt.transactionHash() == null
+                || receipt.transactionHash().isBlank()
+                || receipt.confirmedAt() <= 0) {
             throw new IllegalArgumentException(
                     "confirmed MPP receipt omitted transaction or confirmation time");
         }
-        return new Receipt("success", Instant.ofEpochSecond(receipt.confirmedAt()),
-                receipt.transactionHash(), "tempo", payment.intent().id(), null);
+        return new Receipt(
+                "success",
+                Instant.ofEpochSecond(receipt.confirmedAt()),
+                receipt.transactionHash(),
+                "tempo",
+                payment.intent().id(),
+                null);
     }
 
     private Receipt receiptFromMcp(JsonNode value) {
@@ -393,7 +465,9 @@ public final class MppAdapter implements PaymentProtocol {
                     text(value, "reference"),
                     text(value, "method"),
                     optionalText(value, "externalId"),
-                    value.has("extra") ? JSON.convertValue(value.get("extra"), Object.class) : null);
+                    value.has("extra")
+                            ? JSON.convertValue(value.get("extra"), Object.class)
+                            : null);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("MPP MCP receipt metadata is invalid", error);
         }
@@ -414,7 +488,8 @@ public final class MppAdapter implements PaymentProtocol {
         try {
             return Challenge.fromWwwAuthenticate(value);
         } catch (RuntimeException error) {
-            throw new IllegalArgumentException(label + " has no valid WWW-Authenticate value", error);
+            throw new IllegalArgumentException(
+                    label + " has no valid WWW-Authenticate value", error);
         }
     }
 
@@ -422,8 +497,10 @@ public final class MppAdapter implements PaymentProtocol {
         return challenges.stream()
                 .filter(value -> "tempo".equals(value.method()) && "charge".equals(value.intent()))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "MPP supports only the implemented Tempo charge flow"));
+                .orElseThrow(
+                        () ->
+                                new IllegalArgumentException(
+                                        "MPP supports only the implemented Tempo charge flow"));
     }
 
     private Credential parseCredential(String value, String label) {
@@ -433,7 +510,8 @@ public final class MppAdapter implements PaymentProtocol {
             }
             return Credential.fromAuthorization(value);
         } catch (RuntimeException error) {
-            throw new IllegalArgumentException(label + " is not a valid Payment authorization", error);
+            throw new IllegalArgumentException(
+                    label + " is not a valid Payment authorization", error);
         }
     }
 
@@ -447,13 +525,16 @@ public final class MppAdapter implements PaymentProtocol {
 
     private static void requireTempoCharge(String method, String intent) {
         if (!"tempo".equals(method) || !"charge".equals(intent)) {
-            throw new IllegalArgumentException("MPP supports only the implemented Tempo charge flow");
+            throw new IllegalArgumentException(
+                    "MPP supports only the implemented Tempo charge flow");
         }
     }
 
     private static void requireTempoReceipt(Receipt receipt) {
-        if (!"success".equals(receipt.status()) || !"tempo".equals(receipt.method())
-                || receipt.reference() == null || receipt.reference().isBlank()) {
+        if (!"success".equals(receipt.status())
+                || !"tempo".equals(receipt.method())
+                || receipt.reference() == null
+                || receipt.reference().isBlank()) {
             throw new IllegalArgumentException(
                     "MPP Payment-Receipt is not a successful Tempo receipt");
         }
@@ -477,7 +558,8 @@ public final class MppAdapter implements PaymentProtocol {
     private static String optionalText(JsonNode value, String name) {
         JsonNode field = value.get(name);
         if (field == null || field.isNull()) return null;
-        if (!field.isTextual()) throw new IllegalArgumentException("MPP field must be text: " + name);
+        if (!field.isTextual())
+            throw new IllegalArgumentException("MPP field must be text: " + name);
         return field.textValue();
     }
 
@@ -488,7 +570,10 @@ public final class MppAdapter implements PaymentProtocol {
     }
 
     private void boundedHeader(String value, int limit, String label) {
-        if (limit <= 0 || value.length() > limit || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
+        if (limit <= 0
+                || value.length() > limit
+                || value.indexOf('\r') >= 0
+                || value.indexOf('\n') >= 0) {
             throw new IllegalArgumentException(label + " is invalid or oversized");
         }
     }
@@ -505,5 +590,55 @@ public final class MppAdapter implements PaymentProtocol {
     }
 
     private record McpChallenge(Challenge nativeChallenge, ObjectNode wire) {}
+
     private record McpCredentialProjection(Credential nativeCredential, String authorization) {}
+
+    @Override
+    public HttpResponse a2aChallenge(JsonNode message, int limit) {
+        return message.has("error") ? mcpChallenge(message, limit) : null;
+    }
+
+    @Override
+    public JsonNode presentedA2aCredential(JsonNode message, int limit) {
+        String key = mcpRequestMetadataKey();
+        if (message.path("params").path("_meta").has(key) || A2a.metadata(message, false).has(key))
+            throw new IllegalArgumentException("MPP A2A credential requires root _meta");
+        return presentedMcpCredential(A2a.metadata(message, true), limit);
+    }
+
+    @Override
+    public void a2aStripCredential(JsonNode message) {
+        A2a.metadata(message, true).remove(mcpRequestMetadataKey());
+    }
+
+    @Override
+    public void a2aApplyCredential(JsonNode message, PaymentCredential credential) {
+        var meta = A2a.metadata(message, true);
+        var value = mcpCredential(credential);
+        if (meta.has(value.key())) throw new IllegalArgumentException("existing MPP credential");
+        meta.set(value.key(), value.value());
+    }
+
+    @Override
+    public McpPaymentRequired a2aPaymentRequired(
+            PaymentChallenge challenge, Task task, boolean rejected) {
+        return rejected
+                ? mcpPaymentRejected(challenge, "Payment verification failed")
+                : mcpPaymentRequired(challenge);
+    }
+
+    @Override
+    public MerchantEvidence a2aEvidence(JsonNode message, int limit) {
+        return mcpMerchantEvidence(A2a.metadata(message, true), limit);
+    }
+
+    @Override
+    public void a2aInjectReceipt(
+            JsonNode message, PaymentChallenge challenge, SettledIncomingPayment payment) {
+        var meta = A2a.metadata(message, true);
+        var receipt = mcpReceipt(challenge, payment);
+        if (meta.has(receipt.key()))
+            throw new IllegalArgumentException("handler supplied MPP receipt");
+        meta.set(receipt.key(), receipt.value());
+    }
 }

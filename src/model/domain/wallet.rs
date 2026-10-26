@@ -2,15 +2,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{canonicalize_payment_recipient, canonicalize_wallet_address, wallet_addresses_match};
 
-/// Persisted wallet metadata. Custody material is stored separately and is
-/// intentionally absent from this entity.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Wallet {
-    pub id: String,
-    pub algorithm: String,
-    pub address: String,
-    pub public_key: String,
-    pub created_at: i64,
+crate::storage::repository_entity! { "pay_wallet", ReadOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Persisted wallet metadata. Custody material is stored separately and is
+    /// intentionally absent from this entity.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+    pub struct Wallet {
+        pub id: String,
+        pub algorithm: String,
+        pub address: String,
+        pub public_key: String,
+        pub created_at: i64,
+    }
 }
 
 impl Wallet {

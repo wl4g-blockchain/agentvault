@@ -1,7 +1,7 @@
 use crate::{
-    model_base::validate_required, percent_encode, ApiClient, ApprovalDecisionKind, ApprovalPage, ApprovalQuery,
-    ApprovalRequest, ConfiguredVaultTransport, Error, PayeeConfig, PayeeMiddleware, PayerConfig, PayerMiddleware,
-    Result, SubmitApprovalDecisionRequest, TransportError, VaultTransport, VaultTransportConfig, VaultTransportFactory,
+    model_base::validate_required, ApiClient, ApprovalDecisionKind, ApprovalPage, ApprovalQuery, ApprovalRequest,
+    ConfiguredVaultTransport, Error, PayeeConfig, PayeeMiddleware, PayerConfig, PayerMiddleware, Result,
+    SubmitApprovalDecisionRequest, TransportError, VaultTransport, VaultTransportConfig, VaultTransportFactory,
 };
 
 pub struct AgentVault<T> {
@@ -42,7 +42,7 @@ impl<T: VaultTransport> AgentVault<T> {
             .get(format!(
                 "{}?scenario_id={}&status=pending",
                 paths::APPROVALS,
-                percent_encode(&query.scenario_id)
+                crate::TransportRequest::percent_encode(&query.scenario_id)
             ))
             .await
     }
@@ -66,7 +66,11 @@ impl<T: VaultTransport> AgentVault<T> {
         }
         self.api
             .post(
-                format!("{}/{}/decision", paths::APPROVALS, percent_encode(&request.approval_id)),
+                format!(
+                    "{}/{}/decision",
+                    paths::APPROVALS,
+                    crate::TransportRequest::percent_encode(&request.approval_id)
+                ),
                 request,
             )
             .await
@@ -79,8 +83,8 @@ impl<T: VaultTransport> AgentVault<T> {
             .get(format!(
                 "{}/{approval_id}?scenario_id={scenario_id}",
                 paths::APPROVALS,
-                approval_id = percent_encode(approval_id),
-                scenario_id = percent_encode(scenario_id)
+                approval_id = crate::TransportRequest::percent_encode(approval_id),
+                scenario_id = crate::TransportRequest::percent_encode(scenario_id)
             ))
             .await
     }

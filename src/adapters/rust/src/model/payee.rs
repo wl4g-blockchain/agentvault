@@ -39,7 +39,7 @@ impl PayeeOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolveOfferRequest {
+pub struct ResolvePriceRequest {
     pub scenario_id: String,
     pub resource: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,7 +47,7 @@ pub struct ResolveOfferRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PaymentOffer {
+pub struct PaymentPrice {
     pub id: String,
     pub scenario_id: String,
     pub resource: String,

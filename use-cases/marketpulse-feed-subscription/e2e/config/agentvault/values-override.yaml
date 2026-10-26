@@ -28,7 +28,7 @@ agentvault:
       AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__HOST: "0.0.0.0"
       AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__ENABLED: "true"
     extraContainers:
-      - name: loopback-bridge
+      - name: local-envoy-cm
         image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
         imagePullPolicy: IfNotPresent
         args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
@@ -40,10 +40,10 @@ agentvault:
           requests: { cpu: 10m, memory: 16Mi }
           limits: { cpu: 100m, memory: 64Mi }
         volumeMounts:
-          - { name: loopback-bridge-config, mountPath: /etc/envoy, readOnly: true }
+          - { name: local-envoy-cm-config, mountPath: /etc/envoy, readOnly: true }
     extraVolumes:
-      - name: loopback-bridge-config
-        configMap: { name: agentvault-loopback-bridge }
+      - name: local-envoy-cm-config
+        configMap: { name: agentvault-local-envoy-cm }
   frontend:
     enabled: false
     route:
@@ -227,11 +227,6 @@ agentvault:
           port: 50051
           max_message_bytes: 2097152
           request_timeout: 15s
-        local:
-          enabled: false
-          socket_path: /run/agentvault/agentvault.sock
-          max_connections: 64
-          request_timeout: 5s
         mqtt:
           enabled: true
           host: 127.0.0.1

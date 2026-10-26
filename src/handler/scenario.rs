@@ -1,62 +1,25 @@
-use std::sync::Arc;
-
 use crate::{
-    model::{scenario::UNRESTRICTED_PRINCIPAL, AccessContext, PaymentClient},
-    storage::{ClientStorage, ScenarioStorage},
+    handler::PayClientHandler,
+    model::{scenario::UNRESTRICTED_PRINCIPAL, AccessContext, PaymentPolicy, PaymentScenario},
+    storage::{IClientRepository, IScenarioRepository, IdempotentWrite, Page, PageRequest, ScenarioConfiguration},
     Error, Result,
 };
-
-/// Trusted-principal to registered-client boundary.
-pub struct ClientHandler {
-    storage: Arc<dyn ClientStorage>,
-}
-
-impl ClientHandler {
-    #[must_use]
-    pub fn new(storage: Arc<dyn ClientStorage>) -> Self {
-        Self { storage }
-    }
-
-    /// Resolves an authenticated principal without disclosing disabled state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an authentication or storage error.
-    pub async fn authenticate(&self, principal: &str) -> Result<PaymentClient> {
-        if principal.trim().is_empty() {
-            return Err(Error::Unauthenticated);
-        }
-        self.storage
-            .find_by_principal(principal)
-            .await?
-            .filter(|client| client.authenticates(principal))
-            .ok_or(Error::Forbidden)
-    }
-
-    /// Registers one validated business application.
-    ///
-    /// # Errors
-    ///
-    /// Returns validation or persistence errors.
-    pub async fn register(&self, client: &PaymentClient) -> Result<PaymentClient> {
-        client
-            .validate()
-            .map_err(|field| Error::InvalidRequest(format!("invalid payment client field: {field}")))?;
-        self.storage.insert(client).await
-    }
-}
+use std::sync::Arc;
 
 /// Enforces principal -> client -> scenario ownership for every payment use
 /// case. A request body never supplies `client_id`.
 pub struct ScenarioHandler {
-    clients: Arc<dyn ClientStorage>,
-    scenarios: Arc<dyn ScenarioStorage>,
+    clients: Arc<PayClientHandler>,
+    scenarios: Arc<dyn IScenarioRepository>,
 }
 
 impl ScenarioHandler {
     #[must_use]
-    pub fn new(clients: Arc<dyn ClientStorage>, scenarios: Arc<dyn ScenarioStorage>) -> Self {
-        Self { clients, scenarios }
+    pub fn new(clients: Arc<dyn IClientRepository>, scenarios: Arc<dyn IScenarioRepository>) -> Self {
+        Self {
+            clients: Arc::new(PayClientHandler::new(clients)),
+            scenarios,
+        }
     }
 
     /// Resolves a principal through its client and enabled scenario ownership.
@@ -85,7 +48,7 @@ impl ScenarioHandler {
                 scenario,
             });
         }
-        let client = self.authenticated_client(principal).await?;
+        let client = self.clients.authenticate(principal).await?;
         let scenario = self
             .scenarios
             .get_for_client(&client.id, scenario_id)
@@ -99,15 +62,26 @@ impl ScenarioHandler {
         })
     }
 
-    async fn authenticated_client(&self, principal: &str) -> Result<PaymentClient> {
-        if principal.trim().is_empty() {
-            return Err(Error::Unauthenticated);
-        }
-        self.clients
-            .find_by_principal(principal)
-            .await?
-            .filter(|client| client.authenticates(principal))
-            .ok_or(Error::Forbidden)
+    /// # Errors
+    /// Returns persistence errors.
+    pub async fn get(&self, id: &str) -> Result<Option<PaymentScenario>> {
+        self.scenarios.get(id).await
+    }
+
+    /// # Errors
+    /// Returns persistence errors.
+    pub async fn list_for_client(&self, client: &str, page: PageRequest) -> Result<Page<PaymentScenario>> {
+        self.scenarios.list_for_client(client, page).await
+    }
+
+    /// # Errors
+    /// Rejects a conflicting registration or invalid initial policy.
+    pub async fn register_with_policy(
+        &self,
+        scenario: &PaymentScenario,
+        policy: &PaymentPolicy,
+    ) -> Result<IdempotentWrite<ScenarioConfiguration>> {
+        self.scenarios.register_with_policy(scenario, policy).await
     }
 }
 

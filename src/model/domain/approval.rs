@@ -5,15 +5,18 @@ use crate::{
     utils::secure_material::SealedSensitiveMaterial,
 };
 
-/// Trusted administrator mapping persisted for one payment scenario.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentScenarioApprover {
-    pub scenario_id: String,
-    pub auth_principal: String,
-    pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
+crate::storage::repository_entity! { "pay_scenario_approver", Catalog;
+    keys: ["scenario_id", "auth_principal"], immutable: ["created_at"], revision: Some("updated_at");
+    /// Trusted administrator mapping persisted for one payment scenario.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentScenarioApprover {
+        pub scenario_id: String,
+        pub auth_principal: String,
+        pub enabled: bool,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
 }
 
 impl PaymentScenarioApprover {
@@ -59,37 +62,40 @@ impl ApprovalStatus {
     }
 }
 
-/// Durable approval row for one payment intent.
-///
-/// The complete JWT is retained only as an authenticated encrypted envelope.
-/// Serde deliberately excludes that envelope so API responses, events, and
-/// logs cannot expose even the persisted ciphertext by serializing this model.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ApprovalRequest {
-    pub id: String,
-    pub intent_id: String,
-    pub run_id: String,
-    pub requested_amount: Amount,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_amount: Option<Amount>,
-    pub requested_by: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_by: Option<String>,
-    pub status: ApprovalStatus,
-    pub intent_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grant_jti: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grant_claims_hash: Option<String>,
-    #[serde(skip)]
-    pub sealed_grant_token: Option<SealedSensitiveMaterial>,
-    pub expires_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub consumed_at: Option<i64>,
-    pub created_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_at: Option<i64>,
+crate::storage::repository_entity! { "pay_approval", ReadOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Durable approval row for one payment intent.
+    ///
+    /// The complete JWT is retained only as an authenticated encrypted envelope.
+    /// Serde deliberately excludes that envelope so API responses, events, and
+    /// logs cannot expose even the persisted ciphertext by serializing this model.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub struct ApprovalRequest {
+        pub id: String,
+        pub intent_id: String,
+        pub run_id: String,
+        pub requested_amount: Amount,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub approved_amount: Option<Amount>,
+        pub requested_by: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub approved_by: Option<String>,
+        pub status: ApprovalStatus,
+        pub intent_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub grant_jti: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub grant_claims_hash: Option<String>,
+        #[serde(skip)]
+        pub sealed_grant_token: Option<SealedSensitiveMaterial>,
+        pub expires_at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub consumed_at: Option<i64>,
+        pub created_at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub approved_at: Option<i64>,
+    }
 }
 
 impl ApprovalRequest {

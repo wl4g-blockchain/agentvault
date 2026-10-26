@@ -31,7 +31,7 @@ PROJECT = "agentvault-e2e"
 COMPOSE_FILE = E2E_ROOT / "docker-compose.yaml"
 RUNTIME_ROOT = E2E_ROOT / "reports" / ".runtime"
 AGENTVAULT_CHART = REPOSITORY_ROOT / "deploy" / "helm" / "agentvault"
-AGENTVAULT_VALUES = CONFIG_ROOT / "agentvault" / "values.yaml"
+AGENTVAULT_VALUES = CONFIG_ROOT / "agentvault" / "values-override.yaml"
 AGENTVAULT_CONFIG_TEMPLATE = "templates/platform/runtime-config-map.yaml"
 AGENTVAULT_NAMESPACE = "e2e-agentvault-system"
 TOKEN_CONTRACT = "0x5fbdb2315678afecb367f032d93f642f64180aa3"
@@ -1267,6 +1267,25 @@ class DockerE2EDeployer(E2EDeployer):
             "facilitator": self._full(payer, payee, "logs", "--no-color", "facilitator"),
         }
 
+    def _persist_full_evidence(self, evidence: FullFlowEvidence) -> None:
+        """Retain only verified financial fields and the existing redacted service logs."""
+        directory = self.context.report_root / "payment" / "full-flow" / (
+            f"{evidence.payer_language}-{evidence.payee_language}-{evidence.transport}"
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "payer_language": evidence.payer_language,
+            "payee_language": evidence.payee_language,
+            "transport": evidence.transport,
+            "audit": evidence.audit,
+            "initial_balances": evidence.initial_balances,
+            "final_balances": evidence.final_balances,
+            "chain_accounting": evidence.chain_accounting,
+        }
+        (directory / "evidence.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        for service in ("agentvault", "payer", "payee", "facilitator"):
+            (directory / f"{service}.log").write_text(evidence.logs[service], encoding="utf-8")
+
     def full(
         self,
         payer_language: str,
@@ -1348,7 +1367,7 @@ class DockerE2EDeployer(E2EDeployer):
             )
             from verifier.payment import s21_payer_signing, s22_payee_settlement, s23_balance_sync, s24_gateway_balance
 
-            return {
+            reports = {
                 "s20_full.md": "\n".join((
                     f"payer={payer_language} payee={payee_language} transport={self.context.transport}",
                     preflight, financial, durable, json.dumps(audit, sort_keys=True),
@@ -1358,6 +1377,8 @@ class DockerE2EDeployer(E2EDeployer):
                 "s23_balance_sync.md": s23_balance_sync.verify_evidence(evidence, balance_sync),
                 "s24_gateway_balance.md": s24_gateway_balance.verify_evidence(evidence),
             }
+            self._persist_full_evidence(evidence)
+            return reports
         except BaseException:
             self._diagnostics(payer_language, payee_language)
             raise

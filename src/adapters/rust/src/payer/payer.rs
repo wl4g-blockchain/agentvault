@@ -2,8 +2,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::{
-    percent_encode, ApiClient, AuthorizePaymentRequest, AuthorizePaymentResponse, AuthorizedPayment, BalanceQuery,
-    Error, OperationContext, PayerConfig, PayerHttpRequest, PayerHttpResponse, PayerRequestContext,
+    ApiClient, AuthorizePaymentRequest, AuthorizePaymentResponse, AuthorizedPayment, BalanceQuery, Error,
+    OperationContext, PayerConfig, PayerHttpRequest, PayerHttpResponse, PayerRequestContext,
     PaymentAuthorizationResult, PaymentBalance, PaymentCredential, PaymentIntent, PaymentProtocolFactory,
     PaymentReceipt, PaymentRequired, ProtocolRegistry, ReportOutboundResponseRequest, ReportOutboundResponseResponse,
     Result, VaultTransport,
@@ -15,7 +15,7 @@ use crate::{
 pub struct PayerMiddleware<T> {
     api: ApiClient<T>,
     config: PayerConfig,
-    protocols: ProtocolRegistry,
+    pub(crate) protocols: ProtocolRegistry,
 }
 
 impl<T> Clone for PayerMiddleware<T> {
@@ -70,7 +70,7 @@ impl<T> PayerMiddleware<T> {
             .protocols
             .get(&payment.credential.protocol)?
             .credential(&payment.credential)?;
-        validate_header_name(&delivery.header_name)?;
+        PayerValidation::validate_header_name(&delivery.header_name)?;
         if !delivery.bound_origin.eq_ignore_ascii_case(origin)
             || delivery.header_value.bytes().any(|byte| matches!(byte, b'\r' | b'\n'))
             || existing
@@ -148,6 +148,9 @@ impl<T> PayerMiddleware<T> {
 
 pub(crate) trait PayerDelivery {
     type Response;
+    fn a2a_call(&self) -> Option<&crate::A2aCall> {
+        None
+    }
 
     async fn send(&mut self, attempt_no: u8) -> Result<Self::Response>;
     fn view(&self, response: &Self::Response) -> PayerHttpResponse;
@@ -160,7 +163,9 @@ impl<T: VaultTransport> PayerMiddleware<T> {
         first_response: &PayerHttpResponse,
         context: &PayerRequestContext,
     ) -> Result<Option<AuthorizedPayment>> {
-        let Some(mut challenge) = payment_required(original, first_response, self.config.max_challenge_bytes)? else {
+        let Some(mut challenge) =
+            PayerValidation::payment_required(original, first_response, self.config.max_challenge_bytes)?
+        else {
             return Ok(None);
         };
         let protocol_hint = challenge.protocol_hint.clone();
@@ -183,7 +188,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
                     Error::Decode("authorized AgentVault response contained no credential".to_owned())
                 })?;
                 self.protocols.get(&response.intent.protocol)?;
-                validate_payment_binding(
+                PayerValidation::validate_payment_binding(
                     original,
                     context,
                     &self.config,
@@ -244,12 +249,12 @@ impl<T: VaultTransport> PayerMiddleware<T> {
         else {
             return Ok(None);
         };
-        if header(&first_response.headers, "payment-required").is_some() {
+        if PayerValidation::header(&first_response.headers, "payment-required").is_some() {
             return Err(Error::Decode(
                 "MCP payment challenge must not also declare PAYMENT-REQUIRED".to_owned(),
             ));
         }
-        if header(&first_response.headers, "payment-protocol")
+        if PayerValidation::header(&first_response.headers, "payment-protocol")
             .is_some_and(|protocol| !protocol.eq_ignore_ascii_case(adapter.name()))
         {
             return Err(Error::Decode(
@@ -258,7 +263,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
         }
         let mut headers = challenge.headers;
         headers.insert("payment-protocol".to_owned(), adapter.name().to_owned());
-        if let Some(expires_at) = header(&first_response.headers, "payment-expires-at") {
+        if let Some(expires_at) = PayerValidation::header(&first_response.headers, "payment-expires-at") {
             headers.insert("payment-expires-at".to_owned(), expires_at.to_owned());
         }
         if let Some(content_type) = challenge.content_type {
@@ -366,7 +371,11 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             );
             let response = delivery.send(attempt_no).await?;
             let view = delivery.view(&response);
-            self.report(context, authorized, &view).await?;
+            if let Some(call) = delivery.a2a_call().filter(|_| (200..300).contains(&view.status)) {
+                self.report_a2a(context, authorized, &mut call.clone(), &view).await?;
+            } else {
+                self.report(context, authorized, &view).await?;
+            }
             if view.status != 503 || attempt == self.config.delivery_retries {
                 return Ok(response);
             }
@@ -437,8 +446,8 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             .get(format!(
                 "{}/{intent_id}?scenario_id={scenario_id}",
                 crate::paths::PAYMENTS,
-                intent_id = percent_encode(intent_id),
-                scenario_id = percent_encode(scenario_id)
+                intent_id = crate::TransportRequest::percent_encode(intent_id),
+                scenario_id = crate::TransportRequest::percent_encode(scenario_id)
             ))
             .await
     }
@@ -450,8 +459,8 @@ impl<T: VaultTransport> PayerMiddleware<T> {
             .get(format!(
                 "{}/{intent_id}/receipt?scenario_id={scenario_id}",
                 crate::paths::PAYMENTS,
-                intent_id = percent_encode(intent_id),
-                scenario_id = percent_encode(scenario_id)
+                intent_id = crate::TransportRequest::percent_encode(intent_id),
+                scenario_id = crate::TransportRequest::percent_encode(scenario_id)
             ))
             .await
     }
@@ -468,7 +477,7 @@ impl<T: VaultTransport> PayerMiddleware<T> {
                 format!(
                     "{}/{}/outbound-response",
                     crate::paths::PAYMENTS,
-                    percent_encode(intent_id)
+                    crate::TransportRequest::percent_encode(intent_id)
                 ),
                 request,
             )
@@ -483,142 +492,146 @@ impl<T: VaultTransport> PayerMiddleware<T> {
         let mut path = format!(
             "{}?scenario_id={}&wallet_id={}&network={}&decimals={}",
             crate::paths::PAYMENT_BALANCE,
-            percent_encode(&query.scenario_id),
-            percent_encode(&query.wallet_id),
-            percent_encode(&query.asset.network),
+            crate::TransportRequest::percent_encode(&query.scenario_id),
+            crate::TransportRequest::percent_encode(&query.wallet_id),
+            crate::TransportRequest::percent_encode(&query.asset.network),
             query.asset.decimals
         );
         if let Some(contract) = &query.asset.token_contract {
             path.push_str("&token_contract=");
-            path.push_str(&percent_encode(contract));
+            path.push_str(&crate::TransportRequest::percent_encode(contract));
         }
         path.push_str("&asset=");
-        path.push_str(&percent_encode(&query.asset.asset));
+        path.push_str(&crate::TransportRequest::percent_encode(&query.asset.asset));
         self.api.get(path).await
     }
 }
 
-pub(crate) fn payment_required(
-    request: &PayerHttpRequest,
-    response: &PayerHttpResponse,
-    max_challenge_bytes: usize,
-) -> Result<Option<PaymentRequired>> {
-    if response.status != 402 {
-        return Ok(None);
-    }
-    if request.follow_redirects {
-        return Err(Error::UnsafeRetry("paid requests must disable redirects".to_owned()));
-    }
-    if response.body.len() > max_challenge_bytes {
-        return Err(Error::Decode("payment challenge exceeds configured limit".to_owned()));
-    }
-    if request.origin.trim().is_empty() || request.url.trim().is_empty() {
-        return Err(Error::InvalidArgument(
-            "the original request must have a canonical origin and URL".to_owned(),
-        ));
-    }
-    validate_url_origin(&request.url, &request.origin)?;
-    let body = String::from_utf8(response.body.clone()).map_err(|_| {
-        Error::Decode("a 402 challenge body must be UTF-8; encode binary protocol data in JSON".to_owned())
-    })?;
-    let expires_at = header(&response.headers, "payment-expires-at").map(str::to_owned);
-    Ok(Some(PaymentRequired {
-        protocol_hint: header(&response.headers, "payment-protocol").map(str::to_owned),
-        origin: request.origin.clone(),
-        resource: request.url.clone(),
-        content_type: header(&response.headers, "content-type")
-            .unwrap_or("application/json")
-            .to_owned(),
-        headers: response.headers.clone(),
-        body,
-        expires_at,
-    }))
-}
+pub(crate) struct PayerValidation;
 
-pub(crate) fn validate_payment_binding(
-    original: &PayerHttpRequest,
-    context: &PayerRequestContext,
-    config: &PayerConfig,
-    protocol_hint: Option<&str>,
-    intent: &PaymentIntent,
-    credential: &PaymentCredential,
-) -> Result<()> {
-    if intent.id.is_empty()
-        || intent.scenario_id != config.scenario_id
-        || intent.run_id != context.run_id
-        || intent.wallet_id.as_deref().is_none_or(str::is_empty)
-        || intent.policy_id.as_deref().is_none_or(str::is_empty)
-        || intent.direction != crate::PaymentDirection::Outbound
-        || protocol_hint.is_some_and(|expected| intent.protocol != expected)
-        || intent.protocol != credential.protocol
-        || intent.resource != original.url
-        || intent.challenge_hash.as_deref() != Some(credential.challenge_hash.as_str())
-    {
-        return Err(Error::UnsafeRetry(
-            "credential, outbound intent, and paid resource are not bound to the same payment".to_owned(),
-        ));
+impl PayerValidation {
+    pub(crate) fn payment_required(
+        request: &PayerHttpRequest,
+        response: &PayerHttpResponse,
+        max_challenge_bytes: usize,
+    ) -> Result<Option<PaymentRequired>> {
+        if response.status != 402 {
+            return Ok(None);
+        }
+        if request.follow_redirects {
+            return Err(Error::UnsafeRetry("paid requests must disable redirects".to_owned()));
+        }
+        if response.body.len() > max_challenge_bytes {
+            return Err(Error::Decode("payment challenge exceeds configured limit".to_owned()));
+        }
+        if request.origin.trim().is_empty() || request.url.trim().is_empty() {
+            return Err(Error::InvalidArgument(
+                "the original request must have a canonical origin and URL".to_owned(),
+            ));
+        }
+        PayerValidation::validate_url_origin(&request.url, &request.origin)?;
+        let body = String::from_utf8(response.body.clone()).map_err(|_| {
+            Error::Decode("a 402 challenge body must be UTF-8; encode binary protocol data in JSON".to_owned())
+        })?;
+        let expires_at = PayerValidation::header(&response.headers, "payment-expires-at").map(str::to_owned);
+        Ok(Some(PaymentRequired {
+            protocol_hint: PayerValidation::header(&response.headers, "payment-protocol").map(str::to_owned),
+            origin: request.origin.clone(),
+            resource: request.url.clone(),
+            content_type: PayerValidation::header(&response.headers, "content-type")
+                .unwrap_or("application/json")
+                .to_owned(),
+            headers: response.headers.clone(),
+            body,
+            expires_at,
+        }))
     }
-    Ok(())
-}
 
-pub(crate) fn validate_url_origin(url: &str, origin: &str) -> Result<()> {
-    if crate::model_payer::http_url_matches_origin(url, origin) {
+    pub(crate) fn validate_payment_binding(
+        original: &PayerHttpRequest,
+        context: &PayerRequestContext,
+        config: &PayerConfig,
+        protocol_hint: Option<&str>,
+        intent: &PaymentIntent,
+        credential: &PaymentCredential,
+    ) -> Result<()> {
+        if intent.id.is_empty()
+            || intent.scenario_id != config.scenario_id
+            || intent.run_id != context.run_id
+            || intent.wallet_id.as_deref().is_none_or(str::is_empty)
+            || intent.policy_id.as_deref().is_none_or(str::is_empty)
+            || intent.direction != crate::PaymentDirection::Outbound
+            || protocol_hint.is_some_and(|expected| intent.protocol != expected)
+            || intent.protocol != credential.protocol
+            || intent.resource != original.url
+            || intent.challenge_hash.as_deref() != Some(credential.challenge_hash.as_str())
+        {
+            return Err(Error::UnsafeRetry(
+                "credential, outbound intent, and paid resource are not bound to the same payment".to_owned(),
+            ));
+        }
         Ok(())
-    } else {
-        Err(Error::UnsafeRetry(
-            "request URL does not match its canonical HTTP(S) origin".to_owned(),
-        ))
     }
-}
 
-pub(crate) fn header<'a>(headers: &'a std::collections::BTreeMap<String, String>, wanted: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
-        .map(|(_, value)| value.as_str())
-}
-
-pub(crate) fn validate_header_name(name: &str) -> Result<()> {
-    const RESERVED: [&str; 11] = [
-        "host",
-        "content-length",
-        "connection",
-        "transfer-encoding",
-        "upgrade",
-        "proxy-authorization",
-        "proxy-authenticate",
-        "te",
-        "trailer",
-        "accept",
-        "content-type",
-    ];
-    let valid = !name.is_empty()
-        && name.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#'
-                        | b'$'
-                        | b'%'
-                        | b'&'
-                        | b'\''
-                        | b'*'
-                        | b'+'
-                        | b'-'
-                        | b'.'
-                        | b'^'
-                        | b'_'
-                        | b'`'
-                        | b'|'
-                        | b'~'
-                )
-        });
-    if !valid || RESERVED.iter().any(|reserved| name.eq_ignore_ascii_case(reserved)) {
-        return Err(Error::UnsafeRetry(
-            "Vault returned an invalid or reserved credential header name".to_owned(),
-        ));
+    pub(crate) fn validate_url_origin(url: &str, origin: &str) -> Result<()> {
+        if crate::model_payer::http_url_matches_origin(url, origin) {
+            Ok(())
+        } else {
+            Err(Error::UnsafeRetry(
+                "request URL does not match its canonical HTTP(S) origin".to_owned(),
+            ))
+        }
     }
-    Ok(())
+
+    pub(crate) fn header<'a>(headers: &'a std::collections::BTreeMap<String, String>, wanted: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub(crate) fn validate_header_name(name: &str) -> Result<()> {
+        const RESERVED: [&str; 11] = [
+            "host",
+            "content-length",
+            "connection",
+            "transfer-encoding",
+            "upgrade",
+            "proxy-authorization",
+            "proxy-authenticate",
+            "te",
+            "trailer",
+            "accept",
+            "content-type",
+        ];
+        let valid = !name.is_empty()
+            && name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            });
+        if !valid || RESERVED.iter().any(|reserved| name.eq_ignore_ascii_case(reserved)) {
+            return Err(Error::UnsafeRetry(
+                "Vault returned an invalid or reserved credential header name".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

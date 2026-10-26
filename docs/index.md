@@ -9,7 +9,7 @@ AgentVault 是面向 AI Agent 的双向机器支付中间件。它把业务平�
 系统支持两类对称业务：
 
 - Payer / OUTBOUND：业务 Agent 收到 HTTP/MCP `402 Payment Required` 后，由 AgentVault 校验 Scenario、Policy、Wallet、余额和预算，再生成与 Intent 绑定的协议签名。
-- Payee / INBOUND：业务平台按 Offer 对 HTTP Route 或 MCP Tool 收费，由 AgentVault 签发 Challenge、验证 Credential、调用外部 Facilitator/Provider 结算，并在可信证据确认后入账。
+- Payee / INBOUND：业务平台按 Price 对 HTTP Route 或 MCP Tool 收费，由 AgentVault 签发 Challenge、验证 Credential、调用外部 Facilitator/Provider 结算，并在可信证据确认后入账。
 
 AgentVault 不实现 OAuth2/OIDC、登录、会话或 IAM 策略引擎；不内嵌 Facilitator；不把 Redis 作为资金权威；不提供任意摘要签名；不使用文件保存钱包或支付状态。
 
@@ -25,7 +25,7 @@ AuthGuard + Envoy Gateway             HTTP 身份、登录、会话、IAM、路�
           │ signed context / opaque scope token
           ▼
 AgentVault                            支付领域授权、预算、审批、签名、结算、Ledger
-          │ SDK(gRPC/MQTT) / Admin HTTP / Unix
+          │ SDK(gRPC/MQTT) / Admin HTTP
           ▼
 Flowgent / Sigbot / QuantStream       工作流、Agent、业务交付与补偿
           │
@@ -61,7 +61,7 @@ PaymentClient 1 ── N PaymentScenario 1 ── N PaymentPolicy
 
 从 Policy 看，关系严格为 `1:N Wallet`；关系表允许同一 Wallet 反向被多个 Policy/Scenario 共享，这是共享企业资金池所必需。共享 Wallet 时，数据库事务强制 Wallet 级单笔和每日硬上限，防止多个 Scenario 分别合规但累计超额。锁按稳定 ID 顺序获取，避免并发预算死锁。
 
-Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC/Unix/MQTT 上下文，`run_id + challenge` 描述一次逻辑业务操作。调用方不能提交 `policy_id`、`wallet_id`、资产、金额或收款人投影来影响授权，后四项必须从原始 402 Challenge 解析。平台级凭据不会自动获得跨 Client 能力。余额查询和受控管理接口可以显式定位 Wallet，但它们不是签名授权入口。
+Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC/MQTT 上下文，`run_id + challenge` 描述一次逻辑业务操作。调用方不能提交 `policy_id`、`wallet_id`、资产、金额或收款人投影来影响授权，后四项必须从原始 402 Challenge 解析。平台级凭据不会自动获得跨 Client 能力。余额查询和受控管理接口可以显式定位 Wallet，但它们不是签名授权入口。
 
 `run_id` 在 SDK、HTTP/gRPC/MQTT wire、Intent、Outbox 和业务交付中保持不变，授权轮询、网络超时、重发、Verify、Settle 及交付恢复都复用它；不再存在第二个公开的业务幂等字段。同一 Scenario 下，同 `run_id` 且同请求指纹返回原结果；同 `run_id` 但不同指纹必须冲突并 Fail Closed。
 
@@ -69,7 +69,7 @@ Payer 的授权范围只由 `scenario_id` 选择；Client 来自可信 HTTP/gRPC
 
 OUTBOUND 时 AgentVault 把 Scenario 下所有匹配的 Policy-Wallet membership 视为候选钱包池。协议、资产、Origin、Recipient 或方向不匹配的 membership 不进入候选；Wallet 停用、缺少本地 Active Key、算法/规范地址不兼容 Challenge 网络或预算拒绝则保留为可审计的拒绝结果。系统按“可直接授权、需审批、拒绝”分组，在同组内优先选择当日已花费加预留最少的 Wallet，并以请求哈希做稳定散列决胜。选择结果写入 Intent 作为内部审计事实；幂等重放始终返回同一结果。候选数量有界，最终 membership、网络兼容性、Key Version、Policy 快照与双层预算在 SQL 锁内再次校验，因此并发选择不能绕过限额。多个匹配 Policy 是替代授权（OR）；需要叠加限制时应合并为一个 Policy，避免用重叠 Policy 表达交集语义。链上余额会在每次签名前再次 Fail Closed 检查；它不是负载均衡权重，也不会把同一个 Intent 静默改绑到另一 Wallet。
 
-钱包池选择是授权前的确定性调度，不是分布式锁：并发请求可能在锁外看到同一用量快照，最终 SQL 条件更新仍会阻止超额，其中一个请求可以 Fail Closed，但系统不会在已创建 Intent 后静默换钱包。Catalog 分页接口只服务展示；Scenario-Wallet 归属、Offer 解析等权限事实必须使用数据库存在性/唯一性查询，禁止从“第一页里是否找到”推导授权结果。
+钱包池选择是授权前的确定性调度，不是分布式锁：并发请求可能在锁外看到同一用量快照，最终 SQL 条件更新仍会阻止超额，其中一个请求可以 Fail Closed，但系统不会在已创建 Intent 后静默换钱包。Catalog 分页接口只服务展示；Scenario-Wallet 归属、Price 解析等权限事实必须使用数据库存在性/唯一性查询，禁止从“第一页里是否找到”推导授权结果。
 
 AgentVault 自己持有链/RPC 连接；业务 Payer 只提交 `scenario_id + run_id + challenge`，不得配置私钥、Wallet ID 或链 RPC。签名前的链上余额/Gas 检查属于实时安全闸门；独立的 Wallet Balance Sync Job 默认每 3 分钟分页观察托管钱包并写入非权威 SQL 快照，只服务资金看板、预算预警和运营分析，绝不能替代签名前检查或 Ledger 结算证据。
 
@@ -80,9 +80,9 @@ AgentVault 自己持有链/RPC 连接；业务 Payer 只提交 `scenario_id + ru
 | 方向 | 典型业务 | 独立控制项 |
 |---|---|---|
 | OUTBOUND | Agent 购买 API/MCP 数据 | `max_per_payment`、`max_per_day`、审批阈值、审批追加额度、收款人/Origin 白名单 |
-| INBOUND | 平台销售付费资源 | `max_per_payment`、`max_per_day`、审批阈值、审批追加额度、Offer/资产/网络范围 |
+| INBOUND | 平台销售付费资源 | `max_per_payment`、`max_per_day`、审批阈值、审批追加额度、Price/资产/网络范围 |
 
-入站额度不是“收入越多越好”的装饰配置。它用于限制库存、订阅席位、独家数据、风控敞口或有上游采购成本的资源，防止并发超卖。Offer 必须绑定具备 INBOUND 权限的 Policy 和该 Policy 的 Wallet membership；调用方不能覆盖价格、资产、网络或收款地址。
+入站额度不是“收入越多越好”的装饰配置。它用于限制库存、订阅席位、独家数据、风控敞口或有上游采购成本的资源，防止并发超卖。Price 必须绑定具备 INBOUND 权限的 Policy 和该 Policy 的 Wallet membership；调用方不能覆盖价格、资产、网络或收款地址。
 
 一次审批只为一个 Intent 增加有限额度。Grant 绑定 `intent_id + request_hash + amount + approver + expiry + jti`，JWT 只作为 AgentVault 内部证明，数据库保存 Claims Hash 和加密恢复材料，并在预算事务内原子消费一次。审批不会修改长期 Policy，也不能突破 Wallet 硬上限。
 
@@ -94,13 +94,13 @@ AgentVault 自己持有链/RPC 连接；业务 Payer 只提交 `scenario_id + ru
 Controllers                       Application / Domain                  Adapters
 ┌────────────────────┐            ┌──────────────────────────┐          ┌─────────────────────┐
 │ HTTP + AuthGuard   │───────────▶│ Scenario / Policy        │─────────▶│ PostgreSQL / SQLite │
-│ Unix Socket        │            │ Offer / Approval         │          │ Memory / Redis      │
+│ gRPC               │            │ Price / Approval         │          │ Memory / Redis      │
 │ MQTT + broker ACL  │            │ Signing / Settlement     │          │ x402 / MPP          │
 │ Dashboard          │            │ Reconciliation / Outbox  │          │ Provider / EVM RPC  │
 └────────────────────┘            └──────────────────────────┘          └─────────────────────┘
 ```
 
-SDK 控制面只允许 gRPC 与 MQTT，两者同 HTTP Admin/Unix 入口复用同一个 `PaymentApi` 和 Handler 图，不在传输层复制预算或签名逻辑。gRPC 仅是 SDK 内部的有界 Envelope 传输，不形成额外公开业务 API；启用 AuthGuard 时由其 Envoy gRPC 入口认证并注入签名 Principal Context。由于网关看不到 Envelope 内部路径，gRPC 服务只允许自身仍执行 Scenario/Approver 领域授权的 SDK 支付命令，明确拒绝 `/admin/*` 与未知路由；Admin API 只能走可被 AuthGuard 逐路由判定的 HTTP 入口。`src/cmd/` 是唯一组合根，负责选择 SQL、Cache、Protocol、Provider、RPC 和 Transport adapter。业务 Handler 只依赖 Port trait。
+SDK 控制面只允许 gRPC 与 MQTT，两者同 HTTP Admin 入口复用同一个 `PaymentApi` 和 Handler 图，不在传输层复制预算或签名逻辑。gRPC 仅是 SDK 内部的有界 Envelope 传输，不形成额外公开业务 API；启用 AuthGuard 时由其 Envoy gRPC 入口认证并注入签名 Principal Context。由于网关看不到 Envelope 内部路径，gRPC 服务只允许自身仍执行 Scenario/Approver 领域授权的 SDK 支付命令，明确拒绝 `/admin/*` 与未知路由；Admin API 只能走可被 AuthGuard 逐路由判定的 HTTP 入口。`src/cmd/` 是唯一组合根，负责选择 SQL、Cache、Protocol、Provider、RPC 和 Transport adapter。业务 Handler 只依赖 Port trait。
 
 源代码顶层严格收敛为：
 
@@ -111,12 +111,15 @@ src/
 ├── cache/        # 非资金权威 Memory/Redis
 ├── cmd/          # CLI、服务组合根、生命周期
 ├── config/       # 强类型 YAML 与校验
-├── controller/   # HTTP、gRPC、Unix Socket、MQTT、Management
-├── handler/      # 扁平的应用服务、端口实现、签名、结算、恢复任务
+├── controller/   # API 路由、Principal Context、单一 gRPC/MQTT 监听器
+├── handler/      # 九个领域服务；每文件一个 Handler，只注入对应 Repository
+├── payment/      # 授权、审批、签名、外部结算、证据与恢复组件
+├── job/          # 对账、余额同步、审批过期的有界调度
+├── transport/    # SDK Envelope、消息缓存、Trace 与通信实现
 ├── model/        # DTO、命令、结果与可复用值对象
 │   └── domain/   # 与 SQL 表或权威持久化聚合对应的实体
 ├── protocol/     # x402、MPP adapter
-├── storage/      # Port、SQL base、SQLite/PostgreSQL adapter
+├── storage/      # 唯一 Port/Factory、SQL base 与 <domain>/{postgres,sqlite}.rs
 ├── utils/        # 密钥材料、密码学、错误等公共能力
 ├── lib.rs
 └── main.rs
@@ -129,16 +132,24 @@ Go、Rust、Python、TypeScript 测试统一放在组件的 `tests/` 下；Java 
 `model/<domain>.rs` 只在实体无法直接复用时定义 DTO/命令/结果和值对象；
 `handler/<domain>.rs` 不定义可跨边界复用的业务模型。
 
+领域 Handler 统一注入 `Arc<dyn I<Domain>Repository>`，仅保留 `approval/client/scenario/policy/wallet/ledger/price/intent/event` 九个领域，单文件不超过 250 行。Ledger 与 Event 只追加和查询；跨表预留、签名、审批消费及结算仍通过原子的领域 Repository 操作完成。`utils/storage.rs` 只提供精确金额和枚举编解码，不执行 SQL；共享事务实现归回 `storage/<domain>`。
+
+`controller/api.rs` 注册业务 HTTP 路由及独立的管理路由，后者由 `apm::ManagementServer` 绑定 `mgmt.host/port`；业务写路由不会出现在管理监听器。`GrpcController`、`MqttController` 仅监听/订阅并调用专用通信组件，认证上下文由 `controller/principal_context.rs` 处理。Unix socket 控制器及 `agentvault.transport.local` 配置已移除，旧配置会明确报错。
+
+资源定价的主实体为 `PaymentPrice`，主路由为 `/prices/resolve` 和 `/admin/prices`，导入主 kind 为 `Price`。已有 `PaymentPrice` 类型别名、`Price` 导入 kind、旧 offers 查询路由和 `offer_id` wire 字段保留兼容，以维持既有重试、审批和 A2A Task 绑定。
+
+Price 管理路由位于业务 API（默认前缀 `/api/v1`）：`POST /admin/prices` 的 JSON body 复用导入 `Price` 的 spec 字段，创建时间和 revision 由服务端生成；`GET /admin/prices/{id}` 查询单条。`PUT /admin/prices/{id}` 接受 `{"price": <Price spec>, "expected_updated_at": <读取时的 revision>}`，保留 id、scenario、policy 和创建时间。`DELETE /admin/prices/{id}?expected_updated_at=<revision>` 仅删除未被 Intent 引用的价格。所有写入先验证调用 Principal 对持久化 Scenario 的权限；更新、删除使用 CAS，过期 revision 返回 409，数据库外键拒绝删除历史支付引用的价格。管理监听器及 gRPC/MQTT 不暴露这些管理写路由。
+
 ## 5. 持久化与一致性
 
-SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` 初始化，并由 schema parity test 校验表、列、索引和版本。八个支付核心表与七个支撑表如下：
+SQLite 与 PostgreSQL 都从同名的 `001_init.ddl.sql`、`001_init.dml.sql` 初始化，再在同一数据库事务内应用声明的升级步骤；schema parity test 校验表、列、索引和版本。`002_price.ddl.sql` 将原 `pay_price` 原位改名为 `pay_price`，保留 Intent 外键、历史 Event/Ledger 和资源 ID。版本历史保留为 `[1, 2]`，重复启动不重放迁移，未知或缺失的版本链拒绝启动。八个支付核心表与七个支撑表如下：
 
 | 分类 | 表 | 职责 |
 |---|---|---|
 | 核心 | `pay_client` | 业务应用和可信 Principal 映射 |
 | 核心 | `pay_scenario` | Client 下的支付隔离边界 |
 | 核心 | `pay_policy` | 双向额度、白名单和审批规则 |
-| 核心 | `pay_offer` | Payee 固定资源报价 |
+| 核心 | `pay_price` | Payee 固定资源报价 |
 | 核心 | `pay_intent` | 双向支付当前状态、预算预留和恢复游标 |
 | 核心 | `pay_event` | 不可变操作事件 |
 | 核心 | `pay_approval` | 一次性审批请求和 Grant 绑定 |
@@ -156,8 +167,8 @@ Canonical DDL **禁止业务 Trigger、存储过程和隐式副作用**。`CHECK
 
 | 原 DDL 隐式逻辑 | 显式 AgentVault 原子调用 |
 |---|---|
-| Policy 预算单位、Scenario-Wallet 唯一启用策略、共享 Wallet 硬限额 | `PolicyStorage.insert/update` 锁定 Policy 与排序后的 Wallet，校验全部 membership，并在首次绑定时条件初始化预算单位 |
-| Offer 的 Scenario、Wallet、方向、协议、网络、资产和单笔限额 | `OfferStorage.insert/update` 在 Policy→Wallet 锁内验证完整 INBOUND 授权范围 |
+| Policy 预算单位、Scenario-Wallet 唯一启用策略、共享 Wallet 硬限额 | `PolicyRepository.insert/update` 锁定 Policy 与排序后的 Wallet，校验全部 membership，并在首次绑定时条件初始化预算单位 |
+| Price 的 Scenario、Wallet、方向、协议、网络、资产和单笔限额 | `PriceRepository.insert/update` 在 Policy→Wallet 锁内验证完整 INBOUND 授权范围 |
 | Intent 授权范围、不可变身份、Credential 只绑定一次 | 创建时锁定 Policy 并验证方向/协议/资产/金额；迁移时比较完整不可变身份和旧 revision，再执行条件更新 |
 | Ledger 精确冲正与不可变历史 | 只公开 append/reversal Port；冲正前锁定原分录并验证 Wallet、Intent、金额、资产、方向和外部 Effect 全部匹配 |
 | Wallet 预算/共享限额与 Key Version 生命周期 | Wallet 事务统计已绑定策略，Key Repository 校验 Local Custody 和 Active 元数据；轮换/Compromise 使用 forward-only 条件更新并检查影响行数 |
@@ -190,8 +201,8 @@ Canonical DDL **禁止业务 Trigger、存储过程和隐式副作用**。`CHECK
 
 ## 7. Payee 流程
 
-1. Payee SDK 根据 `scenario_id + resource` 解析服务端 Offer。
-2. AgentVault 按 Offer 签发唯一、带过期时间且绑定 Scenario/金额/资产/收款人的 Challenge，并预留 INBOUND 容量。
+1. Payee SDK 根据 `scenario_id + resource` 解析服务端 Price。
+2. AgentVault 按 Price 签发唯一、带过期时间且绑定 Scenario/金额/资产/收款人的 Challenge，并预留 INBOUND 容量。
 3. 外部 Agent 提交 Credential；协议 Adapter 做语义指纹、防跨 Challenge 兑换和字段一致性校验。
 4. AgentVault 调用外部 Facilitator/Provider Verify/Settle，不持有付款方私钥。
 5. 仅在可信结算证据匹配网络、Token、金额、Recipient 和确认数后写 Ledger 与 Receipt。
@@ -212,16 +223,29 @@ Rust、Go、Python、TypeScript 的 x402 Provider 直接组合各自官方 v2 SD
 
 Facilitator/Provider 始终是进程外依赖。HTTP adapter 固定 Base URL 和相对路径、禁止跨 Authority Redirect、限制响应体与超时，并校验返回的资产和结算证据。Provider 跟随所属 Payee 协议配置；共享 `chains` 注册表由运营方固定链类型与 RPC，Challenge 不能选择 Provider 或 RPC。
 
+五 SDK 的 HTTP/MCP 编排也用于 A2A 0.3 非流式 `message/send`：x402 v2 使用官方 A2A extension 的 Task/Message metadata，MPP 使用原生 JSON-RPC 根 `_meta` 与支付错误码。调用方显式启用付款；收款方组合应用已有 TaskStore 并绑定 task/context/run/scenario/offer，不维护另一份任务数据库。AgentCard 声明与请求/响应扩展协商、稳定请求摘要、Bearer 保留和结算后业务失败回执均有五语言验收。接入方法及明确的 Unsupported 边界见 [SDK 文档](../src/adapters/README.md#a2a-automatic-payments)。`runner.py -s a2a` 产出 SDK 边界报告，受控 Vault 测试不能替代 `full` / `mpp-tempo` / `x402-solana` 的实链会计证据。
+
 ## 9. Cache、密钥与可观测性
 
 `server:`、`mgmt:`、`logging:`、`storage:` 与 `cache:` 是主 YAML 的顶层通用能力；唯一业务根是 `agentvault:`。`agentvault.payer` 与 `agentvault.payee` 分别配置出站和入站协议，不能通过一个共享开关隐式同时启用。Facilitator/MPP Provider 只属于 `payee`，`agentvault.chains` 则由两个方向共享并通过 `family` 支持不同链实现。
-`storage/` 只提供一个权威 SQL Port、SQLite/PostgreSQL 方言与显式聚合事务；
+`storage/storage.rs` 定义唯一的 `IGenericRepository<E>` 六个可执行 CRUD 方法和 `StorageFactory`；领域 Port 定义在各领域模块并保留根路径重导出。
+`postgres.rs` / `sqlite.rs` 分别实现 `PostgresRepository` / `SqliteRepository`（旧 `Base*` 名称为兼容别名），
+仅负责连接池、通用参数绑定、外部传入的 Schema 迁移与事务边界，不引用支付表名、支付状态或领域仓储。
+`repository_entity!` 直接包裹唯一 Entity 声明，在编译期生成列元数据（含 `sqlx(rename/flatten/json)` 映射），
+行解码复用 SQLx `FromRow`；默认 CRUD 使用预编译参数绑定，不通过 Serde/JSON 反射实体。JSON 序列化只用于实际 JSON 列。
+金额与支付/钱包状态编解码由 `utils/storage.rs` 提供；支付 Schema 清单与升级计划位于 `storage/schema.rs` 的 `PaymentStorageSchema`。
+领域仓储调用编解码工具，基类不反向依赖业务工具或 Schema 清单。空字符串、false、0 与带类型的 SQL NULL 均按原值持久化。
+实际领域实现位于 `storage/<domain>/{postgres,sqlite}.rs`，通过组合基础 Repository 共享连接池；
+`StoragePorts` 只向 handler 暴露领域接口，不暴露通用写接口。
+支付、签名、审批、Ledger、Event 和 Outbox 的聚合写入继续使用同一连接上的显式事务，
+不拆成独立 CRUD，也不引入第二套幂等或账本模型。全部 24 个领域方言文件均不超过 250 行；
+特殊事务由 `storage/<domain>` 的领域宏共享一份实现，在编译期选择 SQL 方言与锁语句。基类不依赖这些业务宏。
 `cache/` 提供一致的 Memory/Redis Port。Redis 支持 standalone/cluster、环境变量
 SecretRef、Cluster 单槽 Namespace、字段级 TTL、连接/操作超时和有界指数退避。
 服务启动时实际打开所选 adapter；预算、审批、Intent、Settlement、幂等和 Ledger
 永远回源 SQL。
 
-本地托管 EOA 使用 AES-256-GCM envelope encryption、完整 UUID v4 Nonce 和不可变 Key Version。Wallet 元数据位于 `pay_wallet`，加密 EOA 密文位于同一 Wallet 聚合的 `wallet_key_version` 子表；这是支持安全轮换所需的规范化一对多关系，不是独立文件 Key Store。`agentvault.key_management` 只引用 KEK，绝不保存 EOA 私钥。轮换先写新版本并原子切换 Active；旧版本仅作为不可变审计与受控恢复材料保留，未签名操作不会继续使用 Retired Key。任何 API 都不能导出明文私钥。Dashboard 创建 EOA 时先申请临时 RSA-3072 公钥，浏览器固定使用 RSA-OAEP（SHA-256/MGF1-SHA-256）直接加密 32 字节 EOA 私钥。API 返回 `session_id/server_public_key/expires_at`，提交仅包含 `session_id/ciphertext`；不协商算法、不派生客户端 AES 密钥。公钥使用 base64url DER SubjectPublicKeyInfo，OAEP label 为 UTF-8 的 `agentvault.wallet-import.v2\0{session_id}\0{wallet_id}\0secp256k1`（`\0` 表示 NUL）。服务端临时私钥由 Recovery AEAD 密封后写入带 TTL 的 Cache；WalletHandler 验证身份与有效期、原子消费会话后解密 EOA，再委托 WalletKeyManager 用现有 KEK 封装加密并原子写入 SQL。过期、失败和成功的消费均不可重放，临时私钥不入库。前后端须同步升级；旧 ECDH 请求被拒绝，升级后需重新申请会话。此层加密减少 TLS 终止点和请求日志接触私钥的机会，但公钥和页面仍通过 HTTPS 分发，不能抵御可主动替换页面或公钥的攻击者。Credential/Grant 的崩溃恢复材料由独立 `agentvault.recovery_encryption` AES-256-GCM 密钥环保护，Event 和日志只保存 Hash/Reference。
+本地托管 EOA 使用 AES-256-GCM envelope encryption、完整 UUID v4 Nonce 和不可变 Key Version。Wallet 元数据位于 `pay_wallet`，加密 EOA 密文位于同一 Wallet 聚合的 `wallet_key_version` 子表；这是支持安全轮换所需的规范化一对多关系，不是独立文件 Key Store。`agentvault.key_management` 只引用 KEK，绝不保存 EOA 私钥。轮换先写新版本并原子切换 Active；旧版本仅作为不可变审计与受控恢复材料保留，未签名操作不会继续使用 Retired Key。任何 API 都不能导出明文私钥。Dashboard 创建 EOA 时先申请临时 RSA-3072 公钥，浏览器固定使用 RSA-OAEP（SHA-256/MGF1-SHA-256）直接加密 32 字节 EOA 私钥。API 返回 `session_id/server_public_key/expires_at`，提交仅包含 `session_id/ciphertext`；不协商算法、不派生客户端 AES 密钥。公钥使用 base64url DER SubjectPublicKeyInfo，OAEP label 为 UTF-8 的 `agentvault.wallet-import.v2\0{session_id}\0{wallet_id}\0secp256k1`（`\0` 表示 NUL）。服务端临时私钥由 Recovery AEAD 密封后写入带 TTL 的 Cache；`WalletImportService` 验证身份与有效期、原子消费会话后解密 EOA，再委托 WalletKeyManager 用现有 KEK 封装加密并原子写入 SQL。过期、失败和成功的消费均不可重放，临时私钥不入库。前后端须同步升级；旧 ECDH 请求被拒绝，升级后需重新申请会话。此层加密减少 TLS 终止点和请求日志接触私钥的机会，但公钥和页面仍通过 HTTPS 分发，不能抵御可主动替换页面或公钥的攻击者。Credential/Grant 的崩溃恢复材料由独立 `agentvault.recovery_encryption` AES-256-GCM 密钥环保护，Event 和日志只保存 Hash/Reference。
 
 APM 提供结构化日志、OTLP Trace、Prometheus/OpenMetrics、健康检查和受限运行时诊断。HTTP 入站提取 W3C `traceparent/tracestate`，gRPC metadata 进入同一 tracing middleware；AgentVault 调用外部 Facilitator/Provider 与 EVM RPC 时建立 client span 并继续注入该上下文，运营 Secret Header 无权覆盖 trace header。SDK 的 gRPC/MQTT Transport 必须创建或继承 producer Span Context，注入 W3C Trace Context，并输出可校验的 `trace_id/span_id/parent_span_id` 结构化日志；宿主业务已接入 OpenTelemetry 时，Adapter 必须桥接当前 Context，不得自建第二条身份链。MQTT 的 `requestSpanId` 只是 producer Span ID 的 wire 投影；publish、consume、response 和 retry 各自建立 Span 并传播/链接 W3C Context。Trace Context 只用于可观测性，绝不参与 Client/Scenario 授权。Grafana Dashboard 位于 `deploy/apm/grafana/`。
 
@@ -243,7 +267,7 @@ agentvault    唯一公开 Facade，含审批查询/决策入口
 
 Payer 总入口负责捕获 402、请求授权、等待签名/审批结果、校验 Credential 的 Origin
 绑定、有限重试原业务 HTTP/MCP 请求并上报结算响应；Rust/Go/Python/TypeScript/Java
-分别提供 Reqwest、net/http、HTTPX、Fetch、Spring 实现。Payee 总入口负责 Offer、
+分别提供 Reqwest、net/http、HTTPX、Fetch、Spring 实现。Payee 总入口负责 Price、
 Challenge、Verify、Settle，并由 Axum、Gin、FastAPI/ASGI、Express、Spring 适配器
 决定是否放行业务请求。业务代码只在启动时选择 gRPC 或 MQTT；SDK 不提供 HTTP
 控制面 Transport，切换传输不改变业务 Handler。

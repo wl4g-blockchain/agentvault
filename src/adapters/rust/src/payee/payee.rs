@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::{
-    percent_encode, ApiClient, CreateChallengeRequest, Error, OperationContext, PayeeConfig, PayeeOperation,
-    PaymentChallenge, PaymentCredential, PaymentOffer, PaymentProtocolFactory, PaymentReceipt, PaymentVerification,
-    ProtectionOutcome, ProtocolHttpResponse, ProtocolMcpMetadata, ProtocolMcpPaymentRequired, ProtocolRegistry,
-    ResolveOfferRequest, Result, SettlePaymentRequest, SettledIncomingPayment, VaultTransport, VerifyPaymentRequest,
+    ApiClient, CreateChallengeRequest, Error, OperationContext, PayeeConfig, PayeeOperation, PaymentChallenge,
+    PaymentCredential, PaymentPrice, PaymentProtocolFactory, PaymentReceipt, PaymentVerification, ProtectionOutcome,
+    ProtocolHttpResponse, ProtocolMcpMetadata, ProtocolMcpPaymentRequired, ProtocolRegistry, ResolvePriceRequest,
+    Result, SettlePaymentRequest, SettledIncomingPayment, VaultTransport, VerifyPaymentRequest,
 };
 
 /// Transport-neutral payee workflow. HTTP framework adapters construct a
@@ -15,7 +15,7 @@ use crate::{
 pub struct PayeeMiddleware<T> {
     api: ApiClient<T>,
     config: PayeeConfig,
-    protocols: ProtocolRegistry,
+    pub(crate) protocols: ProtocolRegistry,
 }
 
 pub(crate) enum PayeeProtectionError {
@@ -274,7 +274,7 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
         ))
     }
 
-    pub async fn resolve_offer(&self, request: &ResolveOfferRequest) -> Result<PaymentOffer> {
+    pub async fn resolve_offer(&self, request: &ResolvePriceRequest) -> Result<PaymentPrice> {
         crate::model_base::validate_required("scenario_id", &request.scenario_id)?;
         crate::model_base::validate_required("resource", &request.resource)?;
         self.api.post(crate::paths::RESOLVE_OFFER.to_owned(), request).await
@@ -319,8 +319,8 @@ impl<T: VaultTransport> PayeeMiddleware<T> {
             .get(format!(
                 "{}/{intent_id}/receipt?scenario_id={scenario_id}",
                 crate::paths::PAYMENTS,
-                intent_id = percent_encode(intent_id),
-                scenario_id = percent_encode(scenario_id)
+                intent_id = crate::TransportRequest::percent_encode(intent_id),
+                scenario_id = crate::TransportRequest::percent_encode(scenario_id)
             ))
             .await
     }

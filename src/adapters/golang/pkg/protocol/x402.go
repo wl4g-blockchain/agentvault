@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 	x402 "github.com/x402-foundation/x402/go/v2"
 	x402mcp "github.com/x402-foundation/x402/go/v2/mcp"
@@ -16,6 +17,172 @@ import (
 )
 
 type X402Adapter struct{}
+
+const A2AX402Extension = "https://github.com/google-agentic-commerce/a2a-x402/blob/main/spec/v0.2"
+
+func (adapter *X402Adapter) A2AExtension() string { return A2AX402Extension }
+
+func (adapter *X402Adapter) A2AChallenge(message map[string]any, limit int64) (*HTTPResponse, error) {
+	result, ok := message["result"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	status, _ := result["status"].(map[string]any)
+	statusMessage, _ := status["message"].(map[string]any)
+	meta, _ := statusMessage["metadata"].(map[string]any)
+	required, present := meta["x402.payment.required"]
+	if !present {
+		if meta["x402.payment.status"] == "payment-required" {
+			return nil, errors.New("embedded A2A payment mandates are unsupported")
+		}
+		return nil, nil
+	}
+	task, err := (a2aWire{}).task(result, limit)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status.State != a2a.TaskStateInputRequired || meta["x402.payment.status"] != "payment-required" {
+		return nil, errors.New("A2A x402 challenge has an invalid task/payment state")
+	}
+	if _, err := adapter.paymentRequired(required, "A2A x402 challenge"); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(required)
+	if err != nil || int64(len(body)) > limit {
+		return nil, errors.New("A2A challenge exceeds limit")
+	}
+	return &HTTPResponse{Headers: map[string]string{"payment-required": base64.StdEncoding.EncodeToString(body)},
+		ContentType: "application/json", Body: body}, nil
+}
+
+func (adapter *X402Adapter) A2AApplyCredential(message map[string]any, credential model.PaymentCredential) error {
+	meta, err := (a2aWire{}).requestMetadata(message)
+	if err != nil {
+		return err
+	}
+	for key := range meta {
+		if strings.HasPrefix(key, "x402.payment.") {
+			return errors.New("A2A request already contains x402 payment metadata")
+		}
+	}
+	value, err := adapter.MCPCredential(credential)
+	if err != nil {
+		return err
+	}
+	meta["x402.payment.status"], meta["x402.payment.payload"] = "payment-submitted", value.Value
+	return nil
+}
+
+func (adapter *X402Adapter) PresentedA2ACredential(message map[string]any, limit int64) (any, error) {
+	meta, err := (a2aWire{}).requestMetadata(message)
+	if err != nil {
+		return nil, err
+	}
+	value, exists := meta["x402.payment.payload"]
+	if !exists {
+		for key := range meta {
+			if strings.HasPrefix(key, "x402.payment.") {
+				return nil, errors.New("incomplete A2A payment metadata")
+			}
+		}
+		return nil, nil
+	}
+	if meta["x402.payment.status"] != "payment-submitted" {
+		return nil, errors.New("A2A credential status must be payment-submitted")
+	}
+	for key := range meta {
+		if strings.HasPrefix(key, "x402.payment.") && key != "x402.payment.payload" && key != "x402.payment.status" {
+			return nil, errors.New("unexpected A2A payment metadata in request")
+		}
+	}
+	return adapter.PresentedMCPCredential(map[string]any{x402mcp.MCP_PAYMENT_META_KEY: value}, limit)
+}
+
+func (adapter *X402Adapter) A2AStripCredential(message map[string]any) error {
+	meta, err := (a2aWire{}).requestMetadata(message)
+	if err != nil {
+		return err
+	}
+	delete(meta, "x402.payment.payload")
+	delete(meta, "x402.payment.status")
+	return nil
+}
+
+func (adapter *X402Adapter) A2APaymentRequired(challenge *model.PaymentChallenge, task *a2a.Task, rejected bool) (MCPPaymentRequired, error) {
+	if task == nil || task.ID == "" || task.ContextID == "" {
+		return MCPPaymentRequired{}, errors.New("A2A task binding is required")
+	}
+	required, err := adapter.challengePaymentRequired(challenge)
+	if err != nil {
+		return MCPPaymentRequired{}, err
+	}
+	copy := *task
+	message := a2a.NewMessageForTask(a2a.MessageRoleAgent, task, a2a.TextPart{Text: "Payment required"})
+	message.Metadata = map[string]any{"x402.payment.status": "payment-required", "x402.payment.required": required}
+	if rejected {
+		message.Metadata["x402.payment.error"] = "PAYMENT_INVALID"
+	}
+	copy.Status = a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: message}
+	return MCPPaymentRequired{Result: &copy}, nil
+}
+
+func (adapter *X402Adapter) A2AMerchantEvidence(message map[string]any, limit int64) (*MerchantEvidence, error) {
+	result, _ := message["result"].(map[string]any)
+	if result == nil {
+		return nil, nil
+	}
+	status, _ := result["status"].(map[string]any)
+	statusMessage, _ := status["message"].(map[string]any)
+	meta, _ := statusMessage["metadata"].(map[string]any)
+	value, exists := meta["x402.payment.receipts"]
+	if !exists {
+		return nil, nil
+	}
+	if _, err := (a2aWire{}).task(result, limit); err != nil {
+		return nil, err
+	}
+	receipts, ok := value.([]any)
+	// One Vault operation pays once. Multiple receipts need an explicit host
+	// aggregation policy; never choose an arbitrary transaction from a list.
+	if !ok || len(receipts) != 1 || meta["x402.payment.status"] != "payment-completed" {
+		return nil, errors.New("A2A payment requires exactly one completed settlement receipt")
+	}
+	return adapter.MCPMerchantEvidence(map[string]any{x402mcp.MCP_PAYMENT_RESPONSE_META_KEY: receipts[0]}, limit)
+}
+
+func (adapter *X402Adapter) A2AInjectReceipt(message map[string]any, _ *model.PaymentChallenge, payment *model.SettledIncomingPayment, limit int64) error {
+	result, _ := message["result"].(map[string]any)
+	task, err := (a2aWire{}).task(result, limit)
+	if err != nil {
+		return err
+	}
+	if task.Status.Message == nil {
+		task.Status.Message = a2a.NewMessageForTask(a2a.MessageRoleAgent, task, a2a.TextPart{Text: "Payment completed"})
+	}
+	for key := range task.Status.Message.Metadata {
+		if strings.HasPrefix(key, "x402.payment.") {
+			return errors.New("A2A handler attempted to supply payment metadata")
+		}
+	}
+	receipt, err := adapter.paymentSettlement(payment)
+	if err != nil {
+		return err
+	}
+	task.Status.Message.SetMeta("x402.payment.status", "payment-completed")
+	task.Status.Message.SetMeta("x402.payment.receipts", []any{receipt})
+	// Keep unknown A2A fields, artifacts and business metadata verbatim.
+	encoded, err := json.Marshal(task.Status.Message)
+	if err != nil {
+		return err
+	}
+	var statusMessage map[string]any
+	if err := json.Unmarshal(encoded, &statusMessage); err != nil {
+		return err
+	}
+	status := result["status"].(map[string]any)
+	status["message"] = statusMessage
+	return nil
+}
 
 // These private projections decode only the opaque Payload field of the
 // official x402types.PaymentPayload envelope. Importing the upstream mechanism

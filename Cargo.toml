@@ -57,7 +57,7 @@ solana-signature = "=3.6.0"
 solana-signer = "=3.0.1"
 solana-transaction = "=3.1.0"
 solana-transaction-status-client-types = "=3.1.14"
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "bigdecimal", "json"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "bigdecimal", "json", "macros"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting"] }
 tempo-alloy = { version = "=1.11.0", default-features = false }

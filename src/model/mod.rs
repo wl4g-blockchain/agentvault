@@ -6,8 +6,11 @@ pub mod approval;
 pub mod balance;
 pub mod domain;
 pub mod event;
+pub(crate) mod mqtt;
 pub mod payment;
+pub mod payment_api;
 pub mod policy;
+pub(crate) mod price;
 pub mod receipt;
 pub mod reconciliation;
 pub mod resource;
@@ -21,15 +24,13 @@ pub use approval::{
     VerifiedApprovalGrant,
 };
 pub use balance::{WalletBalanceSnapshot, WalletBalanceSyncRun};
+pub(crate) use domain::MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS;
 pub use domain::{
-    settlement_posting_key, LedgerEntryType, PaymentClient, PaymentEvent, PaymentEventType, PaymentLedgerEntry,
-    PaymentOffer, PaymentReceipt, PaymentScenario,
-};
-pub(crate) use domain::{
-    MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS, MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS,
+    LedgerEntryType, PaymentClient, PaymentEvent, PaymentEventType, PaymentLedgerEntry, PaymentPrice, PaymentPrice,
+    PaymentReceipt, PaymentScenario,
 };
 pub use event::{PaymentEventDelivery, PaymentEventDispatchRun};
-pub(crate) use payment::validate_trusted_effective_time;
+
 pub use payment::{
     Amount, AssetIdentity, AuthorizePayment, BudgetUnit, PaymentAuthorizationResult, PaymentChallenge,
     PaymentCredential, PaymentDirection, PaymentIntent, PaymentStatus, ReplayCheck, ReservationStatus,

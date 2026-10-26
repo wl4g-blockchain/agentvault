@@ -53,7 +53,7 @@ fn import_specs_copy_every_shared_field_into_domain_entities() {
     assert_eq!(policy.assets.as_slice(), std::slice::from_ref(&asset));
     assert_eq!((policy.created_at, policy.updated_at), (imported_at, imported_at));
 
-    let offer = OfferSpec {
+    let offer = PriceSpec {
         id: "offer-1".to_owned(),
         scenario_id: scenario.id.clone(),
         policy_id: policy.id.clone(),
@@ -102,4 +102,14 @@ fn wallet_spec_builds_domain_metadata_without_copying_custody_material() {
     assert_eq!(wallet.algorithm, EVM_EOA_ALGORITHM);
     let encoded = serde_json::to_string(&wallet).unwrap();
     assert!(!encoded.contains("TEST_WALLET_PRIVATE_KEY"));
+}
+
+#[test]
+fn canonical_price_resources_accept_legacy_offer_kind_without_two_models() {
+    for kind in ["Price", "Price"] {
+        assert!(matches!(
+            serde_yaml::from_str::<ResourceKind>(kind).unwrap(),
+            ResourceKind::Price
+        ));
+    }
 }

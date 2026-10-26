@@ -81,7 +81,7 @@ values.
 
 `agentvault --config PATH console import FILE_OR_DIRECTORY...` imports canonical
 `{consoleVersion, kind, metadata, data}` Client, Wallet, Scenario, Policy,
-Offer, and Approver resources into the configured SQL authority. Each YAML
+Price, and Approver resources into the configured SQL authority. Each YAML
 document or JSON file describes exactly one resource. Local-wallet documents
 contain only a narrowly scoped `private_key_env` reference; key bytes are read
 at command execution and persisted only through the versioned wallet-key

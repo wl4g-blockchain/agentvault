@@ -3,9 +3,12 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type Method string
@@ -121,4 +124,87 @@ func (client *Client) execute(ctx context.Context, request TransportRequest, res
 		envelope.Error.Message = fmt.Sprintf("AgentVault returned status %d", response.Status)
 	}
 	return &APIError{Status: response.Status, Code: envelope.Error.Code, Message: envelope.Error.Message}
+}
+
+type producerTraceContext struct {
+	traceID      string
+	spanID       string
+	parentSpanID string
+	headers      map[string]string
+}
+
+func (request TransportRequest) producerTraceContext() (producerTraceContext, error) {
+	headers := request.Headers
+	trace := producerTraceContext{}
+	traceID, parentSpanID, flags, valid := trace.parseTraceparent(request.headerValue("traceparent"))
+	if !valid {
+		var err error
+		traceID, err = trace.randomHex(16)
+		if err != nil {
+			return producerTraceContext{}, err
+		}
+		parentSpanID, flags = "", "01"
+	}
+	spanID, err := trace.randomHex(8)
+	if err != nil {
+		return producerTraceContext{}, err
+	}
+	propagated := make(map[string]string, len(headers)+1)
+	for name, value := range headers {
+		propagated[strings.ToLower(name)] = value
+	}
+	propagated["traceparent"] = "00-" + traceID + "-" + spanID + "-" + flags
+	return producerTraceContext{
+		traceID: traceID, spanID: spanID, parentSpanID: parentSpanID, headers: propagated,
+	}, nil
+}
+
+func (trace producerTraceContext) parseTraceparent(value string) (string, string, string, bool) {
+	fields := strings.Split(value, "-")
+	if len(fields) != 4 || fields[0] != "00" || !trace.validLowerHex(fields[1], 32) ||
+		!trace.validLowerHex(fields[2], 16) || !trace.validLowerHex(fields[3], 2) ||
+		strings.Trim(fields[1], "0") == "" || strings.Trim(fields[2], "0") == "" {
+		return "", "", "", false
+	}
+	return fields[1], fields[2], fields[3], true
+}
+
+func (producerTraceContext) validLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (request TransportRequest) headerValue(wanted string) string {
+	for name, value := range request.Headers {
+		if strings.EqualFold(name, wanted) {
+			return value
+		}
+	}
+	return ""
+}
+
+func (producerTraceContext) randomHex(size int) (string, error) {
+	buffer := make([]byte, size)
+	for {
+		if _, err := rand.Read(buffer); err != nil {
+			return "", fmt.Errorf("generate producer span context: %w", err)
+		}
+		if strings.Trim(hex.EncodeToString(buffer), "0") != "" {
+			return hex.EncodeToString(buffer), nil
+		}
+	}
+}
+
+type transportResultChannel chan TransportResult
+
+func (result transportResultChannel) complete(value TransportResult) {
+	result <- value
+	close(result)
 }

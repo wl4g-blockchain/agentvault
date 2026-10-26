@@ -6,7 +6,7 @@ use reqwest::{Request, Response, Url};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next, RequestBuilder};
 use serde_json::Value;
 
-use crate::payer_core::{validate_url_origin, PayerDelivery};
+use crate::payer_core::{PayerDelivery, PayerValidation};
 use crate::{Error, PayerHttpRequest, PayerHttpResponse, PayerMiddleware, PayerRequestContext, Result, VaultTransport};
 
 /// Adds a stable payment operation to one request handled by a globally
@@ -35,6 +35,102 @@ pub struct ReqwestPayerMiddleware<T> {
 impl<T> ReqwestPayerMiddleware<T> {
     pub(crate) const fn new(core: PayerMiddleware<T>) -> Self {
         Self { core }
+    }
+
+    fn prepare_a2a_request(
+        &self,
+        request: &mut Request,
+        context: &PayerRequestContext,
+    ) -> reqwest_middleware::Result<Option<crate::A2aCall>> {
+        let a2a = if request.method() == reqwest::Method::POST
+            && request
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("application/json"))
+        {
+            crate::A2aCall::parse(
+                request.body().and_then(reqwest::Body::as_bytes).unwrap_or_default(),
+                self.core.config().max_challenge_bytes,
+            )
+            .map_err(ReqwestWire::middleware_error)?
+        } else {
+            None
+        };
+        if a2a.is_some() {
+            if request
+                .headers()
+                .get("x-run-id")
+                .is_some_and(|v| v.as_bytes() != context.run_id.as_bytes())
+            {
+                return Err(ReqwestWire::middleware_error(crate::A2aCall::invalid(
+                    "A2A run_id conflict",
+                )));
+            }
+            request.headers_mut().insert(
+                "x-run-id",
+                context
+                    .run_id
+                    .parse()
+                    .map_err(|_| ReqwestWire::middleware_error(crate::A2aCall::invalid("invalid run_id header")))?,
+            );
+            let extensions = self.core.a2a_extensions(
+                request
+                    .headers()
+                    .get("x-a2a-extensions")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default(),
+            );
+            request.headers_mut().insert(
+                "x-a2a-extensions",
+                extensions.parse().map_err(|_| {
+                    ReqwestWire::middleware_error(crate::A2aCall::invalid("invalid A2A extension header"))
+                })?,
+            );
+        }
+        Ok(a2a)
+    }
+
+    fn attach_payment(
+        &self,
+        paid_template: &mut Request,
+        authorized: &crate::AuthorizedPayment,
+        sdk_request: &PayerHttpRequest,
+        first: &PayerHttpResponse,
+        a2a: &mut Option<crate::A2aCall>,
+        http_challenge: bool,
+    ) -> reqwest_middleware::Result<()> {
+        if http_challenge {
+            let existing = ReqwestWire::request_headers(paid_template.headers())?;
+            let (header_name, header_value) = self
+                .core
+                .credential_header(authorized, &sdk_request.origin, &existing)
+                .map_err(ReqwestWire::middleware_error)?;
+            let name = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|_| {
+                ReqwestWire::middleware_error(Error::UnsafeRetry("credential header name is invalid".to_owned()))
+            })?;
+            let value = reqwest::header::HeaderValue::from_str(&header_value).map_err(|_| {
+                ReqwestWire::middleware_error(Error::UnsafeRetry("credential header value is invalid".to_owned()))
+            })?;
+            paid_template.headers_mut().insert(name, value);
+        } else if let Some(call) = a2a.as_mut() {
+            let challenge = serde_json::from_slice(&first.body)
+                .map_err(|_| ReqwestWire::middleware_error(crate::A2aCall::invalid("invalid A2A challenge JSON")))?;
+            let body = self
+                .core
+                .a2a_credential(authorized, call, &challenge, &sdk_request.origin)
+                .map_err(ReqwestWire::middleware_error)?;
+            *paid_template.body_mut() = Some(reqwest::Body::from(body));
+            paid_template.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+        } else {
+            let body = self
+                .core
+                .mcp_credential(authorized, &sdk_request.body)
+                .map_err(ReqwestWire::middleware_error)?;
+            *paid_template.body_mut() = Some(reqwest::Body::from(body));
+            paid_template.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+        }
+        Ok(())
     }
 
     fn replayable_mcp_tool_call_id(request: &Request) -> Option<Value> {
@@ -82,19 +178,23 @@ where
 {
     async fn handle(
         &self,
-        request: Request,
+        mut request: Request,
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
         let Some(context) = extensions.get::<PayerRequestContext>().cloned() else {
             return next.run(request, extensions).await;
         };
+        let a2a = self.prepare_a2a_request(&mut request, &context)?;
         let original = request.try_clone().ok_or_else(|| {
-            middleware_error(Error::UnsafeRetry(
+            ReqwestWire::middleware_error(Error::UnsafeRetry(
                 "paid requests must use a replayable, non-streaming body".to_owned(),
             ))
         })?;
-        let mcp_call_id = Self::replayable_mcp_tool_call_id(&original);
+        let mcp_call_id = a2a
+            .as_ref()
+            .map(|call| call.wire["id"].clone())
+            .or_else(|| Self::replayable_mcp_tool_call_id(&original));
         let first = next.clone().run(request, extensions).await?;
         let http_challenge = first.status().as_u16() == 402;
         let message_challenge = mcp_call_id.is_some()
@@ -117,13 +217,15 @@ where
         {
             return Ok(first.response);
         }
-        let sdk_request = sdk_request(&original)?;
+        let sdk_request = ReqwestWire::sdk_request(&original)?;
         let authorized = if http_challenge {
             self.core.authorize(&sdk_request, &first.view, &context).await
+        } else if a2a.is_some() {
+            self.core.authorize_a2a(&sdk_request, &first.view, &context).await
         } else {
             self.core.authorize_mcp(&sdk_request, &first.view, &context).await
         }
-        .map_err(middleware_error)?;
+        .map_err(ReqwestWire::middleware_error)?;
         let Some(authorized) = authorized else {
             return Ok(first.response);
         };
@@ -136,24 +238,19 @@ where
         );
 
         let mut paid_template = original;
+        let mut a2a = a2a;
+        self.attach_payment(
+            &mut paid_template,
+            &authorized,
+            &sdk_request,
+            &first.view,
+            &mut a2a,
+            http_challenge,
+        )?;
         if http_challenge {
-            let existing = request_headers(paid_template.headers())?;
-            let (header_name, header_value) = self
-                .core
-                .credential_header(&authorized, &sdk_request.origin, &existing)
-                .map_err(middleware_error)?;
-            let name = reqwest::header::HeaderName::from_bytes(header_name.as_bytes())
-                .map_err(|_| middleware_error(Error::UnsafeRetry("credential header name is invalid".to_owned())))?;
-            let value = reqwest::header::HeaderValue::from_str(&header_value)
-                .map_err(|_| middleware_error(Error::UnsafeRetry("credential header value is invalid".to_owned())))?;
-            paid_template.headers_mut().insert(name, value);
-        } else {
-            let body = self
-                .core
-                .mcp_credential(&authorized, &sdk_request.body)
-                .map_err(middleware_error)?;
-            *paid_template.body_mut() = Some(reqwest::Body::from(body));
-            paid_template.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+            // HTTP 402 selects header credentials and receipts even when the
+            // protected application body happens to be an A2A message.
+            a2a = None;
         }
 
         let mut delivery = ReqwestDelivery {
@@ -161,6 +258,7 @@ where
             next,
             extensions,
             message_level: message_challenge,
+            a2a,
             mcp_call_id,
             max_message_bytes: self.core.config().max_challenge_bytes,
         };
@@ -168,7 +266,7 @@ where
             .core
             .deliver(&context, &authorized, &mut delivery)
             .await
-            .map_err(middleware_error)?
+            .map_err(ReqwestWire::middleware_error)?
             .response;
         response.extensions_mut().insert(authorized);
         Ok(response)
@@ -185,6 +283,7 @@ struct ReqwestDelivery<'next, 'extensions> {
     next: Next<'next>,
     extensions: &'extensions mut Extensions,
     message_level: bool,
+    a2a: Option<crate::A2aCall>,
     mcp_call_id: Option<Value>,
     max_message_bytes: usize,
 }
@@ -199,7 +298,7 @@ impl ReqwestDelivery<'_, '_> {
     }
 
     fn response_view(response: &Response) -> PayerHttpResponse {
-        let headers = response_headers(response.headers());
+        let headers = ReqwestWire::response_headers(response.headers());
         PayerHttpResponse {
             status: response.status().as_u16(),
             headers,
@@ -213,7 +312,7 @@ impl ReqwestDelivery<'_, '_> {
             .and_then(|value| usize::try_from(value).ok())
             .is_some_and(|value| value > limit)
         {
-            return Err(middleware_error(Error::Decode(
+            return Err(ReqwestWire::middleware_error(Error::Decode(
                 "MCP payment message exceeds configured limit".to_owned(),
             )));
         }
@@ -223,7 +322,7 @@ impl ReqwestDelivery<'_, '_> {
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(reqwest_middleware::Error::Reqwest)? {
             if body.len().checked_add(chunk.len()).is_none_or(|length| length > limit) {
-                return Err(middleware_error(Error::Decode(
+                return Err(ReqwestWire::middleware_error(Error::Decode(
                     "MCP payment message exceeds configured limit".to_owned(),
                 )));
             }
@@ -231,14 +330,16 @@ impl ReqwestDelivery<'_, '_> {
         }
         let view = PayerHttpResponse {
             status: status.as_u16(),
-            headers: response_headers(&headers),
+            headers: ReqwestWire::response_headers(&headers),
             body: body.clone(),
         };
         let mut rebuilt = http::Response::builder()
             .status(status)
             .version(version)
             .body(reqwest::Body::from(body))
-            .map_err(|error| middleware_error(Error::Transport(format!("rebuild MCP response: {error}"))))?;
+            .map_err(|error| {
+                ReqwestWire::middleware_error(Error::Transport(format!("rebuild MCP response: {error}")))
+            })?;
         *rebuilt.headers_mut() = headers;
         Ok(BufferedResponse {
             response: Response::from(rebuilt),
@@ -249,6 +350,9 @@ impl ReqwestDelivery<'_, '_> {
 
 impl PayerDelivery for ReqwestDelivery<'_, '_> {
     type Response = BufferedResponse;
+    fn a2a_call(&self) -> Option<&crate::A2aCall> {
+        self.a2a.as_ref()
+    }
 
     async fn send(&mut self, _attempt_no: u8) -> Result<Self::Response> {
         let paid = self
@@ -292,80 +396,85 @@ impl PayerDelivery for ReqwestDelivery<'_, '_> {
     }
 }
 
-fn middleware_error(error: Error) -> reqwest_middleware::Error {
-    reqwest_middleware::Error::Middleware(anyhow::Error::new(error))
-}
-
-fn sdk_request(request: &Request) -> reqwest_middleware::Result<PayerHttpRequest> {
-    let origin = canonical_origin(request.url()).map_err(middleware_error)?;
-    validate_url_origin(request.url().as_str(), &origin).map_err(middleware_error)?;
-    let body = request
-        .body()
-        .and_then(reqwest::Body::as_bytes)
-        .map_or_else(Vec::new, ToOwned::to_owned);
-    Ok(PayerHttpRequest {
-        method: request.method().as_str().to_owned(),
-        url: request.url().as_str().to_owned(),
-        origin,
-        headers: request_headers(request.headers())?,
-        body,
-        follow_redirects: false,
-    })
-}
-
-fn canonical_origin(url: &Url) -> Result<String> {
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || !url.username().is_empty() {
-        return Err(Error::InvalidArgument(
-            "paid request URL must be absolute HTTP(S) without userinfo".to_owned(),
-        ));
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| Error::InvalidArgument("paid request URL must include a canonical host".to_owned()))?;
-    let authority = match url.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    };
-    Ok(format!("{}://{authority}", url.scheme()))
-}
-
-fn request_headers(headers: &reqwest::header::HeaderMap) -> reqwest_middleware::Result<BTreeMap<String, String>> {
-    text_headers(headers)
-        .map_err(|()| middleware_error(Error::InvalidArgument("request contains a non-text header".to_owned())))
-}
-
-fn text_headers(headers: &reqwest::header::HeaderMap) -> std::result::Result<BTreeMap<String, String>, ()> {
-    let mut flattened = BTreeMap::new();
-    for name in headers.keys() {
-        let values = headers
-            .get_all(name)
-            .iter()
-            .map(|value| value.to_str().map(str::to_owned).map_err(|_| ()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        flattened.insert(name.as_str().to_owned(), values.join(", "));
-    }
-    Ok(flattened)
-}
-
-fn response_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
-    let mut flattened = BTreeMap::new();
-    for name in headers.keys() {
-        let Ok(values) = headers
-            .get_all(name)
-            .iter()
-            .map(|value| value.to_str().map(str::to_owned))
-            .collect::<std::result::Result<Vec<_>, _>>()
-        else {
-            // One malformed value invalidates this complete logical header.
-            // Other response headers, including settlement evidence, remain
-            // available to the protocol adapter.
-            continue;
-        };
-        flattened.insert(name.as_str().to_owned(), values.join(", "));
-    }
-    flattened
-}
-
 #[cfg(test)]
 #[path = "../../tests/payer/standard_test.rs"]
 mod tests;
+
+struct ReqwestWire;
+
+impl ReqwestWire {
+    fn middleware_error(error: Error) -> reqwest_middleware::Error {
+        reqwest_middleware::Error::Middleware(anyhow::Error::new(error))
+    }
+
+    fn sdk_request(request: &Request) -> reqwest_middleware::Result<PayerHttpRequest> {
+        let origin = ReqwestWire::canonical_origin(request.url()).map_err(ReqwestWire::middleware_error)?;
+        PayerValidation::validate_url_origin(request.url().as_str(), &origin).map_err(ReqwestWire::middleware_error)?;
+        let body = request
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .map_or_else(Vec::new, ToOwned::to_owned);
+        Ok(PayerHttpRequest {
+            method: request.method().as_str().to_owned(),
+            url: request.url().as_str().to_owned(),
+            origin,
+            headers: ReqwestWire::request_headers(request.headers())?,
+            body,
+            follow_redirects: false,
+        })
+    }
+
+    fn canonical_origin(url: &Url) -> Result<String> {
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || !url.username().is_empty() {
+            return Err(Error::InvalidArgument(
+                "paid request URL must be absolute HTTP(S) without userinfo".to_owned(),
+            ));
+        }
+        let host = url
+            .host_str()
+            .ok_or_else(|| Error::InvalidArgument("paid request URL must include a canonical host".to_owned()))?;
+        let authority = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        };
+        Ok(format!("{}://{authority}", url.scheme()))
+    }
+
+    fn request_headers(headers: &reqwest::header::HeaderMap) -> reqwest_middleware::Result<BTreeMap<String, String>> {
+        ReqwestWire::text_headers(headers).map_err(|()| {
+            ReqwestWire::middleware_error(Error::InvalidArgument("request contains a non-text header".to_owned()))
+        })
+    }
+
+    fn text_headers(headers: &reqwest::header::HeaderMap) -> std::result::Result<BTreeMap<String, String>, ()> {
+        let mut flattened = BTreeMap::new();
+        for name in headers.keys() {
+            let values = headers
+                .get_all(name)
+                .iter()
+                .map(|value| value.to_str().map(str::to_owned).map_err(|_| ()))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            flattened.insert(name.as_str().to_owned(), values.join(", "));
+        }
+        Ok(flattened)
+    }
+
+    fn response_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
+        let mut flattened = BTreeMap::new();
+        for name in headers.keys() {
+            let Ok(values) = headers
+                .get_all(name)
+                .iter()
+                .map(|value| value.to_str().map(str::to_owned))
+                .collect::<std::result::Result<Vec<_>, _>>()
+            else {
+                // One malformed value invalidates this complete logical header.
+                // Other response headers, including settlement evidence, remain
+                // available to the protocol adapter.
+                continue;
+            };
+            flattened.insert(name.as_str().to_owned(), values.join(", "));
+        }
+        flattened
+    }
+}

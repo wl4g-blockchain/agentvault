@@ -1,3 +1,5 @@
+import type { Task } from '@a2a-js/sdk';
+import { A2ACall } from '../model/a2a.js';
 import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -209,6 +211,33 @@ export class MppAdapter implements McpPaymentProtocol {
       headerName: 'payment-receipt',
       headerValue: Receipt.serialize(parsed.data),
     };
+  }
+
+  a2aExtension(): string { return ''; }
+  a2aChallenge(message: Record<string, unknown>, limit: number): ProtocolHttpResponse | undefined {
+    return message.error !== undefined ? this.mcpChallenge(message, limit) : undefined;
+  }
+  a2aApplyCredential(message: Record<string, unknown>, credential: PaymentCredential): void {
+    const meta = A2ACall.metadata(message, true), value = this.mcpCredential(credential);
+    if (value.key in meta) throw new Error('A2A request already contains an MPP credential');
+    meta[value.key] = value.value;
+  }
+  presentedA2aCredential(message: Record<string, unknown>, limit: number): unknown | undefined {
+    const key = this.mcpRequestMetadataKey();
+    if (key in A2ACall.object(A2ACall.object(message.params)._meta ?? {}) || key in A2ACall.metadata(message)) throw new Error('MPP A2A credentials require JSON-RPC root _meta');
+    return this.presentedMcpCredential(A2ACall.metadata(message, true), limit);
+  }
+  a2aStripCredential(message: Record<string, unknown>): void { delete A2ACall.metadata(message, true)[this.mcpRequestMetadataKey()]; }
+  a2aPaymentRequired(challenge: PaymentChallenge, _task: Task, rejected: boolean): McpPaymentRequired {
+    return rejected ? this.mcpPaymentRejected(challenge, 'Payment verification failed') : this.mcpPaymentRequired(challenge);
+  }
+  a2aEvidence(message: Record<string, unknown>, limit: number): MerchantEvidence | undefined {
+    return this.mcpMerchantEvidence(A2ACall.metadata(message, true), limit);
+  }
+  a2aInjectReceipt(message: Record<string, unknown>, challenge: PaymentChallenge, payment: SettledIncomingPayment): void {
+    const meta = A2ACall.metadata(message, true), receipt = this.mcpReceipt(challenge, payment);
+    if (receipt.key in meta) throw new Error('handler attempted to supply MPP receipt');
+    meta[receipt.key] = receipt.value;
   }
 
   private storedMcpChallenge(challenge: PaymentChallenge): Challenge.Challenge {

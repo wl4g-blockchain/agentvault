@@ -3,9 +3,20 @@
 version = 4
 
 [[package]]
+name = "a2a-types"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02e05f443013a7902f12a237ae3b876014a9b2e8a44ed03b83e62dab5e6fabc2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agentvault-sdk"
 version = "0.1.0"
 dependencies = [
+ "a2a-types",
  "anyhow",
  "async-trait",
  "axum",
@@ -28,6 +39,7 @@ dependencies = [
  "tonic-prost-build",
  "tower",
  "tracing",
+ "uuid",
  "x402-chain-eip155",
  "x402-chain-solana",
  "x402-types",

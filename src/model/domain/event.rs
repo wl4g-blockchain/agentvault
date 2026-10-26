@@ -44,21 +44,26 @@ impl PaymentEventType {
     }
 }
 
-/// Immutable operational event. This is audit history, not the source of truth
-/// for confirmed financial totals.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentEvent {
-    pub id: String,
-    pub intent_id: String,
-    pub event_type: PaymentEventType,
-    pub attempt_no: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    pub payload: Value,
-    pub created_at: i64,
+crate::storage::repository_entity! { "pay_event", AppendOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Immutable operational event. This is audit history, not the source of truth
+    /// for confirmed financial totals.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentEvent {
+        pub id: String,
+        pub intent_id: String,
+        pub event_type: PaymentEventType,
+        #[sqlx(try_from = "i64")]
+        pub attempt_no: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub signature_ref: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tx_hash: Option<String>,
+        #[sqlx(json)]
+        pub payload: Value,
+        pub created_at: i64,
+    }
 }
 
 impl PaymentEvent {

@@ -67,6 +67,10 @@ export class AgentVault {
 }
 
 export * from './config/config.js';
+export * from './model/a2a.js';
+export * from './payer/a2a.js';
+export * from './payee/a2a.js';
+export type {TaskStore as A2aTaskStore} from '@a2a-js/sdk/server';
 export * from './model/approval.js';
 export * from './model/base.js';
 export * from './model/payee.js';

@@ -14,15 +14,15 @@ import java.util.List;
 public final class Payee {
     private Payee() {}
 
-    public record ResolveOfferRequest(String scenarioId, String resource, String protocol) {
-        public ResolveOfferRequest {
+    public record ResolvePriceRequest(String scenarioId, String resource, String protocol) {
+        public ResolvePriceRequest {
             Base.required("scenarioId", scenarioId);
             Base.required("resource", resource);
             if (protocol != null) Base.required("protocol", protocol);
         }
     }
 
-    public record PaymentOffer(
+    public record PaymentPrice(
             String id,
             @JsonProperty("scenario_id") String scenarioId,
             String resource,

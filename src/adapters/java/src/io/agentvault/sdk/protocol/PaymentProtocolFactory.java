@@ -16,9 +16,12 @@ public final class PaymentProtocolFactory {
     }
 
     public void register(String name, Supplier<PaymentProtocol> provider) {
-        if (name == null || !name.equals(name.toLowerCase()) || provider == null
+        if (name == null
+                || !name.equals(name.toLowerCase())
+                || provider == null
                 || providers.putIfAbsent(name, provider) != null) {
-            throw new IllegalArgumentException("invalid or duplicate payment protocol provider: " + name);
+            throw new IllegalArgumentException(
+                    "invalid or duplicate payment protocol provider: " + name);
         }
     }
 
@@ -30,11 +33,13 @@ public final class PaymentProtocolFactory {
         for (String name : enabled) {
             Supplier<PaymentProtocol> provider = providers.get(name);
             if (provider == null) {
-                throw new IllegalArgumentException("payment protocol provider is unavailable: " + name);
+                throw new IllegalArgumentException(
+                        "payment protocol provider is unavailable: " + name);
             }
             PaymentProtocol adapter = provider.get();
             if (!name.equals(adapter.name()) || adapters.putIfAbsent(name, adapter) != null) {
-                throw new IllegalArgumentException("duplicate or mismatched payment protocol provider: " + name);
+                throw new IllegalArgumentException(
+                        "duplicate or mismatched payment protocol provider: " + name);
             }
         }
         return new ProtocolRegistry(adapters);

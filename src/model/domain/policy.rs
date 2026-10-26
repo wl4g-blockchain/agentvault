@@ -10,14 +10,16 @@ pub struct PaymentPolicyLimits {
     pub max_per_day: Amount,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_threshold: Option<Amount>,
-    #[serde(default = "default_true")]
+    #[serde(default = "PaymentPolicyLimits::default_true")]
     pub approval_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_overage: Option<Amount>,
 }
 
-const fn default_true() -> bool {
-    true
+impl PaymentPolicyLimits {
+    const fn default_true() -> bool {
+        true
+    }
 }
 
 impl PaymentPolicyLimits {
@@ -57,27 +59,30 @@ impl PaymentPolicyLimits {
     }
 }
 
-/// Scenario policy aggregate. Wallet membership is persisted by the
-/// `pay_policy_wallet` relation and represented here as a deterministic list.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentPolicy {
-    pub id: String,
-    pub scenario_id: String,
-    pub wallet_ids: Vec<String>,
-    pub protocols: Vec<String>,
-    pub networks: Vec<String>,
-    pub assets: Vec<AssetIdentity>,
-    pub budget_unit: BudgetUnit,
-    pub allowed_recipients: Vec<String>,
-    pub allowed_origins: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inbound_limits: Option<PaymentPolicyLimits>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outbound_limits: Option<PaymentPolicyLimits>,
-    pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
+crate::storage::repository_entity! { "pay_policy", ReadOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Scenario policy aggregate. Wallet membership is persisted by the
+    /// `pay_policy_wallet` relation and represented here as a deterministic list.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentPolicy {
+        pub id: String,
+        pub scenario_id: String,
+        pub wallet_ids: Vec<String>,
+        pub protocols: Vec<String>,
+        pub networks: Vec<String>,
+        pub assets: Vec<AssetIdentity>,
+        pub budget_unit: BudgetUnit,
+        pub allowed_recipients: Vec<String>,
+        pub allowed_origins: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub inbound_limits: Option<PaymentPolicyLimits>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub outbound_limits: Option<PaymentPolicyLimits>,
+        pub enabled: bool,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
 }
 
 impl PaymentPolicy {

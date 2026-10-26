@@ -5,14 +5,14 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::{
-    config::RecoveryEncryptionConfig,
-    utils::{
-        aead::{new_uuid_nonce, parse_uuid_nonce, Aes256GcmUuidNonce, UuidNonce, AES_256_KEY_BYTES},
-        secret::read_secret_ref,
-    },
-    Error, Result,
-};
+use crate::config::RecoveryEncryptionConfig;
+use crate::utils::aead::Aes256GcmUuidNonce;
+use crate::utils::aead::UuidNonce;
+use crate::utils::aead::UuidNonceCodec;
+use crate::utils::aead::AES_256_KEY_BYTES;
+use crate::utils::secret::SecretReader;
+use crate::Error;
+use crate::Result;
 
 const MATERIAL_VERSION: u8 = 2;
 const AAD_DOMAIN: &[u8] = b"agentvault.sensitive-material.v2";
@@ -91,10 +91,10 @@ impl Aes256GcmMaterialProtector {
         keys: impl IntoIterator<Item = (String, [u8; AES_256_KEY_BYTES])>,
     ) -> Result<Self> {
         let active_key_id = active_key_id.into();
-        validate_key_id(&active_key_id)?;
+        Aes256GcmMaterialProtector::validate_key_id(&active_key_id)?;
         let mut key_ring = BTreeMap::new();
         for (key_id, key) in keys {
-            validate_key_id(&key_id)?;
+            Aes256GcmMaterialProtector::validate_key_id(&key_id)?;
             if key_ring.insert(key_id.clone(), Zeroizing::new(key)).is_some() {
                 return Err(Error::Config(format!("duplicate sensitive-material key id: {key_id}")));
             }
@@ -120,7 +120,7 @@ impl Aes256GcmMaterialProtector {
     pub fn from_config(config: &RecoveryEncryptionConfig) -> Result<Self> {
         let mut keys = Vec::with_capacity(config.keys.len());
         for (key_id, reference) in &config.keys {
-            let encoded = read_secret_ref(reference, &format!("sensitive-material key {key_id}"), 1024)?;
+            let encoded = SecretReader::read_ref(reference, &format!("sensitive-material key {key_id}"), 1024)?;
             let decoded = URL_SAFE_NO_PAD
                 .decode(encoded.trim_end_matches(['\r', '\n']))
                 .map(Zeroizing::new)
@@ -138,7 +138,7 @@ impl Aes256GcmMaterialProtector {
 
 impl SensitiveMaterialProtector for Aes256GcmMaterialProtector {
     fn seal(&self, context: &str, plaintext: &[u8]) -> Result<SealedSensitiveMaterial> {
-        validate_context(context)?;
+        Aes256GcmMaterialProtector::validate_context(context)?;
         if plaintext.is_empty() {
             return Err(Error::Crypto("sensitive material must not be empty".to_owned()));
         }
@@ -146,8 +146,8 @@ impl SensitiveMaterialProtector for Aes256GcmMaterialProtector {
             .keys
             .get(&self.active_key_id)
             .ok_or_else(|| Error::Crypto("active sensitive-material key is unavailable".to_owned()))?;
-        let nonce = new_uuid_nonce();
-        let aad = material_aad(context, &self.active_key_id);
+        let nonce = UuidNonceCodec::generate();
+        let aad = Aes256GcmMaterialProtector::aad(context, &self.active_key_id);
         let cipher = Aes256GcmUuidNonce::new_from_slice(key.as_ref())
             .map_err(|_| Error::Crypto("sensitive-material key length is invalid".to_owned()))?;
         let ciphertext = cipher
@@ -168,13 +168,13 @@ impl SensitiveMaterialProtector for Aes256GcmMaterialProtector {
     }
 
     fn open(&self, context: &str, material: &SealedSensitiveMaterial) -> Result<Zeroizing<Vec<u8>>> {
-        validate_context(context)?;
+        Aes256GcmMaterialProtector::validate_context(context)?;
         if material.version != MATERIAL_VERSION {
             return Err(Error::Crypto(
                 "unsupported sensitive-material envelope version".to_owned(),
             ));
         }
-        validate_key_id(&material.key_id)?;
+        Aes256GcmMaterialProtector::validate_key_id(&material.key_id)?;
         let key = self
             .keys
             .get(&material.key_id)
@@ -182,12 +182,12 @@ impl SensitiveMaterialProtector for Aes256GcmMaterialProtector {
         let nonce = URL_SAFE_NO_PAD
             .decode(&material.nonce)
             .map_err(|_| Error::Crypto("sensitive-material nonce is invalid".to_owned()))?;
-        let nonce =
-            parse_uuid_nonce(&nonce).map_err(|_| Error::Crypto("sensitive-material nonce is invalid".to_owned()))?;
+        let nonce = UuidNonceCodec::parse(&nonce)
+            .map_err(|_| Error::Crypto("sensitive-material nonce is invalid".to_owned()))?;
         let ciphertext = URL_SAFE_NO_PAD
             .decode(&material.ciphertext)
             .map_err(|_| Error::Crypto("sensitive-material ciphertext is invalid".to_owned()))?;
-        let aad = material_aad(context, &material.key_id);
+        let aad = Aes256GcmMaterialProtector::aad(context, &material.key_id);
         let cipher = Aes256GcmUuidNonce::new_from_slice(key.as_ref())
             .map_err(|_| Error::Crypto("sensitive-material key length is invalid".to_owned()))?;
         cipher
@@ -203,33 +203,35 @@ impl SensitiveMaterialProtector for Aes256GcmMaterialProtector {
     }
 }
 
-fn material_aad(context: &str, key_id: &str) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(AAD_DOMAIN.len() + context.len() + key_id.len() + 2);
-    aad.extend_from_slice(AAD_DOMAIN);
-    aad.push(0);
-    aad.extend_from_slice(context.as_bytes());
-    aad.push(0);
-    aad.extend_from_slice(key_id.as_bytes());
-    aad
-}
-
-fn validate_context(context: &str) -> Result<()> {
-    if context.is_empty() || context.len() > 512 || context.chars().any(char::is_control) {
-        return Err(Error::Crypto("sensitive-material context is invalid".to_owned()));
+impl Aes256GcmMaterialProtector {
+    fn aad(context: &str, key_id: &str) -> Vec<u8> {
+        let mut aad = Vec::with_capacity(AAD_DOMAIN.len() + context.len() + key_id.len() + 2);
+        aad.extend_from_slice(AAD_DOMAIN);
+        aad.push(0);
+        aad.extend_from_slice(context.as_bytes());
+        aad.push(0);
+        aad.extend_from_slice(key_id.as_bytes());
+        aad
     }
-    Ok(())
-}
 
-fn validate_key_id(key_id: &str) -> Result<()> {
-    if key_id.is_empty()
-        || key_id.len() > 128
-        || !key_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-    {
-        return Err(Error::Config("sensitive-material key id is invalid".to_owned()));
+    fn validate_context(context: &str) -> Result<()> {
+        if context.is_empty() || context.len() > 512 || context.chars().any(char::is_control) {
+            return Err(Error::Crypto("sensitive-material context is invalid".to_owned()));
+        }
+        Ok(())
     }
-    Ok(())
+
+    fn validate_key_id(key_id: &str) -> Result<()> {
+        if key_id.is_empty()
+            || key_id.len() > 128
+            || !key_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+        {
+            return Err(Error::Config("sensitive-material key id is invalid".to_owned()));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -4,9 +4,12 @@ pub mod cmd;
 pub mod config;
 pub mod controller;
 pub mod handler;
+pub mod job;
 pub mod model;
+pub mod payment;
 pub mod protocol;
 pub mod storage;
+pub mod transport;
 pub mod utils;
 
 #[allow(clippy::default_trait_access, clippy::doc_markdown)]

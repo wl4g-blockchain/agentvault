@@ -6,6 +6,8 @@
 mod agentvault;
 #[path = "config/config.rs"]
 mod config;
+#[path = "model/a2a.rs"]
+mod model_a2a;
 #[path = "model/approval.rs"]
 mod model_approval;
 #[path = "model/base.rs"]
@@ -14,12 +16,16 @@ mod model_base;
 mod model_payee;
 #[path = "model/payer.rs"]
 mod model_payer;
+#[path = "payee/a2a.rs"]
+mod payee_a2a;
 #[path = "payee/axum.rs"]
 mod payee_axum;
 #[path = "payee/payee.rs"]
 mod payee_core;
 #[path = "payee/standard.rs"]
 mod payee_standard;
+#[path = "payer/a2a.rs"]
+mod payer_a2a;
 #[path = "payer/payer.rs"]
 mod payer_core;
 #[path = "payer/standard.rs"]
@@ -39,13 +45,16 @@ mod transport_grpc;
 #[path = "transport/mqtt.rs"]
 mod transport_mqtt;
 
+pub use a2a_types;
 pub(crate) use agentvault::paths;
 pub use agentvault::AgentVault;
 pub use config::{GrpcConfig, MqttConfig, PayeeConfig, PayerConfig};
+pub use model_a2a::A2aCall;
 pub use model_approval::*;
 pub use model_base::*;
 pub use model_payee::*;
 pub use model_payer::*;
+pub use payee_a2a::{A2aPaymentCall, A2aTaskStore};
 pub use payee_axum::{AxumPayeeMiddleware, AxumPayeeRoute};
 pub use payee_core::PayeeMiddleware;
 pub use payee_standard::{StandardPayeeMiddleware, StandardPayeeRequest};
@@ -64,4 +73,4 @@ pub use transport_factory::{ConfiguredVaultTransport, VaultTransportConfig, Vaul
 pub use transport_grpc::GrpcVaultTransport;
 pub use transport_mqtt::MqttVaultTransport;
 
-pub(crate) use transport_core::{percent_encode, ApiClient};
+pub(crate) use transport_core::ApiClient;

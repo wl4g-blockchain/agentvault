@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from uuid import uuid4
+from a2a.types import Task, TaskStatus, Message, TextPart, Part
+from ..model.a2a import A2ACall
+
 import base64
 import binascii
 import json
@@ -334,3 +338,80 @@ class X402Adapter(PaymentProtocol):
     @staticmethod
     def _header(headers: Mapping[str, str], wanted: str) -> str:
         return next((value for name, value in headers.items() if name.lower() == wanted), "")
+
+
+    def a2a_extension(self) -> str:
+        return "https://github.com/google-agentic-commerce/a2a-x402/blob/main/spec/v0.2"
+
+    def a2a_challenge(self, message: dict, limit: int) -> HttpResponse | None:
+        result = message.get("result")
+        if not isinstance(result, dict):
+            return None
+        meta = result.get("status", {}).get("message", {}).get("metadata", {})
+        required = meta.get("x402.payment.required")
+        if required is None:
+            if meta.get("x402.payment.status") == "payment-required":
+                raise ValueError("embedded A2A payment mandates are unsupported")
+            return None
+        task = A2ACall.task(message)
+        if task.status.state != "input-required" or meta.get("x402.payment.status") != "payment-required":
+            raise ValueError("A2A payment challenge state is invalid")
+        # Reuse the upstream v2 parser through the existing protocol projection.
+        return self.mcp_challenge({"result": {"isError": True, "structuredContent": required}}, limit)
+
+    def a2a_apply_credential(self, message: dict, credential: PaymentCredential) -> None:
+        meta = A2ACall.metadata(message)
+        if any(key.startswith("x402.payment.") for key in meta):
+            raise ValueError("A2A request already contains payment metadata")
+        meta.update({"x402.payment.status": "payment-submitted", "x402.payment.payload": self.mcp_credential(credential).value})
+
+    def a2a_presented_credential(self, message: dict, limit: int) -> object | None:
+        meta = A2ACall.metadata(message)
+        keys = {key for key in meta if key.startswith("x402.payment.")}
+        if not keys:
+            return None
+        if keys != {"x402.payment.status", "x402.payment.payload"} or meta["x402.payment.status"] != "payment-submitted":
+            raise ValueError("invalid A2A payment credential metadata")
+        return self.presented_mcp_credential({self.mcp_request_metadata_key(): meta["x402.payment.payload"]}, limit)
+
+    def a2a_strip_credential(self, message: dict) -> None:
+        meta = A2ACall.metadata(message)
+        meta.pop("x402.payment.status", None)
+        meta.pop("x402.payment.payload", None)
+
+    def a2a_payment_required(self, challenge: PaymentChallenge, task: Task, rejected: bool) -> McpPaymentRequired:
+        required = self._challenge_payment_required(challenge).model_dump(by_alias=True, exclude_none=True)
+        meta = {"x402.payment.status": "payment-required", "x402.payment.required": required}
+        if rejected:
+            meta["x402.payment.error"] = "PAYMENT_INVALID"
+        result = task.model_copy(deep=True)
+        result.status = TaskStatus(state="input-required", message=self._a2a_message(task, "Payment required", meta))
+        return McpPaymentRequired(result=result.model_dump(by_alias=True, exclude_none=True))
+
+    def a2a_evidence(self, message: dict, limit: int) -> MerchantEvidence | None:
+        result = message.get("result")
+        if not isinstance(result, dict):
+            return None
+        meta = result.get("status", {}).get("message", {}).get("metadata", {})
+        if "x402.payment.receipts" not in meta:
+            return None
+        A2ACall.task(message)
+        receipts = meta["x402.payment.receipts"]
+        if not isinstance(receipts, list) or len(receipts) != 1 or meta.get("x402.payment.status") != "payment-completed":
+            raise ValueError("A2A requires exactly one completed payment receipt")
+        return self.mcp_merchant_evidence({self.mcp_receipt_metadata_key(): receipts[0]}, limit)
+
+    def a2a_inject_receipt(self, message: dict, challenge: PaymentChallenge, payment: SettledIncomingPayment) -> None:
+        task = A2ACall.task(message)
+        status_message = task.status.message or self._a2a_message(task, "Payment completed", {})
+        meta = dict(status_message.metadata or {})
+        if any(key.startswith("x402.payment.") for key in meta):
+            raise ValueError("handler attempted to supply payment metadata")
+        meta.update({"x402.payment.status": "payment-completed", "x402.payment.receipts": [self.mcp_receipt(challenge, payment).value]})
+        status_message.metadata = meta
+        message["result"]["status"]["message"] = status_message.model_dump(by_alias=True, exclude_none=True)
+
+    @staticmethod
+    def _a2a_message(task: Task, text: str, meta: dict) -> Message:
+        return Message(message_id=str(uuid4()), role="agent", task_id=task.id, context_id=task.context_id,
+                       parts=[Part(root=TextPart(text=text))], metadata=meta)

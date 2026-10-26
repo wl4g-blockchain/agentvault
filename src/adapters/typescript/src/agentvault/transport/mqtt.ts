@@ -27,11 +27,13 @@ interface PendingRequest {
   resolve: (value: WireResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  release: () => void;
 }
 
 export class MqttVaultTransport implements VaultTransport {
   private client: MqttClient | undefined;
   private connectPromise: Promise<void> | undefined;
+  private readyResult: ((error?: Error) => void) | undefined;
   private readonly prefix: string;
   private readonly pending = new Map<string, PendingRequest>();
   private ready = false;
@@ -67,11 +69,14 @@ export class MqttVaultTransport implements VaultTransport {
       password: this.config.password,
       protocolVersion: 4,
       clean: true,
+      resubscribe: false,
       reconnectPeriod: 1000,
       connectTimeout: this.config.timeoutMs,
     });
     this.client = client;
-    client.on('message', (topic, payload) => this.onMessage(topic, payload));
+    client.on('message', (topic, payload, packet) => {
+      if (packet.qos === 1 && !packet.retain) this.onMessage(topic, payload);
+    });
     client.on('error', () => {
       // mqtt.js reconnects automatically. Pending requests retain their exact
       // envelope and remain bounded by their own timeout.
@@ -85,23 +90,40 @@ export class MqttVaultTransport implements VaultTransport {
         `${this.prefix}/results/+`,
         { qos: 1 },
         (error, granted) => {
-          if (error || !subscriptionGranted(granted, 1)) {
+          if (error) { this.ready = false; return; }
+          if (!subscriptionGranted(granted, 1)) {
             this.ready = false;
+            this.failAll(new Error('AgentVault MQTT result subscription was rejected or downgraded'));
             return;
           }
+          if (this.closed) return;
           this.ready = true;
+          this.readyResult?.();
           for (const requestSpanId of this.pending.keys()) this.publishPending(requestSpanId);
         },
       );
     });
   }
 
-  private async waitUntilReady(): Promise<void> {
-    const deadline = Date.now() + this.config.timeoutMs;
-    while (!this.ready) {
-      if (this.closed) throw new Error('MQTT transport closed');
-      if (Date.now() >= deadline) throw new Error('MQTT connect/subscribe timed out');
-      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, this.config.timeoutMs)));
+  private waitUntilReady(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => this.readyResult?.(new Error('MQTT connect/subscribe timed out')), this.config.timeoutMs);
+      this.readyResult = (error) => {
+        clearTimeout(timer);
+        this.readyResult = undefined;
+        if (error) reject(error); else resolve();
+      };
+      if (this.ready) this.readyResult();
+    });
+  }
+
+  private failAll(error: Error): void {
+    this.readyResult?.(error);
+    for (const [id, waiting] of this.pending) {
+      this.pending.delete(id);
+      clearTimeout(waiting.timer);
+      waiting.release();
+      waiting.reject(error);
     }
   }
 
@@ -111,20 +133,16 @@ export class MqttVaultTransport implements VaultTransport {
     this.ready = false;
     const client = this.client;
     this.client = undefined;
-    if (client) await new Promise<void>((resolve) => client.end(false, {}, () => resolve()));
-    for (const [requestSpanId, waiting] of this.pending) {
-      clearTimeout(waiting.timer);
-      waiting.reject(new Error('MQTT transport closed'));
-      this.pending.delete(requestSpanId);
-    }
+    this.failAll(new Error('MQTT transport closed'));
+    // Graceful end waits forever for missing PUBACKs on a disconnected broker.
+    if (client) await new Promise<void>((resolve) => client.end(true, {}, () => resolve()));
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const operation = this.operation(method, path);
     if (body === undefined) throw new Error('MQTT payment commands require a request body');
-    await this.connect();
-    const client = this.client;
-    if (!client?.connected) throw new Error('AgentVault MQTT transport did not become ready');
+    if (this.closed) throw new Error('MQTT transport closed');
+    signal?.throwIfAborted();
     if (this.pending.size >= 256) throw new Error('too many pending MQTT payment requests');
     const trace = producerTraceContext({});
     const requestSpanId = trace.spanId;
@@ -154,10 +172,14 @@ export class MqttVaultTransport implements VaultTransport {
       throw new Error('MQTT payment request exceeds configured limit');
     }
     const result = new Promise<WireResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const fail = (error: Error) => {
         this.pending.delete(requestSpanId);
-        reject(new Error('AgentVault MQTT request timed out'));
-      }, this.config.timeoutMs);
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        reject(error);
+      };
+      const abort = () => fail(new Error('AgentVault MQTT request cancelled'));
+      const timer = setTimeout(() => fail(new Error('AgentVault MQTT request timed out')), this.config.timeoutMs);
       this.pending.set(requestSpanId, {
         expectedType: operation.responseType,
         commandTopic: `${this.prefix}/commands/${operation.command}`,
@@ -165,7 +187,12 @@ export class MqttVaultTransport implements VaultTransport {
         resolve,
         reject,
         timer,
+        release: () => signal?.removeEventListener('abort', abort),
       });
+      signal?.addEventListener('abort', abort, { once: true });
+      if (!this.client) {
+        try { this.open(); } catch { fail(new Error('AgentVault MQTT connection could not be started')); }
+      }
     });
     this.publishPending(requestSpanId);
     const response = await result;
@@ -253,6 +280,7 @@ export class MqttVaultTransport implements VaultTransport {
     } catch {
       return;
     }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     const requestSpanId = value.requestSpanId;
     const waiting = typeof requestSpanId === 'string' ? this.pending.get(requestSpanId) : undefined;
     const status = value.status;
@@ -271,6 +299,7 @@ export class MqttVaultTransport implements VaultTransport {
     }
     const response = value as unknown as WireResponse;
     clearTimeout(waiting.timer);
+    waiting.release();
     this.pending.delete(requestSpanId);
     waiting.resolve(response);
   }

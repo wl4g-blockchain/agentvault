@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import type { Task, Message } from '@a2a-js/sdk';
+import { A2ACall } from '../model/a2a.js';
 import {
   decodePaymentResponseHeader,
   decodePaymentSignatureHeader,
@@ -206,6 +209,78 @@ export class X402Adapter implements McpPaymentProtocol {
       headerName: 'payment-response',
       headerValue: encodePaymentResponseHeader(confirmed),
     };
+  }
+
+  a2aExtension(): string { return 'https://github.com/google-agentic-commerce/a2a-x402/blob/main/spec/v0.2'; }
+
+  a2aChallenge(message: Record<string, unknown>, limit: number): ProtocolHttpResponse | undefined {
+    const result = A2ACall.optionalObject(message.result);
+    if (!result) return undefined;
+    const meta = this.a2aStatusMetadata(result);
+    if (!('x402.payment.required' in meta)) {
+      if (meta['x402.payment.status'] === 'payment-required') throw new Error('embedded A2A payment mandates are unsupported');
+      return undefined;
+    }
+    const task = A2ACall.task(message);
+    if (task.status.state !== 'input-required' || meta['x402.payment.status'] !== 'payment-required') throw new Error('invalid A2A challenge state');
+    return this.mcpChallenge({result: {isError: true, structuredContent: meta['x402.payment.required']}}, limit);
+  }
+
+  a2aApplyCredential(message: Record<string, unknown>, credential: PaymentCredential): void {
+    const meta = A2ACall.metadata(message);
+    if (Object.keys(meta).some((key) => key.startsWith('x402.payment.'))) throw new Error('A2A request already contains payment metadata');
+    meta['x402.payment.status'] = 'payment-submitted';
+    meta['x402.payment.payload'] = this.mcpCredential(credential).value;
+  }
+
+  presentedA2aCredential(message: Record<string, unknown>, limit: number): unknown | undefined {
+    const meta = A2ACall.metadata(message), keys = Object.keys(meta).filter((key) => key.startsWith('x402.payment.'));
+    if (!keys.length) return undefined;
+    if (keys.length !== 2 || !keys.includes('x402.payment.payload') || meta['x402.payment.status'] !== 'payment-submitted') throw new Error('invalid A2A payment credential metadata');
+    return this.presentedMcpCredential({[this.mcpRequestMetadataKey()]: meta['x402.payment.payload']}, limit);
+  }
+
+  a2aStripCredential(message: Record<string, unknown>): void {
+    const meta = A2ACall.metadata(message);
+    delete meta['x402.payment.status']; delete meta['x402.payment.payload'];
+  }
+
+  a2aPaymentRequired(challenge: PaymentChallenge, task: Task, rejected: boolean): McpPaymentRequired {
+    const meta: Record<string, unknown> = {'x402.payment.status': 'payment-required', 'x402.payment.required': this.storedPaymentRequired(challenge)};
+    if (rejected) meta['x402.payment.error'] = 'PAYMENT_INVALID';
+    const result = structuredClone(task);
+    result.status = {state: 'input-required', message: this.a2aMessage(task, 'Payment required', meta)};
+    return {result};
+  }
+
+  a2aEvidence(message: Record<string, unknown>, limit: number): MerchantEvidence | undefined {
+    const result = A2ACall.optionalObject(message.result);
+    if (!result) return undefined;
+    const meta = this.a2aStatusMetadata(result);
+    if (!('x402.payment.receipts' in meta)) return undefined;
+    A2ACall.task(message);
+    const receipts = meta['x402.payment.receipts'];
+    if (!Array.isArray(receipts) || receipts.length !== 1 || meta['x402.payment.status'] !== 'payment-completed') throw new Error('A2A requires exactly one completed receipt');
+    return this.mcpMerchantEvidence({[this.mcpReceiptMetadataKey()]: receipts[0]}, limit);
+  }
+
+  a2aInjectReceipt(message: Record<string, unknown>, challenge: PaymentChallenge, payment: SettledIncomingPayment): void {
+    const task = A2ACall.task(message);
+    const statusMessage = task.status.message ?? this.a2aMessage(task, 'Payment completed', {});
+    const meta = {...statusMessage.metadata};
+    if (Object.keys(meta).some((key) => key.startsWith('x402.payment.'))) throw new Error('handler attempted to supply payment metadata');
+    meta['x402.payment.status'] = 'payment-completed'; meta['x402.payment.receipts'] = [this.mcpReceipt(challenge, payment).value];
+    task.status.message = {...statusMessage, metadata: meta};
+  }
+
+  private a2aMessage(task: Task, text: string, metadata: Record<string, unknown>): Message {
+    return {kind: 'message', messageId: randomUUID(), role: 'agent', taskId: task.id, contextId: task.contextId, parts: [{kind:'text', text}], metadata};
+  }
+
+  private a2aStatusMetadata(result: Record<string, unknown>): Record<string, unknown> {
+    const status = A2ACall.object(result.status);
+    const message = A2ACall.optionalObject(status.message);
+    return message ? A2ACall.object(message.metadata ?? {}) : {};
   }
 
   private storedPaymentRequired(challenge: PaymentChallenge): PaymentRequired {

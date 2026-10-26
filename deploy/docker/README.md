@@ -43,3 +43,10 @@ MQTT is disabled in this general-purpose stack. Enable it only after pointing
 AgentVault at a broker with password/TLS authentication and per-client topic
 ACLs. The E2E stack provisions and verifies that independent `client_id`
 boundary against EMQX; HTTP AuthGuard identity is never reused as MQTT trust.
+
+Unix-socket payment transport has been removed. On upgrade, delete the
+`agentvault.transport.local` subsection and any
+`AGENTVAULT__AGENTVAULT__TRANSPORT__LOCAL__*` environment overrides; strict typed
+configuration rejects those settings. Configure the existing gRPC or MQTT
+transport for SDK-to-Vault calls. HTTP administration and Envoy's TCP loopback
+forwarding retain their separate listener and authorization boundaries.

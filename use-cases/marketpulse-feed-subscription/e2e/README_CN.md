@@ -10,7 +10,7 @@ Mock 包装成 E2E。它模拟两个完整系统：
   语义的新闻数据。`route/feed`（Java 为 `FeedController`）只承载 `/healthz`
   和 `/metrics` 运维接口，收费 MCP Listener 由 server 统一拥有。MCP Endpoint 提供免费的
   `marketpulse.yesterday_news` 与每次 1 USDC 的
-  `marketpulse.realtime_news`。收费 Tool 从服务端 Offer 生成 x402 v2 402，
+  `marketpulse.realtime_news`。收费 Tool 从服务端 Price 生成 x402 v2 402，
   由 AgentVault 调外部官方 Facilitator 验证/结算，只在确认结算后交付数据。
 - **QuantStream** 是买方量化采集平台。Go、Rust、Python、Java、TypeScript
   五个逻辑等价的独立后端定时调用两个 Tool；SDK 检测 402，并按 Case 配置通过 MQTT 或 gRPC 请求
@@ -84,7 +84,11 @@ JWT 只在 AgentVault 内部使用；Approval 表保存 `jti`、Claims Hash 和�
 - `payee-{go,rust,python,java,typescript}`：选择一个收款后端；
 - `ingestor-{go,rust,python,java,typescript}`：选择一个付款后端。
 
-五语言业务矩阵使用 x402 v2 / EVM / EIP-3009 与编译后的 E2EUSDC。独立的
+既有 `full` 流程和五语言业务矩阵已使用 x402 v2 / EVM / EIP-3009，在本地 Anvil
+部署 E2EUSDC 并真实转账。显式的 `x402-evm` 场景复用同一完整执行器和五份验证，
+覆盖托管签名、独立 Facilitator verify/settle、审批及交付恢复、两笔 ERC-20 转账、
+四条双向 Ledger、独立回执、十钱包隔离与 Facilitator 原生 Gas 精确守恒，并额外写入
+`payment/x402-evm/evidence.json`，不另建支付状态机。独立的
 `mpp-tempo` 场景验证 Vault 签出的 Tempo type-0x76 `charge`、外部 HTTP
 verify/settle、结算响应丢失后的只读恢复、单次广播、回执绑定，以及包含 pathUSD
 计价 Gas 的余额守恒。显式的 `x402-solana` 场景会在固定版本的本地 Validator 上
@@ -156,6 +160,7 @@ python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
 python3 runner.py -s mpp-tempo
 python3 runner.py -s x402-solana
+python3 runner.py -s x402-evm --payer-language rust --payee-language rust --cleanup-after-run
 python3 runner.py -s matrix --matrix-workers 2 # 默认 simple：Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -260,3 +265,15 @@ Tempo RPC 唯一广播一次，不虚构 x402 式 Facilitator 或重复商户合
 另行覆盖两种 Transport、两种协议和两个角色。MPP session/split/fee-payer/
 delegated method 及手续费/退款/充值/转账/冲正矩阵仍明确 Unsupported，或需要
 独立验收场景。
+
+
+### A2A SDK 验收
+
+`python3 runner.py -s a2a --timeout 600` 顺序执行五语言 A2A 测试，保存
+`payment/a2a/evidence.json` 和各语言原生测试日志。先安装各 SDK 锁定的依赖，
+包括在仓库根目录执行 `pip install -e 'src/adapters/python[test]'`；磁盘有限时，
+通过 `CARGO_TARGET_DIR` 指定有足够空间的构建目录。
+
+该场景通过实际 HTTP 适配器和受控 Vault 端口验证 SDK 边界，不代替链上结算证明。
+既有 `mpp-tempo`、`x402-solana` 和 `full` 场景保留独立的链、账本及余额断言。
+五种语言均覆盖 A2A 0.3 非流式 `message/send`、x402 v2 和 MPP 原生 JSON-RPC 元数据。

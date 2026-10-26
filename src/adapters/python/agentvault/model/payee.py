@@ -15,7 +15,7 @@ from .base import (
 
 
 @dataclass(frozen=True)
-class ResolveOfferRequest:
+class ResolvePriceRequest:
     scenario_id: str
     resource: str
     protocol: str | None = None
@@ -34,7 +34,7 @@ class ResolveOfferRequest:
 
 
 @dataclass(frozen=True)
-class PaymentOffer:
+class PaymentPrice:
     id: str
     scenario_id: str
     resource: str
@@ -47,7 +47,7 @@ class PaymentOffer:
     updated_at: int
 
     @classmethod
-    def from_wire(cls, value: Mapping[str, Any]) -> "PaymentOffer":
+    def from_wire(cls, value: Mapping[str, Any]) -> "PaymentPrice":
         asset = value.get("asset")
         protocols = value.get("protocols")
         if not isinstance(asset, Mapping) or not isinstance(protocols, list):
@@ -210,6 +210,6 @@ class ProtectionOutcome:
 
 __all__ = [
     "CreateChallengeRequest", "HttpProtectionRequest", "McpProtectionRequest",
-    "PayeeOperation", "PaymentOffer", "PaymentVerification", "ProtectionOutcome", "ResolveOfferRequest",
+    "PayeeOperation", "PaymentPrice", "PaymentVerification", "ProtectionOutcome", "ResolvePriceRequest",
     "SettlePaymentRequest", "SettledIncomingPayment",
 ]

@@ -16,12 +16,18 @@ use clap::{Args, CommandFactory as _, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{
-    handler::{create_wallets_from_paths, import_from_paths, SubmitApprovalDecision},
-    model::{Amount, ApprovalDecisionKind},
-    storage::{IStorage, LedgerQuery, PageRequest, PaymentQuery, StorageFactory, StoragePorts},
-    AgentVaultServer, AppConfig,
-};
+use crate::model::Amount;
+use crate::model::ApprovalDecisionKind;
+use crate::model::SubmitApprovalDecision;
+use crate::payment::ResourceImporter;
+use crate::storage::IStorage;
+use crate::storage::LedgerQuery;
+use crate::storage::PageRequest;
+use crate::storage::PaymentQuery;
+use crate::storage::StorageFactory;
+use crate::storage::StoragePorts;
+use crate::AgentVaultServer;
+use crate::AppConfig;
 
 #[derive(Debug, Parser)]
 #[command(name = "agentvault", version, about = "AgentVault payment infrastructure")]
@@ -76,7 +82,8 @@ enum ConsoleResource {
     Client,
     Scenario,
     Policy,
-    Offer,
+    #[value(alias = "offer")]
+    Price,
     Approver,
     Payment,
     Approval,
@@ -89,7 +96,8 @@ enum MutableResource {
     Client,
     Scenario,
     Policy,
-    Offer,
+    #[value(alias = "offer")]
+    Price,
     Approver,
 }
 
@@ -237,7 +245,7 @@ impl ConsoleStore {
                 let scenario_id = Self::required(args.scenario_id.as_deref(), "scenario-id", args.resource)?;
                 serde_json::to_value(self.ports.policies.list_for_scenario(scenario_id, page).await?)?
             }
-            ConsoleResource::Offer => {
+            ConsoleResource::Price => {
                 let scenario_id = Self::required(args.scenario_id.as_deref(), "scenario-id", args.resource)?;
                 serde_json::to_value(self.ports.offers.list_for_scenario(scenario_id, page).await?)?
             }
@@ -308,7 +316,7 @@ impl ConsoleStore {
                     .await?
                     .ok_or_else(|| anyhow!("policy not found"))?,
             )?,
-            ConsoleResource::Offer => serde_json::to_value(
+            ConsoleResource::Price => serde_json::to_value(
                 self.ports
                     .offers
                     .get(&args.id)
@@ -378,7 +386,7 @@ impl ConsoleStore {
                 policy.updated_at = Self::next_timestamp(expected_updated_at, now)?;
                 serde_json::to_value(self.ports.policies.update(&policy, expected_updated_at).await?)?
             }
-            MutableResource::Offer => {
+            MutableResource::Price => {
                 let mut offer = self
                     .ports
                     .offers
@@ -444,165 +452,170 @@ impl ConsoleStore {
     }
 }
 
-/// Parses the process command line and executes one `AgentVault` command.
-///
-/// # Errors
-///
-/// Returns configuration, console, storage, or runtime startup failures.
-pub async fn run() -> Result<()> {
-    let cli = Cli::parse();
-    let config = AppConfig::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
-    match cli.command {
-        Command::Serve => AgentVaultServer::assemble(config).await?.run().await,
-        Command::Console {
-            operation: None | Some(ConsoleCommand::Shell),
-        } => run_shell(&config).await,
-        Command::Console {
-            operation: Some(operation),
-        } => execute(&config, operation).await,
-    }
-}
-
-async fn execute(config: &AppConfig, command: ConsoleCommand) -> Result<()> {
-    match command {
-        ConsoleCommand::Import { paths } => {
-            let report = import_from_paths(config, &paths)
-                .await
-                .context("import AgentVault console resources")?;
-            println!(
-                "resource import completed: {} created, {} reused",
-                report.created, report.reused
-            );
-            Ok(())
-        }
-        ConsoleCommand::Wallet {
-            operation: WalletCommand::Create { paths },
-        } => {
-            let report = create_wallets_from_paths(config, &paths)
-                .await
-                .context("create AgentVault wallets")?;
-            println!(
-                "wallet creation completed: {} created, {} reused",
-                report.created, report.reused
-            );
-            Ok(())
-        }
-        ConsoleCommand::Wallet {
-            operation: WalletCommand::List { offset, limit },
-        } => {
-            let store = ConsoleStore::open(config).await?;
-            let result = store.list_wallets(offset, limit).await;
-            finish_read(store, result).await
-        }
-        ConsoleCommand::Wallet {
-            operation: WalletCommand::Get { id },
-        } => {
-            let store = ConsoleStore::open(config).await?;
-            let result = store.get_wallet(&id).await;
-            finish_read(store, result).await
-        }
-        ConsoleCommand::List(args) => {
-            let store = ConsoleStore::open(config).await?;
-            let result = store.list(&args).await;
-            finish_read(store, result).await
-        }
-        ConsoleCommand::Get(args) => {
-            let store = ConsoleStore::open(config).await?;
-            let result = store.get(&args).await;
-            finish_read(store, result).await
-        }
-        ConsoleCommand::SetEnabled(args) => {
-            let store = ConsoleStore::open(config).await?;
-            let result = store.set_enabled(&args).await;
-            finish_read(store, result).await
-        }
-        ConsoleCommand::Approval {
-            operation:
-                ApprovalCommand::Decide {
-                    approval_id,
-                    intent_id,
-                    principal,
-                    decision,
-                    approved_amount,
-                    reason,
-                },
-        } => {
-            let store = ConsoleStore::open(config).await?;
-            let handler = super::agentvault::console_approval_handler(config, &store.ports)?;
-            let result = handler
-                .submit_decision(
-                    &principal,
-                    &SubmitApprovalDecision {
-                        approval_id,
-                        intent_id,
-                        decision: decision.into(),
-                        approved_amount,
-                        reason,
-                    },
-                    ConsoleStore::now()?,
-                )
-                .await
-                .map_err(anyhow::Error::from)
-                .and_then(|result| serde_json::to_value(result.approval).map_err(anyhow::Error::from));
-            finish_read(store, result).await
-        }
-        ConsoleCommand::Shell => Err(anyhow!("shell cannot be nested")),
-    }
-}
-
-async fn finish_read(store: ConsoleStore, result: Result<Value>) -> Result<()> {
-    let close = store.close().await;
-    let value = result?;
-    close?;
-    print_json(&value)
-}
-
-fn print_json(value: &impl Serialize) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
-    Ok(())
-}
-
-async fn run_shell(config: &AppConfig) -> Result<()> {
-    println!("AgentVault Management Console");
-    println!("Wallet custody is write-only: create and metadata reads are the only wallet commands.");
-    println!("Type 'help' for commands or 'exit' to quit.");
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-    loop {
-        print!("agentvault> ");
-        io::stdout().flush().context("flush console prompt")?;
-        let Some(line) = lines.next() else {
-            break;
-        };
-        let line = line.context("read console command")?;
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if matches!(line, "exit" | "quit") {
-            break;
-        }
-        if line == "help" {
-            ConsoleLine::command().print_help()?;
-            println!();
-            continue;
-        }
-        let args = std::iter::once("agentvault-console").chain(line.split_ascii_whitespace());
-        match ConsoleLine::try_parse_from(args) {
-            Ok(ConsoleLine {
-                command: ConsoleCommand::Shell,
-            }) => eprintln!("nested shell sessions are not supported"),
-            Ok(parsed) => {
-                if let Err(error) = execute(config, parsed.command).await {
-                    eprintln!("error: {error:#}");
-                }
-            }
-            Err(error) => eprintln!("{error}"),
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "../../tests/cmd/console_test.rs"]
 mod tests;
+
+/// Administrative command execution and console lifecycle.
+pub struct ConsoleRunner;
+impl ConsoleRunner {
+    /// Parses the process command line and executes one `AgentVault` command.
+    ///
+    /// # Errors
+    ///
+    /// Returns configuration, console, storage, or runtime startup failures.
+    pub async fn run() -> Result<()> {
+        let cli = Cli::parse();
+        let config = AppConfig::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
+        match cli.command {
+            Command::Serve => AgentVaultServer::assemble(config).await?.run().await,
+            Command::Console {
+                operation: None | Some(ConsoleCommand::Shell),
+            } => ConsoleRunner::run_shell(&config).await,
+            Command::Console {
+                operation: Some(operation),
+            } => ConsoleRunner::execute(&config, operation).await,
+        }
+    }
+
+    async fn execute(config: &AppConfig, command: ConsoleCommand) -> Result<()> {
+        match command {
+            ConsoleCommand::Import { paths } => {
+                let report = ResourceImporter::import_from_paths(config, &paths)
+                    .await
+                    .context("import AgentVault console resources")?;
+                println!(
+                    "resource import completed: {} created, {} reused",
+                    report.created, report.reused
+                );
+                Ok(())
+            }
+            ConsoleCommand::Wallet {
+                operation: WalletCommand::Create { paths },
+            } => {
+                let report = ResourceImporter::create_wallets_from_paths(config, &paths)
+                    .await
+                    .context("create AgentVault wallets")?;
+                println!(
+                    "wallet creation completed: {} created, {} reused",
+                    report.created, report.reused
+                );
+                Ok(())
+            }
+            ConsoleCommand::Wallet {
+                operation: WalletCommand::List { offset, limit },
+            } => {
+                let store = ConsoleStore::open(config).await?;
+                let result = store.list_wallets(offset, limit).await;
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::Wallet {
+                operation: WalletCommand::Get { id },
+            } => {
+                let store = ConsoleStore::open(config).await?;
+                let result = store.get_wallet(&id).await;
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::List(args) => {
+                let store = ConsoleStore::open(config).await?;
+                let result = store.list(&args).await;
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::Get(args) => {
+                let store = ConsoleStore::open(config).await?;
+                let result = store.get(&args).await;
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::SetEnabled(args) => {
+                let store = ConsoleStore::open(config).await?;
+                let result = store.set_enabled(&args).await;
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::Approval {
+                operation:
+                    ApprovalCommand::Decide {
+                        approval_id,
+                        intent_id,
+                        principal,
+                        decision,
+                        approved_amount,
+                        reason,
+                    },
+            } => {
+                let store = ConsoleStore::open(config).await?;
+                let handler =
+                    super::payment_runtime::PaymentRuntimeFactory::console_approval_handler(config, &store.ports)?;
+                let result = handler
+                    .submit_decision(
+                        &principal,
+                        &SubmitApprovalDecision {
+                            approval_id,
+                            intent_id,
+                            decision: decision.into(),
+                            approved_amount,
+                            reason,
+                        },
+                        ConsoleStore::now()?,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(|result| serde_json::to_value(result.approval).map_err(anyhow::Error::from));
+                ConsoleRunner::finish_read(store, result).await
+            }
+            ConsoleCommand::Shell => Err(anyhow!("shell cannot be nested")),
+        }
+    }
+
+    async fn finish_read(store: ConsoleStore, result: Result<Value>) -> Result<()> {
+        let close = store.close().await;
+        let value = result?;
+        close?;
+        ConsoleRunner::print_json(&value)
+    }
+
+    fn print_json(value: &impl Serialize) -> Result<()> {
+        println!("{}", serde_json::to_string_pretty(value)?);
+        Ok(())
+    }
+
+    async fn run_shell(config: &AppConfig) -> Result<()> {
+        println!("AgentVault Management Console");
+        println!("Wallet custody is write-only: create and metadata reads are the only wallet commands.");
+        println!("Type 'help' for commands or 'exit' to quit.");
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        loop {
+            print!("agentvault> ");
+            io::stdout().flush().context("flush console prompt")?;
+            let Some(line) = lines.next() else {
+                break;
+            };
+            let line = line.context("read console command")?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if matches!(line, "exit" | "quit") {
+                break;
+            }
+            if line == "help" {
+                ConsoleLine::command().print_help()?;
+                println!();
+                continue;
+            }
+            let args = std::iter::once("agentvault-console").chain(line.split_ascii_whitespace());
+            match ConsoleLine::try_parse_from(args) {
+                Ok(ConsoleLine {
+                    command: ConsoleCommand::Shell,
+                }) => eprintln!("nested shell sessions are not supported"),
+                Ok(parsed) => {
+                    if let Err(error) = ConsoleRunner::execute(config, parsed.command).await {
+                        eprintln!("error: {error:#}");
+                    }
+                }
+                Err(error) => eprintln!("{error}"),
+            }
+        }
+        Ok(())
+    }
+}

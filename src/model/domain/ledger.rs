@@ -38,37 +38,41 @@ impl LedgerEntryType {
     }
 }
 
-/// Immutable, single-sided wallet activity backed by confirmed external
-/// evidence. Corrections are appended as `Reversal` entries.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentLedgerEntry {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub intent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scenario_id: Option<String>,
-    pub wallet_id: String,
-    pub entry_type: LedgerEntryType,
-    pub direction: PaymentDirection,
-    pub asset: AssetIdentity,
-    pub amount: Amount,
-    pub posting_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub settlement_ref: Option<String>,
-    /// Provider- or chain-verified locator for one effect inside shared
-    /// settlement evidence, for example `log:7`, `gas`, or `effect:abc`.
-    /// `None` deliberately treats a transaction/reference as one fact.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effect_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reversal_of: Option<String>,
-    pub effective_at: i64,
-    pub created_at: i64,
+crate::storage::repository_entity! { "pay_ledger", AppendOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Immutable, single-sided wallet activity backed by confirmed external
+    /// evidence. Corrections are appended as `Reversal` entries.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentLedgerEntry {
+        pub id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub intent_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub scenario_id: Option<String>,
+        pub wallet_id: String,
+        pub entry_type: LedgerEntryType,
+        pub direction: PaymentDirection,
+        #[sqlx(flatten)]
+        pub asset: AssetIdentity,
+        pub amount: Amount,
+        pub posting_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tx_hash: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub settlement_ref: Option<String>,
+        /// Provider- or chain-verified locator for one effect inside shared
+        /// settlement evidence, for example `log:7`, `gas`, or `effect:abc`.
+        /// `None` deliberately treats a transaction/reference as one fact.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub effect_ref: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub transfer_ref: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reversal_of: Option<String>,
+        pub effective_at: i64,
+        pub created_at: i64,
+    }
 }
 
 impl PaymentLedgerEntry {
@@ -119,7 +123,7 @@ impl PaymentLedgerEntry {
             return Err("financial_evidence");
         }
         if let Some(effect_ref) = &self.effect_ref {
-            validate_effect_ref(effect_ref)?;
+            Self::validate_effect_ref(effect_ref)?;
         }
         match self.entry_type {
             LedgerEntryType::Transfer if self.transfer_ref.is_none() => Err("transfer_ref"),
@@ -184,93 +188,112 @@ impl PaymentLedgerEntry {
     }
 }
 
-/// Builds the stable identity of one external financial fact. Business
-/// interpretation such as amount, asset, or direction is deliberately absent:
-/// if those fields disagree for the same fact, storage must report a conflict.
-/// A transaction without a trusted effect locator is conservatively treated
-/// as one fact. A locator distinguishes independently confirmed effects inside
-/// the same transaction, such as an ERC-20 log and the native gas charge.
-///
-/// # Errors
-///
-/// Returns the invalid evidence field when neither a usable provider reference
-/// nor a valid transaction identity is available.
-pub fn settlement_posting_key(
-    authority: &str,
-    network: &str,
-    tx_hash: Option<&str>,
-    settlement_ref: Option<&str>,
-    effect_ref: Option<&str>,
-) -> Result<String, &'static str> {
-    let network = network.trim();
-    let effect_ref = effect_ref.map(validate_effect_ref).transpose()?;
-    if let Some(tx_hash) = tx_hash.map(str::trim).filter(|value| !value.is_empty()) {
-        if network.is_empty() {
-            return Err("network");
-        }
-        let normalized = PaymentLedgerEntry::canonical_transaction(network, tx_hash)?;
-        return Ok(match effect_ref {
-            Some(effect_ref) => format!(
-                "chain-effect:{}",
-                posting_digest(
-                    b"agentvault.chain-effect.v1",
-                    &[network.as_bytes(), normalized.as_bytes(), effect_ref.as_bytes()]
-                )
-            ),
-            None => format!(
-                "chain:{}",
-                posting_digest(
-                    b"agentvault.chain-fact.v1",
-                    &[network.as_bytes(), normalized.as_bytes()]
-                )
-            ),
-        });
-    }
-
-    if let Some(reference) = settlement_ref.map(str::trim).filter(|value| !value.is_empty()) {
-        let authority = authority.trim();
-        if authority.is_empty() {
-            return Err("authority");
-        }
-        return Ok(match effect_ref {
-            Some(effect_ref) => format!(
-                "provider-effect:{}",
-                posting_digest(
-                    b"agentvault.provider-effect.v1",
-                    &[authority.as_bytes(), reference.as_bytes(), effect_ref.as_bytes()]
-                )
-            ),
-            None => format!(
-                "provider:{}",
-                posting_digest(
-                    b"agentvault.provider-fact.v1",
-                    &[authority.as_bytes(), reference.as_bytes()]
-                )
-            ),
-        });
-    }
-
-    Err("transaction_evidence")
-}
-
-fn validate_effect_ref(effect_ref: &str) -> Result<&str, &'static str> {
-    let normalized = effect_ref.trim();
-    if normalized.is_empty() || normalized.len() > 256 || normalized.chars().any(char::is_control) {
-        return Err("effect_ref");
-    }
-    Ok(normalized)
-}
-
-fn posting_digest(domain: &[u8], values: &[&[u8]]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(domain);
-    for value in values {
-        digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
-        digest.update(value);
-    }
-    hex::encode(digest.finalize())
-}
-
 #[cfg(test)]
 #[path = "../../../tests/model/domain/ledger_test.rs"]
 mod tests;
+
+impl PaymentLedgerEntry {
+    /// Builds the stable identity of one external financial fact. Business
+    /// interpretation such as amount, asset, or direction is deliberately absent:
+    /// if those fields disagree for the same fact, storage must report a conflict.
+    /// A transaction without a trusted effect locator is conservatively treated
+    /// as one fact. A locator distinguishes independently confirmed effects inside
+    /// the same transaction, such as an ERC-20 log and the native gas charge.
+    ///
+    /// # Errors
+    ///
+    /// Returns the invalid evidence field when neither a usable provider reference
+    /// nor a valid transaction identity is available.
+    pub fn settlement_posting_key(
+        authority: &str,
+        network: &str,
+        tx_hash: Option<&str>,
+        settlement_ref: Option<&str>,
+        effect_ref: Option<&str>,
+    ) -> Result<String, &'static str> {
+        let network = network.trim();
+        let effect_ref = effect_ref.map(Self::validate_effect_ref).transpose()?;
+        if let Some(tx_hash) = tx_hash.map(str::trim).filter(|value| !value.is_empty()) {
+            if network.is_empty() {
+                return Err("network");
+            }
+            let normalized = PaymentLedgerEntry::canonical_transaction(network, tx_hash)?;
+            return Ok(match effect_ref {
+                Some(effect_ref) => format!(
+                    "chain-effect:{}",
+                    Self::posting_digest(
+                        b"agentvault.chain-effect.v1",
+                        &[network.as_bytes(), normalized.as_bytes(), effect_ref.as_bytes()]
+                    )
+                ),
+                None => format!(
+                    "chain:{}",
+                    Self::posting_digest(
+                        b"agentvault.chain-fact.v1",
+                        &[network.as_bytes(), normalized.as_bytes()]
+                    )
+                ),
+            });
+        }
+
+        if let Some(reference) = settlement_ref.map(str::trim).filter(|value| !value.is_empty()) {
+            let authority = authority.trim();
+            if authority.is_empty() {
+                return Err("authority");
+            }
+            return Ok(match effect_ref {
+                Some(effect_ref) => format!(
+                    "provider-effect:{}",
+                    Self::posting_digest(
+                        b"agentvault.provider-effect.v1",
+                        &[authority.as_bytes(), reference.as_bytes(), effect_ref.as_bytes()]
+                    )
+                ),
+                None => format!(
+                    "provider:{}",
+                    Self::posting_digest(
+                        b"agentvault.provider-fact.v1",
+                        &[authority.as_bytes(), reference.as_bytes()]
+                    )
+                ),
+            });
+        }
+
+        Err("transaction_evidence")
+    }
+
+    fn validate_effect_ref(effect_ref: &str) -> Result<&str, &'static str> {
+        let normalized = effect_ref.trim();
+        if normalized.is_empty() || normalized.len() > 256 || normalized.chars().any(char::is_control) {
+            return Err("effect_ref");
+        }
+        Ok(normalized)
+    }
+
+    fn posting_digest(domain: &[u8], values: &[&[u8]]) -> String {
+        let mut digest = Sha256::new();
+        digest.update(domain);
+        for value in values {
+            digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+            digest.update(value);
+        }
+        hex::encode(digest.finalize())
+    }
+}
+
+impl PaymentLedgerEntry {
+    pub(crate) fn validate_trusted_effective_time(
+        created_at: i64,
+        effective_at: i64,
+        observed_at: i64,
+    ) -> crate::Result<()> {
+        let earliest = created_at.saturating_sub(MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS);
+        let latest = observed_at.saturating_add(MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS);
+        if effective_at < 0 || effective_at < earliest || effective_at > latest {
+            return Err(crate::Error::Settlement(
+                "trusted settlement effective time exceeds bounded clock skew".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}

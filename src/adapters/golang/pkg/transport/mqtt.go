@@ -4,10 +4,8 @@ package transport
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +43,7 @@ type mqttPendingRequest struct {
 	expectedType string
 	commandTopic string
 	payload      []byte
-	result       chan TransportResult
+	result       transportResultChannel
 	cancel       context.CancelFunc
 }
 
@@ -59,6 +57,10 @@ func (transport *MqttVaultTransport) String() string {
 func (transport *MqttVaultTransport) GoString() string { return transport.String() }
 
 func NewMqttVaultTransport(settings config.MqttConfig) (*MqttVaultTransport, error) {
+	return (&MqttVaultTransport{}).new(settings)
+}
+
+func (*MqttVaultTransport) new(settings config.MqttConfig) (*MqttVaultTransport, error) {
 	settings.ApplyDefaults()
 	if err := settings.Validate(); err != nil {
 		return nil, err
@@ -68,7 +70,7 @@ func NewMqttVaultTransport(settings config.MqttConfig) (*MqttVaultTransport, err
 		prefix:  fmt.Sprintf("agentvault/v1/clients/%s", settings.VaultClientID),
 		pending: make(map[string]*mqttPendingRequest),
 	}
-	connectionSuffix, err := randomHex(6)
+	connectionSuffix, err := (producerTraceContext{}).randomHex(6)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +90,7 @@ func (transport *MqttVaultTransport) Close() error {
 		transport.ready = false
 		client := transport.client
 		transport.mu.Unlock()
-		if client != nil && client.IsConnected() {
+		if client != nil {
 			client.Disconnect(250)
 		}
 		transport.failAll(errors.New("AgentVault MQTT transport is closed"))
@@ -129,19 +131,23 @@ func (transport *MqttVaultTransport) Do(ctx context.Context, request TransportRe
 // the exact same serialized envelope is republished and the server's
 // requestSpanId/payload digest cache coalesces duplicates.
 func (transport *MqttVaultTransport) DoAsync(ctx context.Context, request TransportRequest) <-chan TransportResult {
-	result := make(chan TransportResult, 1)
+	result := make(transportResultChannel, 1)
 	if transport == nil {
-		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT transport is not configured")})
+		result.complete(TransportResult{Err: errors.New("AgentVault MQTT transport is not configured")})
 		return result
 	}
-	operation, err := mqttOperationFor(request)
-	if err != nil {
-		completeTransportResult(result, TransportResult{Err: err})
+	if err := ctx.Err(); err != nil {
+		result.complete(TransportResult{Err: err})
 		return result
 	}
-	traceContext, err := newProducerTraceContext(request.Headers)
+	operation, err := (mqttOperation{}).forRequest(request)
 	if err != nil {
-		completeTransportResult(result, TransportResult{Err: err})
+		result.complete(TransportResult{Err: err})
+		return result
+	}
+	traceContext, err := request.producerTraceContext()
+	if err != nil {
+		result.complete(TransportResult{Err: err})
 		return result
 	}
 	requestSpanID := traceContext.spanID
@@ -162,11 +168,11 @@ func (transport *MqttVaultTransport) DoAsync(ctx context.Context, request Transp
 	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
-		completeTransportResult(result, TransportResult{Err: fmt.Errorf("encode AgentVault MQTT request: %w", err)})
+		result.complete(TransportResult{Err: fmt.Errorf("encode AgentVault MQTT request: %w", err)})
 		return result
 	}
 	if len(payload) > transport.config.MaxResponseBytes {
-		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT request exceeds configured limit")})
+		result.complete(TransportResult{Err: errors.New("AgentVault MQTT request exceeds configured limit")})
 		return result
 	}
 	requestContext, cancel := context.WithTimeout(ctx, transport.config.RequestTimeout)
@@ -181,19 +187,19 @@ func (transport *MqttVaultTransport) DoAsync(ctx context.Context, request Transp
 	if transport.closed {
 		transport.mu.Unlock()
 		cancel()
-		completeTransportResult(result, TransportResult{Err: errors.New("AgentVault MQTT transport is closed")})
+		result.complete(TransportResult{Err: errors.New("AgentVault MQTT transport is closed")})
 		return result
 	}
 	if len(transport.pending) >= 256 {
 		transport.mu.Unlock()
 		cancel()
-		completeTransportResult(result, TransportResult{Err: errors.New("too many pending MQTT payment requests")})
+		result.complete(TransportResult{Err: errors.New("too many pending MQTT payment requests")})
 		return result
 	}
 	if _, exists := transport.pending[requestSpanID]; exists {
 		transport.mu.Unlock()
 		cancel()
-		completeTransportResult(result, TransportResult{Err: errors.New("MQTT requestSpanId collision")})
+		result.complete(TransportResult{Err: errors.New("MQTT requestSpanId collision")})
 		return result
 	}
 	transport.pending[requestSpanID] = waiting
@@ -257,11 +263,12 @@ func (transport *MqttVaultTransport) onConnect(client mqtt.Client) {
 	token := client.Subscribe(filter, 1, transport.onMessage)
 	go func() {
 		if !token.WaitTimeout(transport.config.RequestTimeout) || token.Error() != nil {
-			transport.failAll(errors.New("AgentVault MQTT result subscription failed"))
+			// Connection loss before SUBACK is transient; pending envelopes keep
+			// their deadlines and are replayed by the next onConnect callback.
 			return
 		}
 		grants, ok := token.(*mqtt.SubscribeToken)
-		if !ok || !mqttSubscriptionGranted(grants.Result(), filter) {
+		if !ok || !transport.subscriptionGranted(grants.Result(), filter) {
 			transport.failAll(errors.New("AgentVault MQTT result subscription was rejected or downgraded"))
 			return
 		}
@@ -304,7 +311,7 @@ func (transport *MqttVaultTransport) publishPending(requestSpanID string) {
 }
 
 func (transport *MqttVaultTransport) onMessage(_ mqtt.Client, message mqtt.Message) {
-	if len(message.Payload()) > transport.config.MaxResponseBytes {
+	if message.Qos() != 1 || message.Retained() || len(message.Payload()) > transport.config.MaxResponseBytes {
 		return
 	}
 	var response mqttResponseEnvelope
@@ -318,7 +325,7 @@ func (transport *MqttVaultTransport) onMessage(_ mqtt.Client, message mqtt.Messa
 	transport.mu.Unlock()
 	if waiting == nil || message.Topic() != transport.prefix+"/results/"+response.RequestSpanID ||
 		response.Version != 1 || response.Status < 100 || response.Status > 599 ||
-		!mqttResponseTypeMatches(response.Type, response.Status, waiting.expectedType) {
+		!response.typeMatches(waiting.expectedType) {
 		return
 	}
 	body, err := base64.RawURLEncoding.DecodeString(response.Body)
@@ -341,7 +348,7 @@ func (transport *MqttVaultTransport) complete(requestSpanID string, result Trans
 		return
 	}
 	waiting.cancel()
-	completeTransportResult(waiting.result, result)
+	waiting.result.complete(result)
 }
 
 func (transport *MqttVaultTransport) failAll(err error) {
@@ -351,16 +358,11 @@ func (transport *MqttVaultTransport) failAll(err error) {
 	transport.mu.Unlock()
 	for _, waiting := range pending {
 		waiting.cancel()
-		completeTransportResult(waiting.result, TransportResult{Err: err})
+		waiting.result.complete(TransportResult{Err: err})
 	}
 }
 
-func completeTransportResult(result chan TransportResult, value TransportResult) {
-	result <- value
-	close(result)
-}
-
-func mqttSubscriptionGranted(results map[string]byte, expectedTopic string) bool {
+func (*MqttVaultTransport) subscriptionGranted(results map[string]byte, expectedTopic string) bool {
 	if len(results) != 1 {
 		return false
 	}
@@ -368,11 +370,11 @@ func mqttSubscriptionGranted(results map[string]byte, expectedTopic string) bool
 	return ok && qos == 1
 }
 
-func mqttResponseTypeMatches(actual string, status int, expected string) bool {
-	if status >= 400 {
-		return actual == "payment.error"
+func (response mqttResponseEnvelope) typeMatches(expected string) bool {
+	if response.Status >= 400 {
+		return response.Type == "payment.error"
 	}
-	return actual == expected
+	return response.Type == expected
 }
 
 type mqttOperation struct {
@@ -381,7 +383,7 @@ type mqttOperation struct {
 	responseType string
 }
 
-func mqttOperationFor(request TransportRequest) (mqttOperation, error) {
+func (operation mqttOperation) forRequest(request TransportRequest) (mqttOperation, error) {
 	if request.Method != MethodPost {
 		return mqttOperation{}, errors.New("MQTT payment operation must use POST")
 	}
@@ -403,7 +405,7 @@ func mqttOperationFor(request TransportRequest) (mqttOperation, error) {
 	}
 	intentID := strings.TrimSuffix(strings.TrimPrefix(request.Path, mqttPaymentsPath+"/"), "/outbound-response")
 	expectedPath := mqttPaymentsPath + "/" + intentID + "/outbound-response"
-	if request.Path == expectedPath && validMQTTIdentifier(intentID) {
+	if request.Path == expectedPath && operation.validIdentifier(intentID) {
 		return mqttOperation{
 			command:      "outbound-response",
 			messageType:  "payment.outbound_response",
@@ -413,83 +415,7 @@ func mqttOperationFor(request TransportRequest) (mqttOperation, error) {
 	return mqttOperation{}, errors.New("MQTT transport does not support this payment operation")
 }
 
-type producerTraceContext struct {
-	traceID      string
-	spanID       string
-	parentSpanID string
-	headers      map[string]string
-}
-
-func newProducerTraceContext(headers map[string]string) (producerTraceContext, error) {
-	traceID, parentSpanID, flags, valid := parseTraceparent(headerValue(headers, "traceparent"))
-	if !valid {
-		var err error
-		traceID, err = randomHex(16)
-		if err != nil {
-			return producerTraceContext{}, err
-		}
-		parentSpanID, flags = "", "01"
-	}
-	spanID, err := randomHex(8)
-	if err != nil {
-		return producerTraceContext{}, err
-	}
-	propagated := make(map[string]string, len(headers)+1)
-	for name, value := range headers {
-		propagated[strings.ToLower(name)] = value
-	}
-	propagated["traceparent"] = "00-" + traceID + "-" + spanID + "-" + flags
-	return producerTraceContext{
-		traceID: traceID, spanID: spanID, parentSpanID: parentSpanID, headers: propagated,
-	}, nil
-}
-
-func parseTraceparent(value string) (string, string, string, bool) {
-	fields := strings.Split(value, "-")
-	if len(fields) != 4 || fields[0] != "00" || !validLowerHex(fields[1], 32) ||
-		!validLowerHex(fields[2], 16) || !validLowerHex(fields[3], 2) ||
-		allZero(fields[1]) || allZero(fields[2]) {
-		return "", "", "", false
-	}
-	return fields[1], fields[2], fields[3], true
-}
-
-func validLowerHex(value string, length int) bool {
-	if len(value) != length {
-		return false
-	}
-	for _, character := range []byte(value) {
-		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func allZero(value string) bool { return strings.Trim(value, "0") == "" }
-
-func headerValue(headers map[string]string, wanted string) string {
-	for name, value := range headers {
-		if strings.EqualFold(name, wanted) {
-			return value
-		}
-	}
-	return ""
-}
-
-func randomHex(size int) (string, error) {
-	buffer := make([]byte, size)
-	for {
-		if _, err := rand.Read(buffer); err != nil {
-			return "", fmt.Errorf("generate producer span context: %w", err)
-		}
-		if !allZero(hex.EncodeToString(buffer)) {
-			return hex.EncodeToString(buffer), nil
-		}
-	}
-}
-
-func validMQTTIdentifier(value string) bool {
+func (mqttOperation) validIdentifier(value string) bool {
 	if value == "" || len(value) > 128 {
 		return false
 	}
@@ -502,12 +428,4 @@ func validMQTTIdentifier(value string) bool {
 		return false
 	}
 	return true
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	address := net.ParseIP(host)
-	return address != nil && address.IsLoopback()
 }

@@ -91,7 +91,7 @@ cache:
     min_retry_wait: 100ms
     max_retry_wait: 2s
 
-# The only AgentVault-specific root. Policy, Offer, Wallet and asset limits
+# The only AgentVault-specific root. Policy, Price, Wallet and asset limits
 # remain authoritative SQL data rather than process configuration.
 agentvault:
   # OUTBOUND: consume a merchant challenge, authorize a Scenario/Wallet, sign,
@@ -250,7 +250,7 @@ agentvault:
     interval: 3m
     batch_size: 1000
 
-  # HTTP, gRPC, Unix-socket and MQTT adapters invoke the same handlers. No
+  # HTTP, gRPC and MQTT adapters invoke the same handlers. No
   # transport accepts a caller-supplied digest.
   transport:
     grpc:
@@ -259,11 +259,6 @@ agentvault:
       port: 50051
       max_message_bytes: 2097152
       request_timeout: 30s
-    local:
-      enabled: false
-      socket_path: /run/agentvault/agentvault.sock
-      max_connections: 64
-      request_timeout: 5s
     mqtt:
       enabled: false
       host: 127.0.0.1

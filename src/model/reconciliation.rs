@@ -1,7 +1,4 @@
-use super::{
-    payment_recipients_match, settlement_posting_key, validate_trusted_effective_time, Amount, AssetIdentity,
-    PaymentIntent,
-};
+use super::{payment_recipients_match, Amount, AssetIdentity, PaymentIntent};
 use crate::{Error, Result};
 
 use super::SettlementProviderResult;
@@ -31,7 +28,7 @@ impl ConfirmedSettlement {
         if self.posting_key.trim().is_empty() {
             return Err(Error::Settlement("settlement evidence posting key is empty".to_owned()));
         }
-        let expected_posting_key = settlement_posting_key(
+        let expected_posting_key = crate::model::PaymentLedgerEntry::settlement_posting_key(
             &self.authority,
             &intent.asset.network,
             self.tx_hash.as_deref(),
@@ -67,7 +64,11 @@ impl ConfirmedSettlement {
                 "settlement evidence has no transaction or provider reference".to_owned(),
             ));
         }
-        validate_trusted_effective_time(intent.created_at, self.effective_at, observed_at)?;
+        crate::model::PaymentLedgerEntry::validate_trusted_effective_time(
+            intent.created_at,
+            self.effective_at,
+            observed_at,
+        )?;
         if intent
             .tx_hash
             .as_deref()

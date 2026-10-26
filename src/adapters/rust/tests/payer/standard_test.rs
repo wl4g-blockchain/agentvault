@@ -20,7 +20,7 @@ fn repeated_authentication_challenges_are_preserved_for_protocol_selection() {
         HeaderValue::from_static("Payment id=\"challenge\", method=\"tempo\", intent=\"charge\""),
     );
 
-    let flattened = super::request_headers(&headers).expect("text headers");
+    let flattened = super::ReqwestWire::request_headers(&headers).expect("text headers");
 
     assert_eq!(
         flattened.get("www-authenticate").map(String::as_str),
@@ -37,7 +37,7 @@ fn unrelated_binary_response_header_does_not_erase_payment_receipt() {
         HeaderValue::from_bytes(&[0x80]).expect("opaque response header"),
     );
 
-    let flattened = super::response_headers(&headers);
+    let flattened = super::ReqwestWire::response_headers(&headers);
 
     assert_eq!(flattened.get("payment-receipt").map(String::as_str), Some("receipt-1"));
     assert!(!flattened.contains_key("x-binary-metadata"));

@@ -66,13 +66,15 @@ class MqttVaultTransport:
         self._start()
         deadline = time.monotonic() + self.config.timeout
         with self._condition:
-            while not self._connected and self._connection_error is None:
+            while not self._connected and self._connection_error is None and not self._closed:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("MQTT connect/subscribe timed out")
                 self._condition.wait(remaining)
             if self._connection_error is not None:
                 raise self._connection_error
+            if self._closed:
+                raise RuntimeError("MQTT transport closed")
 
     def _start(self) -> None:
         with self._lifecycle_lock:
@@ -81,9 +83,7 @@ class MqttVaultTransport:
             if self._loop_started or self._connected:
                 return
             self._client.reconnect_delay_set(min_delay=1, max_delay=max(1, int(self.config.timeout)))
-            result = self._client.connect_async(self.config.host, self.config.port, keepalive=15)
-            if result != mqtt.MQTT_ERR_SUCCESS:
-                raise RuntimeError("AgentVault MQTT asynchronous connect could not be started")
+            self._client.connect_async(self.config.host, self.config.port, keepalive=15)
             self._client.loop_start()
             self._loop_started = True
 
@@ -91,22 +91,21 @@ class MqttVaultTransport:
         with self._lifecycle_lock:
             if self._closed:
                 return
-            try:
-                if self._loop_started:
-                    self._client.disconnect()
-            finally:
-                if self._loop_started:
-                    self._client.loop_stop()
-                with self._condition:
-                    self._connected = False
-                    self._closed = True
-                    pending = list(self._pending.values())
-                    self._pending.clear()
-                    self._condition.notify_all()
-                for waiting in pending:
-                    waiting.timer.cancel()
-                    if not waiting.future.done():
-                        waiting.future.set_exception(RuntimeError("MQTT transport closed"))
+            with self._condition:
+                self._connected = False
+                self._closed = True
+                pending = list(self._pending.values())
+                self._pending.clear()
+                self._condition.notify_all()
+            loop_started = self._loop_started
+        # Never join the network loop while holding a lock needed by callbacks.
+        for waiting in pending:
+            waiting.timer.cancel()
+            if waiting.future.set_running_or_notify_cancel():
+                waiting.future.set_exception(RuntimeError("MQTT transport closed"))
+        if loop_started:
+            self._client.disconnect()
+            self._client.loop_stop()
 
     def __enter__(self) -> "MqttVaultTransport":
         self.connect()
@@ -133,7 +132,7 @@ class MqttVaultTransport:
         operation = self._operation(method, path)
         if body is None:
             raise ValueError("MQTT outbound payment commands require a request body")
-        trace_id, request_span_id, parent_span_id, traceparent = _producer_trace_context({})
+        trace_id, request_span_id, parent_span_id, traceparent = self._producer_trace_context({})
         encoded_body = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
         headers = {
             "accept": "application/json",
@@ -168,12 +167,14 @@ class MqttVaultTransport:
                 raise RuntimeError("MQTT requestSpanId collision")
             self._pending[request_span_id] = waiting
             ready = self._connected
+        future.add_done_callback(lambda completed: self._cancel(request_span_id, completed))
         try:
             self._start()
         except Exception as error:
             with self._condition:
-                self._pending.pop(request_span_id, None)
-            future.set_exception(error)
+                removed = self._pending.pop(request_span_id, None)
+            if removed is not None and future.set_running_or_notify_cancel():
+                future.set_exception(error)
             return future
         timer.start()
         if ready:
@@ -186,6 +187,8 @@ class MqttVaultTransport:
         if waiting is None:
             return
         waiting.timer.cancel()
+        if not waiting.future.set_running_or_notify_cancel():
+            return
         try:
             status = response["status"]
             response_body = self._decode_body(response["body"])
@@ -211,8 +214,16 @@ class MqttVaultTransport:
     def _timeout(self, request_span_id: str) -> None:
         with self._condition:
             waiting = self._pending.pop(request_span_id, None)
-        if waiting is not None and not waiting.future.done():
+        if waiting is not None and waiting.future.set_running_or_notify_cancel():
             waiting.future.set_exception(TimeoutError("AgentVault MQTT request timed out"))
+
+    def _cancel(self, request_span_id: str, future: Future[dict[str, Any]]) -> None:
+        if not future.cancelled():
+            return
+        with self._condition:
+            waiting = self._pending.pop(request_span_id, None)
+        if waiting is not None:
+            waiting.timer.cancel()
 
     def _publish_pending(self, request_span_id: str) -> None:
         with self._condition:
@@ -276,7 +287,9 @@ class MqttVaultTransport:
     def _on_subscribe(self, _client: mqtt.Client, _userdata: Any, _mid: int,
                       reason_codes: list[Any], _properties: Any) -> None:
         with self._condition:
-            if not _subscription_granted(reason_codes, 1):
+            if self._closed:
+                return
+            if not self._subscription_granted(reason_codes, 1):
                 self._connection_error = RuntimeError(
                     "AgentVault MQTT subscriptions were rejected or downgraded")
             else:
@@ -294,13 +307,13 @@ class MqttVaultTransport:
             self._condition.notify_all()
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
-        if len(message.payload) > self.config.max_response_bytes:
+        if message.qos != 1 or message.retain or len(message.payload) > self.config.max_response_bytes:
             return
         try:
             value = json.loads(message.payload)
         except (ValueError, UnicodeDecodeError):
             return
-        if not isinstance(value, dict) or value.get("version") != 1:
+        if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
             return
         request_span_id = value.get("requestSpanId")
         with self._condition:
@@ -308,7 +321,7 @@ class MqttVaultTransport:
         expected_type = waiting.expected_type if waiting is not None else None
         status = value.get("status")
         response_type = value.get("type")
-        type_matches = (isinstance(status, int) and isinstance(response_type, str)
+        type_matches = (type(status) is int and isinstance(response_type, str)
                         and ((status >= 400 and response_type == "payment.error")
                              or (status < 400 and response_type == expected_type)))
         if (expected_type is None or not type_matches or not isinstance(request_span_id, str)
@@ -330,23 +343,24 @@ class MqttVaultTransport:
                 current.future.set_exception(error)
 
 
-def _subscription_granted(reason_codes: list[Any], expected_count: int) -> bool:
-    return (len(reason_codes) == expected_count
-            and all(getattr(code, "value", code) == 1 for code in reason_codes))
+    @staticmethod
+    def _subscription_granted(reason_codes: list[Any], expected_count: int) -> bool:
+        return (len(reason_codes) == expected_count
+                and all(getattr(code, "value", code) == 1 for code in reason_codes))
 
+    @classmethod
+    def _producer_trace_context(cls, headers: Mapping[str, str]) -> tuple[str, str, str | None, str]:
+        parent = next((value for name, value in headers.items() if name.lower() == "traceparent"), "")
+        match = _TRACEPARENT.fullmatch(parent)
+        trace_id = match.group(1) if match else cls._random_nonzero_hex(16)
+        parent_span_id = match.group(2) if match else None
+        flags = match.group(3) if match else "01"
+        span_id = cls._random_nonzero_hex(8)
+        return trace_id, span_id, parent_span_id, f"00-{trace_id}-{span_id}-{flags}"
 
-def _producer_trace_context(headers: Mapping[str, str]) -> tuple[str, str, str | None, str]:
-    parent = next((value for name, value in headers.items() if name.lower() == "traceparent"), "")
-    match = _TRACEPARENT.fullmatch(parent)
-    trace_id = match.group(1) if match else _random_nonzero_hex(16)
-    parent_span_id = match.group(2) if match else None
-    flags = match.group(3) if match else "01"
-    span_id = _random_nonzero_hex(8)
-    return trace_id, span_id, parent_span_id, f"00-{trace_id}-{span_id}-{flags}"
-
-
-def _random_nonzero_hex(size: int) -> str:
-    while True:
-        value = secrets.token_hex(size)
-        if set(value) != {"0"}:
-            return value
+    @staticmethod
+    def _random_nonzero_hex(size: int) -> str:
+        while True:
+            value = secrets.token_hex(size)
+            if set(value) != {"0"}:
+                return value

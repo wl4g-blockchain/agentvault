@@ -2,7 +2,7 @@ use serde::{de::Error as _, Deserialize, Deserializer};
 use serde_yaml::Value;
 
 use super::{
-    domain::{PaymentClient, PaymentOffer, PaymentPolicy, PaymentScenario, PaymentScenarioApprover, Wallet},
+    domain::{PaymentClient, PaymentPolicy, PaymentPrice, PaymentScenario, PaymentScenarioApprover, Wallet},
     wallet::EVM_EOA_ALGORITHM,
     Amount, AssetIdentity, BudgetUnit, PaymentPolicyLimits,
 };
@@ -13,7 +13,7 @@ pub(crate) struct ImportBatch {
     pub(crate) wallets: Vec<WalletSpec>,
     pub(crate) scenarios: Vec<ScenarioSpec>,
     pub(crate) policies: Vec<PolicySpec>,
-    pub(crate) offers: Vec<OfferSpec>,
+    pub(crate) offers: Vec<PriceSpec>,
     pub(crate) approvers: Vec<ApproverSpec>,
 }
 
@@ -66,7 +66,8 @@ pub(crate) enum ResourceKind {
     Wallet,
     Scenario,
     Policy,
-    Offer,
+    #[serde(alias = "Price")]
+    Price,
     Approver,
 }
 
@@ -273,7 +274,7 @@ impl PolicySpec {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OfferSpec {
+pub(crate) struct PriceSpec {
     pub(crate) id: String,
     pub(crate) scenario_id: String,
     pub(crate) policy_id: String,
@@ -286,9 +287,9 @@ pub(crate) struct OfferSpec {
     pub(crate) enabled: bool,
 }
 
-impl OfferSpec {
-    pub(crate) fn into_domain(self, imported_at: i64) -> PaymentOffer {
-        PaymentOffer {
+impl PriceSpec {
+    pub(crate) fn into_domain(self, imported_at: i64) -> PaymentPrice {
+        PaymentPrice {
             id: self.id,
             scenario_id: self.scenario_id,
             policy_id: self.policy_id,

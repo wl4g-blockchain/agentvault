@@ -74,11 +74,25 @@ fn reversal_is_an_exact_opposite_wallet_fact() {
 
 #[test]
 fn posting_key_identifies_evidence_not_business_interpretation() {
-    let first = settlement_posting_key("facilitator-a", "eip155:8453", None, Some("payment-1"), None).unwrap();
-    let second = settlement_posting_key("facilitator-a", "eip155:8453", None, Some("payment-1"), None).unwrap();
+    let first = crate::model::PaymentLedgerEntry::settlement_posting_key(
+        "facilitator-a",
+        "eip155:8453",
+        None,
+        Some("payment-1"),
+        None,
+    )
+    .unwrap();
+    let second = crate::model::PaymentLedgerEntry::settlement_posting_key(
+        "facilitator-a",
+        "eip155:8453",
+        None,
+        Some("payment-1"),
+        None,
+    )
+    .unwrap();
     assert_eq!(first, second);
 
-    let upper = settlement_posting_key(
+    let upper = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "rpc-a",
         "eip155:8453",
         Some("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
@@ -86,7 +100,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
         None,
     )
     .unwrap();
-    let lower = settlement_posting_key(
+    let lower = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "rpc-b",
         "eip155:8453",
         Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -96,7 +110,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
     .unwrap();
     assert_eq!(upper, lower);
 
-    let same_tx_different_provider_ref = settlement_posting_key(
+    let same_tx_different_provider_ref = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "facilitator-a",
         "eip155:8453",
         Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -106,7 +120,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
     .unwrap();
     assert_eq!(lower, same_tx_different_provider_ref);
 
-    let token_log = settlement_posting_key(
+    let token_log = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "rpc-a",
         "eip155:8453",
         Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -114,7 +128,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
         Some("log:7"),
     )
     .unwrap();
-    let gas = settlement_posting_key(
+    let gas = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "rpc-a",
         "eip155:8453",
         Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -125,7 +139,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
     assert_ne!(token_log, gas);
     assert_ne!(token_log, lower);
     assert_eq!(
-        settlement_posting_key(
+        crate::model::PaymentLedgerEntry::settlement_posting_key(
             "rpc-b",
             "eip155:8453",
             Some("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
@@ -136,7 +150,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
         token_log
     );
     assert_eq!(
-        settlement_posting_key(
+        crate::model::PaymentLedgerEntry::settlement_posting_key(
             "rpc-a",
             "eip155:8453",
             Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -156,7 +170,7 @@ fn posting_key_identifies_evidence_not_business_interpretation() {
 #[test]
 fn posting_key_accepts_only_canonical_supported_chain_transactions() {
     let solana_signature = "3gPVDLMYKWaWcTcwd7rfvGDCL3PUVzDf5CgFTFtT7uiRkefs3m4sQhW6jPfnRd4pwtUBcR2M5yXAyQwbAouh9kpU";
-    let solana = settlement_posting_key(
+    let solana = crate::model::PaymentLedgerEntry::settlement_posting_key(
         "solana-rpc:local",
         "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ",
         Some(solana_signature),
@@ -166,7 +180,7 @@ fn posting_key_accepts_only_canonical_supported_chain_transactions() {
     .unwrap();
     assert!(solana.starts_with("chain-effect:"));
     assert_eq!(
-        settlement_posting_key(
+        crate::model::PaymentLedgerEntry::settlement_posting_key(
             "solana-rpc:local",
             "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ",
             Some("not-a-signature"),
@@ -176,7 +190,13 @@ fn posting_key_accepts_only_canonical_supported_chain_transactions() {
         Err("tx_hash")
     );
     assert_eq!(
-        settlement_posting_key("rpc", "cosmos:local", Some(solana_signature), None, None),
+        crate::model::PaymentLedgerEntry::settlement_posting_key(
+            "rpc",
+            "cosmos:local",
+            Some(solana_signature),
+            None,
+            None
+        ),
         Err("network")
     );
 }

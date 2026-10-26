@@ -60,9 +60,9 @@ QUANTSTREAM_SHARED_ROOT = E2E_ROOT / "deploy" / "mock-payer-quantstream-config"
 MARKETPULSE_SHARED_VALUES = MARKETPULSE_SHARED_ROOT / "values-shared-override.yaml"
 QUANTSTREAM_SHARED_VALUES = QUANTSTREAM_SHARED_ROOT / "values-shared-override.yaml"
 SHARED_KUBERNETES_MANIFESTS = (
-    AGENTVAULT_SHARED_ROOT / "loopback-bridge.configmap.yaml",
-    MARKETPULSE_SHARED_ROOT / "loopback-bridge.configmap.yaml",
-    QUANTSTREAM_SHARED_ROOT / "loopback-bridge.configmap.yaml",
+    AGENTVAULT_SHARED_ROOT / "local-envoy.configmap.yaml",
+    MARKETPULSE_SHARED_ROOT / "local-envoy.configmap.yaml",
+    QUANTSTREAM_SHARED_ROOT / "local-envoy.configmap.yaml",
 )
 NAMESPACE_PREFIX = "e2e-agentvault-"
 NAMESPACE_SELECTOR = "app.kubernetes.io/part-of=agentvault-e2e"

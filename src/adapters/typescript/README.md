@@ -3,7 +3,7 @@
 `vault.payer(config).standard()` returns a `FetchPayerMiddleware` over the platform
 Fetch API. Pass a stable `PayerRequestContext` only for payable operations.
 `vault.payee(config).express(routes).handlers()` installs the corresponding inbound
-Offer/Challenge/Verify/Settle flow in Express.
+Price/Challenge/Verify/Settle flow in Express.
 
 Choose `GrpcVaultTransport` or `MqttVaultTransport` once
 at startup. The Middleware API and business handlers do not change.

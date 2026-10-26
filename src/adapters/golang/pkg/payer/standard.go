@@ -73,7 +73,7 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err := model.ValidateIdentifier("run_id", operation.RunID); err != nil {
 		return nil, errors.New("paid request has an invalid workflow context")
 	}
-	template, err := cloneReplayable(request)
+	template, err := (StandardPayerMiddleware{}).cloneReplayable(request)
 	if err != nil {
 		return nil, err
 	}
@@ -81,12 +81,28 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
-	first, err := m.base.RoundTrip(request)
+	a2aCall, err := (model.A2ACall{}).Parse(mcpBody, m.config.MaxChallengeBytes)
+	if err != nil {
+		return nil, err
+	}
+	firstRequest := request
+	if a2aCall != nil {
+		if existing := template.Header.Get("X-Run-Id"); existing != "" && existing != operation.RunID {
+			return nil, errors.New("A2A run_id conflicts with paid operation")
+		}
+		template.Header.Set("X-Run-Id", operation.RunID)
+		template.Header.Set("X-A2A-Extensions", m.A2AExtensions(template.Header.Get("X-A2A-Extensions")))
+		firstRequest, err = (StandardPayerMiddleware{}).cloneReplayable(template)
+		if err != nil {
+			return nil, err
+		}
+	}
+	first, err := m.base.RoundTrip(firstRequest)
 	if err != nil {
 		return nil, err
 	}
 	httpChallenge := first.StatusCode == http.StatusPaymentRequired
-	messageCandidate := !httpChallenge && mcpCandidate && m.isJSONResponse(first)
+	messageCandidate := !httpChallenge && (mcpCandidate || a2aCall != nil) && m.isJSONResponse(first)
 	if !httpChallenge && !messageCandidate {
 		return first, nil
 	}
@@ -96,7 +112,7 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
-	origin, err := canonicalOrigin(template)
+	origin, err := (StandardPayerMiddleware{}).canonicalOrigin(template)
 	if err != nil {
 		return nil, err
 	}
@@ -104,14 +120,16 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 		"event.name", "agentvault.sdk.payer.signing_requested", "run.id", operation.RunID)
 	sdkRequest := model.PayerHTTPRequest{
 		Method: request.Method, URL: request.URL.String(), Origin: origin,
-		Headers: flattenHeaders(request.Header), Body: mcpBody, FollowRedirects: false,
+		Headers: (StandardPayerMiddleware{}).flattenHeaders(request.Header), Body: mcpBody, FollowRedirects: false,
 	}
 	sdkResponse := model.PayerHTTPResponse{
-		Status: first.StatusCode, Headers: flattenHeaders(first.Header), Body: body,
+		Status: first.StatusCode, Headers: (StandardPayerMiddleware{}).flattenHeaders(first.Header), Body: body,
 	}
 	var authorized *model.AuthorizedPayment
 	if httpChallenge {
 		authorized, err = m.Authorize(request.Context(), sdkRequest, sdkResponse, operation)
+	} else if a2aCall != nil {
+		authorized, err = m.AuthorizeA2A(request.Context(), sdkRequest, sdkResponse, operation)
 	} else {
 		authorized, err = m.AuthorizeMCP(request.Context(), sdkRequest, sdkResponse, operation)
 	}
@@ -125,12 +143,19 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 		"event.name", "agentvault.sdk.payer.signed", "run.id", operation.RunID,
 		"payment.intent_id", authorized.Intent.ID)
 	paidTemplate := template
+	var a2aPaidBody []byte
 	if httpChallenge {
-		headerName, headerValue, err := m.CredentialHeader(authorized, origin, flattenHeaders(paidTemplate.Header))
+		headerName, headerValue, err := m.CredentialHeader(authorized, origin, (StandardPayerMiddleware{}).flattenHeaders(paidTemplate.Header))
 		if err != nil {
 			return nil, err
 		}
 		paidTemplate.Header.Set(headerName, headerValue)
+	} else if a2aCall != nil {
+		a2aPaidBody, err = m.A2ACredential(authorized, mcpBody, body, origin)
+		if err != nil {
+			return nil, err
+		}
+		m.setReplayableBody(paidTemplate, a2aPaidBody)
 	} else {
 		paidBody, err := m.MCPCredential(authorized, mcpBody)
 		if err != nil {
@@ -142,7 +167,7 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 	var paid *http.Request
 	err = m.Deliver(request.Context(), operation, authorized, func(_ int) (model.PayerHTTPResponse, error) {
 		var cloneErr error
-		paid, cloneErr = cloneReplayable(paidTemplate)
+		paid, cloneErr = (StandardPayerMiddleware{}).cloneReplayable(paidTemplate)
 		if cloneErr != nil {
 			return model.PayerHTTPResponse{}, cloneErr
 		}
@@ -152,12 +177,15 @@ func (m *StandardPayerMiddleware) RoundTrip(request *http.Request) (*http.Respon
 			return model.PayerHTTPResponse{}, sendErr
 		}
 		view := model.PayerHTTPResponse{
-			Status: response.StatusCode, Headers: flattenHeaders(response.Header),
+			Status: response.StatusCode, Headers: (StandardPayerMiddleware{}).flattenHeaders(response.Header),
 		}
 		if messageCandidate && m.isJSONResponse(response) {
 			view.Body, sendErr = m.bufferResponse(response)
 			if sendErr != nil {
 				return model.PayerHTTPResponse{}, sendErr
+			}
+			if a2aCall != nil {
+				return m.A2AResponse(authorized, a2aPaidBody, view)
 			}
 			if view.Status >= 200 && view.Status < 300 {
 				if _, valid := m.boundMCPResponse(view.Body, mcpID, true); !valid {
@@ -213,7 +241,7 @@ func (m *StandardPayerMiddleware) bufferResponse(response *http.Response) ([]byt
 	if response == nil || response.Body == nil {
 		return nil, nil
 	}
-	body, err := readBounded(response.Body, response.ContentLength, m.config.MaxChallengeBytes)
+	body, err := (StandardPayerMiddleware{}).readBounded(response.Body, response.ContentLength, m.config.MaxChallengeBytes)
 	closeErr := response.Body.Close()
 	if err != nil {
 		return nil, err
@@ -236,7 +264,7 @@ func (m *StandardPayerMiddleware) setReplayableBody(request *http.Request, body 
 	request.Header.Del("Content-Length")
 }
 
-func flattenHeaders(headers http.Header) map[string]string {
+func (StandardPayerMiddleware) flattenHeaders(headers http.Header) map[string]string {
 	result := make(map[string]string, len(headers))
 	for name, values := range headers {
 		result[name] = strings.Join(values, ", ")
@@ -244,7 +272,7 @@ func flattenHeaders(headers http.Header) map[string]string {
 	return result
 }
 
-func cloneReplayable(request *http.Request) (*http.Request, error) {
+func (StandardPayerMiddleware) cloneReplayable(request *http.Request) (*http.Request, error) {
 	clone := request.Clone(request.Context())
 	if request.Body == nil || request.Body == http.NoBody {
 		return clone, nil
@@ -260,7 +288,7 @@ func cloneReplayable(request *http.Request) (*http.Request, error) {
 	return clone, nil
 }
 
-func readBounded(body io.Reader, length, limit int64) ([]byte, error) {
+func (StandardPayerMiddleware) readBounded(body io.Reader, length, limit int64) ([]byte, error) {
 	if length > limit {
 		return nil, errors.New("payment challenge exceeds configured limit")
 	}
@@ -274,7 +302,7 @@ func readBounded(body io.Reader, length, limit int64) ([]byte, error) {
 	return value, nil
 }
 
-func canonicalOrigin(request *http.Request) (string, error) {
+func (StandardPayerMiddleware) canonicalOrigin(request *http.Request) (string, error) {
 	if request == nil || request.URL == nil || request.URL.User != nil || request.URL.Host == "" ||
 		(request.URL.Scheme != "http" && request.URL.Scheme != "https") {
 		return "", errors.New("paid request URL must be absolute HTTP(S) without userinfo")

@@ -137,7 +137,7 @@ export type LedgerListInput = {
   limit?: number
 }
 
-export type PaymentOffer = {
+export type PaymentPrice = {
   id: string
   scenario_id: string
   policy_id: string
@@ -150,6 +150,7 @@ export type PaymentOffer = {
   created_at: number
   updated_at: number
 }
+
 
 export type BalanceQuery = {
   scenario_id: string

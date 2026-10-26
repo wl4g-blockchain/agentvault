@@ -1,15 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-/// A registered business application and its trusted authentication binding.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentClient {
-    pub id: String,
-    pub name: String,
-    pub auth_principal: String,
-    pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
+crate::storage::repository_entity! { "pay_client", Catalog;
+    keys: ["id"], immutable: ["created_at"], revision: Some("updated_at");
+    /// A registered business application and its trusted authentication binding.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentClient {
+        pub id: String,
+        pub name: String,
+        pub auth_principal: String,
+        pub enabled: bool,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
 }
 
 impl PaymentClient {

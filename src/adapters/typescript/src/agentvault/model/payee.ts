@@ -8,13 +8,13 @@ import {
   type PaymentReceipt,
 } from './base.js';
 
-export interface ResolveOfferRequest {
+export interface ResolvePriceRequest {
   scenarioId: string;
   resource: string;
   protocol?: string;
 }
 
-export interface PaymentOffer {
+export interface PaymentPrice {
   id: string;
   scenario_id: string;
   resource: string;
@@ -85,7 +85,7 @@ export type ProtectionOutcome =
   | { outcome: 'payment_required'; challenge: PaymentChallenge }
   | { outcome: 'authorized'; challenge: PaymentChallenge; payment: SettledIncomingPayment };
 
-export function validateResolveOfferRequest(request: ResolveOfferRequest): void {
+export function validateResolvePriceRequest(request: ResolvePriceRequest): void {
   required('scenarioId', request.scenarioId);
   required('resource', request.resource);
   if (request.protocol !== undefined) required('protocol', request.protocol);

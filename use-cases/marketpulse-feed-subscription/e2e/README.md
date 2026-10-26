@@ -12,7 +12,7 @@ two real business systems rather than a unit-test fixture:
   `/healthz` and `/metrics` endpoints; the server owns the paid MCP listener.
   Its MCP endpoint exposes
   `marketpulse.yesterday_news` for free and `marketpulse.realtime_news` for one
-  USDC. The paid tool resolves a server-owned Offer, emits x402 v2 402, asks
+  USDC. The paid tool resolves a server-owned Price, emits x402 v2 402, asks
   AgentVault to verify and settle through the external official Facilitator,
   and delivers data only after confirmed settlement.
 - **QuantStream** is a payer quantitative-ingestion platform. Five equivalent
@@ -101,8 +101,14 @@ Flowgent Anvil, Solana, and Facilitator deployments:
 - `payee-{go,rust,python,java,typescript}`: exactly one payee backend.
 - `ingestor-{go,rust,python,java,typescript}`: exactly one payer backend.
 
-The five-language business matrix asserts x402 v2 / EVM / EIP-3009 against
-compiled E2EUSDC. The separate `mpp-tempo` scenario asserts a Vault-signed
+The `full` workflow and five-language business matrix assert x402 v2 / EVM /
+EIP-3009 against E2EUSDC deployed on local Anvil. The explicit `x402-evm` scenario
+runs that same complete workflow and all five verifiers: custody signing,
+external facilitator verify/settle, approval/recovery, two ERC-20 transfers,
+four inbound/outbound ledger rows, independent receipts, ten-wallet isolation,
+and exact facilitator native-gas conservation. It additionally writes
+`payment/x402-evm/evidence.json`; it does not create a second payment executor.
+The separate `mpp-tempo` scenario asserts a Vault-signed
 Tempo type-0x76 `charge`, external HTTP verify/settle, lost-response recovery,
 single broadcast, receipt binding, and pathUSD balance conservation including
 token-denominated gas. The explicit `x402-solana` scenario creates a real SPL
@@ -177,6 +183,7 @@ python3 runner.py -s full --payer-language rust --payee-language rust
 python3 runner.py -s full --payer-language go --payee-language java
 python3 runner.py -s mpp-tempo
 python3 runner.py -s x402-solana
+python3 runner.py -s x402-evm --payer-language rust --payee-language rust --cleanup-after-run
 python3 runner.py -s matrix --matrix-workers 2 # default simple: Rust/Go 2×2×2 = 8
 python3 runner.py -s matrix --e2e-sdk-scope full --matrix-workers 2 # 5×5×2 = 50
 python3 runner.py -s matrix --e2e-sdk-scope full --resume-run <yyyyMMddHHmmss> --skip-build --cleanup-after-run
@@ -304,3 +311,16 @@ The shared five-SDK fixture separately covers both transports, both protocols,
 and both roles. MPP session/split/fee-payer/delegated methods and provider
 fee/refund/deposit/transfer/reversal matrices remain unsupported or require
 their own acceptance scenarios.
+
+
+### A2A SDK acceptance
+
+`python3 runner.py -s a2a --timeout 600` runs the five SDK A2A suites sequentially
+and saves `payment/a2a/evidence.json` plus native test logs. Install the SDKs'
+locked dependencies first (including `pip install -e 'src/adapters/python[test]'`
+from the repository root). Select a bounded `CARGO_TARGET_DIR` when disk space is
+limited. This scenario starts local HTTP adapters with controlled Vault ports;
+it does not deploy a chain or claim financial settlement. The existing
+`mpp-tempo`, `x402-solana` and `full` scenarios retain their independent chain,
+ledger and balance assertions. A2A currently covers non-streaming 0.3
+`message/send`, x402 v2 and native MPP JSON-RPC metadata in all five languages.

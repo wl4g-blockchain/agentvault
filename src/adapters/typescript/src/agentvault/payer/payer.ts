@@ -1,3 +1,4 @@
+import { A2APayerMiddleware } from './a2a.js';
 import type { PayerConfig } from '../config/config.js';
 import { PaymentCredential, type OperationContext, type PaymentIntent, type PaymentReceipt } from '../model/base.js';
 import {
@@ -33,6 +34,8 @@ const FORBIDDEN_CREDENTIAL_HEADERS = new Set([
 export class PayerMiddleware {
   readonly config: Required<PayerConfig>;
   private readonly protocols: ProtocolRegistry;
+
+  a2a(): A2APayerMiddleware { return new A2APayerMiddleware(this, this.protocols); }
 
   constructor(private readonly transport: VaultTransport, config: PayerConfig) {
     if (!transport) throw new Error('AgentVault transport is not configured');

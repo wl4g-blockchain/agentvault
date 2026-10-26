@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    model::{PaymentChallenge, PaymentCredential, PaymentIntent, PaymentOffer, PaymentReceipt},
+    model::{PaymentChallenge, PaymentCredential, PaymentIntent, PaymentPrice, PaymentReceipt},
     Error, Result,
 };
 
@@ -170,7 +170,7 @@ pub trait PaymentProtocol: Send + Sync {
     async fn verify_receipt(&self, intent: &PaymentIntent, receipt: &PaymentReceipt) -> Result<()>;
 
     // Payee
-    async fn build_challenge(&self, offer: &PaymentOffer, recipient: &str, now: i64) -> Result<PaymentChallenge>;
+    async fn build_challenge(&self, offer: &PaymentPrice, recipient: &str, now: i64) -> Result<PaymentChallenge>;
 
     async fn verify_credential(
         &self,

@@ -63,44 +63,48 @@ impl ReservationStatus {
     }
 }
 
-/// Current persisted state of one inbound or outbound payment operation.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PaymentIntent {
-    pub id: String,
-    pub scenario_id: String,
-    pub run_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wallet_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub offer_id: Option<String>,
-    pub direction: PaymentDirection,
-    pub protocol: String,
-    pub asset: AssetIdentity,
-    pub recipient: String,
-    pub amount: Amount,
-    pub settled_amount: Amount,
-    pub resource: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub challenge_hash: Option<String>,
-    pub request_hash: String,
-    pub status: PaymentStatus,
-    pub reservation_status: ReservationStatus,
-    pub reserved_amount: Amount,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub settlement_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_reconcile_at: Option<i64>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub settled_at: Option<i64>,
+crate::storage::repository_entity! { "pay_intent", ReadOnly;
+    keys: ["id"], immutable: ["created_at"], revision: None;
+    /// Current persisted state of one inbound or outbound payment operation.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct PaymentIntent {
+        pub id: String,
+        pub scenario_id: String,
+        pub run_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub wallet_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub policy_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub offer_id: Option<String>,
+        pub direction: PaymentDirection,
+        pub protocol: String,
+        #[sqlx(flatten)]
+        pub asset: AssetIdentity,
+        pub recipient: String,
+        pub amount: Amount,
+        pub settled_amount: Amount,
+        pub resource: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub challenge_hash: Option<String>,
+        pub request_hash: String,
+        pub status: PaymentStatus,
+        pub reservation_status: ReservationStatus,
+        pub reserved_amount: Amount,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tx_hash: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub settlement_ref: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub next_reconcile_at: Option<i64>,
+        pub created_at: i64,
+        pub updated_at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub expires_at: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub settled_at: Option<i64>,
+    }
 }
 
 impl PaymentIntent {

@@ -3,9 +3,6 @@ use std::{fmt, str::FromStr};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use super::{MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS, MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS};
-use crate::Error;
-
 /// An amount expressed in an asset's smallest indivisible unit.
 ///
 /// JSON encodes amounts as decimal strings so values are never rounded by
@@ -109,15 +106,19 @@ impl<'de> Deserialize<'de> for Amount {
     }
 }
 
-/// Complete identity of a fungible asset on a particular network.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(deny_unknown_fields)]
-pub struct AssetIdentity {
-    pub network: String,
-    pub asset: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_contract: Option<String>,
-    pub decimals: u8,
+crate::storage::repository_entity! { "asset_identity", Catalog;
+    keys: [], immutable: [], revision: None;
+    /// Complete identity of a fungible asset on a particular network.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, sqlx::FromRow)]
+    #[serde(deny_unknown_fields)]
+    pub struct AssetIdentity {
+        pub network: String,
+        pub asset: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub token_contract: Option<String>,
+        #[sqlx(rename = "asset_decimals", try_from = "i16")]
+        pub decimals: u8,
+    }
 }
 
 /// Unit shared by scalar policy and wallet limits.
@@ -272,23 +273,6 @@ pub struct SignedOutboundPayment {
     pub intent: PaymentIntent,
     pub credential: PaymentCredential,
     pub replayed: bool,
-}
-
-/// Validates trusted chain/provider time using the same bounds as budget
-/// aggregation.
-pub(crate) fn validate_trusted_effective_time(
-    created_at: i64,
-    effective_at: i64,
-    observed_at: i64,
-) -> crate::Result<()> {
-    let earliest = created_at.saturating_sub(MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS);
-    let latest = observed_at.saturating_add(MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS);
-    if effective_at < 0 || effective_at < earliest || effective_at > latest {
-        return Err(Error::Settlement(
-            "trusted settlement effective time exceeds bounded clock skew".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

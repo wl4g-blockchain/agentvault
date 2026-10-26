@@ -60,6 +60,7 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
     private final MqttConfig config;
     private final String prefix;
     private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
+    private final Set<MqttAsyncClient> retiring = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler;
     private MqttAsyncClient client;
     private CompletableFuture<Void> readyFuture = new CompletableFuture<>();
@@ -82,7 +83,7 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
     public synchronized CompletableFuture<Void> connectAsync() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("MQTT transport closed"));
         if (ready) return CompletableFuture.completedFuture(null);
-        if (!started) startConnection();
+        if (!started) scheduleConnection();
         return readyFuture.thenApply(ignored -> (Void) null)
                 .orTimeout(config.timeout().toMillis(), TimeUnit.MILLISECONDS);
     }
@@ -91,9 +92,17 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
         await(connectAsync(), "MQTT connect/subscribe failed");
     }
 
-    private void startConnection() {
+    private void scheduleConnection() {
         started = true;
         if (readyFuture.isDone()) readyFuture = new CompletableFuture<>();
+        scheduler.execute(() -> {
+            synchronized (MqttVaultTransport.this) {
+                if (!closed) startConnection();
+            }
+        });
+    }
+
+    private void startConnection() {
         try {
             String host = config.host().contains(":") ? "[" + config.host() + "]" : config.host();
             String broker = (config.tls() ? "ssl://" : "tcp://") + host + ":" + config.port();
@@ -178,20 +187,41 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
                 }
 
                 @Override public void onFailure(IMqttToken token, Throwable cause) {
-                    failAll(new IllegalStateException("AgentVault MQTT result subscription failed", cause));
+                    synchronized (MqttVaultTransport.this) { ready = false; }
+                    // A connection can disappear before SUBACK. Preserve pending
+                    // envelopes for connectComplete; their deadlines remain active.
                 }
             });
         } catch (MqttException error) {
-            failAll(new IllegalStateException("AgentVault MQTT result subscription failed", error));
+            synchronized (this) { ready = false; }
         }
     }
 
-    private synchronized void failInitialConnection(Throwable cause) {
-        started = false;
-        ready = false;
-        readyFuture.completeExceptionally(new IllegalStateException("MQTT connection failed", cause));
-        closeClient();
-        client = null;
+    private void failInitialConnection(Throwable cause) {
+        CompletableFuture<Void> failedReady;
+        synchronized (this) {
+            if (closed) return;
+            started = false;
+            ready = false;
+            failedReady = readyFuture;
+            MqttAsyncClient failed = client;
+            client = null;
+            if (failed != null) {
+                retiring.add(failed);
+                // Paho cannot be closed on its own callback thread. Keep ownership
+                // until cleanup completes so close() also handles cancelled tasks.
+                scheduler.execute(() -> {
+                    closeClient(failed);
+                    retiring.remove(failed);
+                });
+            }
+            scheduler.schedule(() -> {
+                synchronized (MqttVaultTransport.this) {
+                    if (!closed && !started && !pending.isEmpty()) scheduleConnection();
+                }
+            }, 1, TimeUnit.SECONDS);
+        }
+        failedReady.completeExceptionally(new IllegalStateException("MQTT connection failed", cause));
     }
 
     @Override public <T> CompletableFuture<T> getAsync(String path, Class<T> type) {
@@ -211,15 +241,27 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(error);
         }
-        return connectAsync().thenCompose(ignored -> submit(operation, path, body))
-                .thenApply(value -> convert(value, type));
+        CompletableFuture<JsonNode> submitted = submit(operation, path, body);
+        CompletableFuture<T> result = new CompletableFuture<>();
+        submitted.whenComplete((value, failure) -> {
+            if (failure != null) result.completeExceptionally(failure);
+            else {
+                try { result.complete(convert(value, type)); }
+                catch (RuntimeException error) { result.completeExceptionally(error); }
+            }
+        });
+        result.whenComplete((value, failure) -> {
+            if (result.isCancelled()) submitted.cancel(false);
+        });
+        return result;
     }
 
     @Override public <T> T post(String path, Object body, Class<T> type) {
         return await(postAsync(path, body, type), "AgentVault MQTT request failed");
     }
 
-    private CompletableFuture<JsonNode> submit(Operation operation, String path, Object body) {
+    private synchronized CompletableFuture<JsonNode> submit(Operation operation, String path, Object body) {
+        if (closed) return CompletableFuture.failedFuture(new IllegalStateException("MQTT transport closed"));
         if (pending.size() >= 256) {
             return CompletableFuture.failedFuture(new IllegalStateException("too many pending MQTT payment requests"));
         }
@@ -238,9 +280,14 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
             }
             waiting.timeout = scheduler.schedule(
                     () -> timeout(requestSpanId, waiting), config.timeout().toMillis(), TimeUnit.MILLISECONDS);
+            waiting.future.whenComplete((value, failure) -> {
+                pending.remove(requestSpanId, waiting);
+                if (waiting.timeout != null) waiting.timeout.cancel(false);
+            });
+            if (!started) scheduleConnection();
             publishPending(requestSpanId);
             return waiting.future;
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException error) {
             return CompletableFuture.failedFuture(new IllegalStateException("encode MQTT request", error));
         }
     }
@@ -297,7 +344,7 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
     }
 
     private void onMessage(String topic, MqttMessage message) {
-        if (message.getPayload().length > config.maxResponseBytes()) return;
+        if (message.getQos() != 1 || message.isRetained() || message.getPayload().length > config.maxResponseBytes()) return;
         try {
             JsonNode response = JSON.readTree(message.getPayload());
             String requestSpanId = response.path("requestSpanId").asText("");
@@ -435,23 +482,31 @@ public final class MqttVaultTransport implements AsyncVaultTransport {
         }
     }
 
-    @Override public synchronized void close() {
-        if (closed) return;
-        closed = true;
-        ready = false;
+    @Override public void close() {
+        MqttAsyncClient current;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            ready = false;
+            current = client;
+            client = null;
+        }
         failAll(new IllegalStateException("MQTT transport closed"));
-        closeClient();
-        client = null;
+        closeClient(current);
         scheduler.shutdownNow();
+        for (MqttAsyncClient failed : retiring) closeClient(failed);
+        retiring.clear();
     }
 
-    private void closeClient() {
-        if (client == null) return;
+    private void closeClient(MqttAsyncClient current) {
+        if (current == null) return;
         try {
-            if (client.isConnected()) client.disconnect().waitForCompletion(config.timeout().toMillis());
-            client.close();
+            current.disconnectForcibly(0, 0, false);
         } catch (MqttException ignored) {
-            // Best-effort close cannot change an already completed payment.
+            // Already disconnected/connecting clients still need forced close.
+        } finally {
+            try { current.close(true); }
+            catch (MqttException ignored) { /* No result or custody state depends on close. */ }
         }
     }
 

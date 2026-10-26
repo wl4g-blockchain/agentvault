@@ -11,7 +11,7 @@ import type {
   PaymentBalance,
   PaymentIntent,
   PaymentListInput,
-  PaymentOffer,
+  PaymentPrice,
   PaymentPage,
   PaymentReceipt,
   ScenarioConfiguration,
@@ -130,9 +130,9 @@ export const approvalApi = {
   },
 }
 
-export const offerApi = {
+export const priceApi = {
   resolve(scenarioId: string, resource: string, protocol?: string) {
-    return request<PaymentOffer>('/offers/resolve', {
+    return request<PaymentPrice>('/prices/resolve', {
       method: 'POST',
       body: JSON.stringify({
         scenario_id: scenarioId,
@@ -229,3 +229,6 @@ export const managementApi = {
     return { liveness, readiness, observedAt: Date.now() }
   },
 }
+
+/** Compatibility name for existing dashboard integrations. */
+export const offerApi = priceApi

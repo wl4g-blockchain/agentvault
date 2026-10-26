@@ -1,78 +1,7 @@
-use super::*;
-use crate::{
-    config::{SqliteStorageConfig, StorageConfig, StorageProvider},
-    model::{Amount, BudgetUnit, Wallet},
-};
+use crate::config::{SqliteStorageConfig, StorageConfig, StorageProvider};
+use crate::storage::*;
 use std::time::Duration;
 use tempfile::TempDir;
-
-fn payment_wallet() -> PaymentWallet {
-    PaymentWallet {
-        wallet: Wallet {
-            id: "wallet-1".to_owned(),
-            algorithm: "external".to_owned(),
-            address: "opaque-recipient".to_owned(),
-            public_key: String::new(),
-            created_at: 1,
-        },
-        custody: WalletCustody::External,
-        enabled: true,
-        active_key_version: None,
-        budget_unit: None,
-        max_per_payment: None,
-        max_per_day: None,
-        updated_at: 1,
-    }
-}
-
-#[test]
-fn unbound_wallet_needs_no_budget_unit() {
-    assert!(payment_wallet().validate_payment_metadata().is_ok());
-}
-
-#[test]
-fn scalar_wallet_limits_require_one_valid_unit() {
-    let mut wallet = payment_wallet();
-    wallet.max_per_day = Some(Amount::new(100));
-    assert_eq!(wallet.validate_payment_metadata(), Err("budget_unit"));
-
-    wallet.budget_unit = Some(BudgetUnit {
-        asset: "USDC".to_owned(),
-        decimals: 6,
-    });
-    wallet.max_per_payment = Some(Amount::new(101));
-    assert_eq!(wallet.validate_payment_metadata(), Err("max_per_day"));
-
-    wallet.max_per_payment = Some(Amount::new(50));
-    assert!(wallet.validate_payment_metadata().is_ok());
-}
-
-#[test]
-fn only_local_wallet_with_active_key_is_signing_ready() {
-    let mut wallet = payment_wallet();
-    assert!(!wallet.signing_ready());
-    wallet.active_key_version = Some(1);
-    assert_eq!(wallet.validate_payment_metadata(), Err("active_key_version"));
-    wallet.custody = WalletCustody::Local;
-    assert!(wallet.signing_ready());
-    assert!(wallet.validate_payment_metadata().is_ok());
-    wallet.enabled = false;
-    assert!(!wallet.signing_ready());
-}
-
-#[test]
-fn local_wallet_must_match_payment_network_before_signing() {
-    let mut wallet = payment_wallet();
-    wallet.enabled = true;
-    wallet.custody = WalletCustody::Local;
-    wallet.active_key_version = Some(1);
-    wallet.wallet.algorithm = "secp256k1".to_owned();
-    wallet.wallet.address = "0xabcdef0123456789abcdef0123456789abcdef01".to_owned();
-    assert!(wallet.signing_ready_for_payment_network("eip155:8453"));
-
-    wallet.wallet.algorithm = "ed25519".to_owned();
-    assert!(!wallet.signing_ready_for_payment_network("eip155:8453"));
-}
 
 fn sqlite_config(directory: &TempDir, name: &str) -> StorageConfig {
     StorageConfig {
@@ -111,4 +40,39 @@ async fn initialization_failure_is_reported_without_retaining_a_provider() {
     };
 
     assert!(factory.create(&config).await.is_err());
+}
+
+#[tokio::test]
+async fn composed_ports_share_lifecycle_and_keep_provider_instances_isolated() {
+    let directory = TempDir::new().unwrap();
+    let factory = StorageFactory::new();
+    let first = factory.create(&sqlite_config(&directory, "first")).await.unwrap();
+    let second = factory.create(&sqlite_config(&directory, "second")).await.unwrap();
+    let first_ports = first.clone().ports();
+    let second_ports = second.clone().ports();
+    let mut client = crate::model::PaymentClient {
+        id: "same-client-id".to_owned(),
+        name: "First instance".to_owned(),
+        auth_principal: "first-principal".to_owned(),
+        enabled: true,
+        created_at: 1,
+        updated_at: 1,
+    };
+    first_ports.clients.insert(&client).await.unwrap();
+    assert_eq!(
+        first.clone().ports().clients.get(&client.id).await.unwrap(),
+        Some(client.clone())
+    );
+    assert!(second_ports.clients.get(&client.id).await.unwrap().is_none());
+    client.name = "Second instance".to_owned();
+    client.auth_principal = "second-principal".to_owned();
+    second_ports.clients.insert(&client).await.unwrap();
+
+    first.close().await.unwrap();
+    first.close().await.unwrap();
+    assert!(first_ports.clients.get(&client.id).await.is_err());
+    assert!(first_ports.wallets.get("any-wallet").await.is_err());
+    assert!(first_ports.payments.get("any-intent").await.is_err());
+    assert_eq!(second_ports.clients.get(&client.id).await.unwrap(), Some(client));
+    second.close().await.unwrap();
 }

@@ -125,3 +125,19 @@ fn resource_timestamps_advance_monotonically() {
     assert_eq!(ConsoleStore::next_timestamp(10, 10).unwrap(), 11);
     assert!(ConsoleStore::next_timestamp(i64::MAX, i64::MAX).is_err());
 }
+
+#[test]
+fn price_commands_keep_offer_spelling_as_a_compatibility_alias() {
+    for resource in ["price", "offer"] {
+        let cli = Cli::try_parse_from(["agentvault", "console", "get", resource, "price-1"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Console {
+                operation: Some(ConsoleCommand::Get(GetArgs {
+                    resource: ConsoleResource::Price,
+                    ..
+                }))
+            }
+        ));
+    }
+}

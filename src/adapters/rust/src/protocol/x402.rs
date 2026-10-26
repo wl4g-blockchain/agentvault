@@ -1,3 +1,4 @@
+use crate::A2aCall;
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
@@ -222,6 +223,112 @@ impl X402Adapter {
 }
 
 impl PaymentProtocol for X402Adapter {
+    fn a2a_extension(&self) -> &'static str {
+        "https://github.com/google-agentic-commerce/a2a-x402/blob/main/spec/v0.2"
+    }
+    fn a2a_challenge(&self, message: &Value, limit: usize) -> Result<Option<ProtocolHttpResponse>> {
+        let meta = &message["result"]["status"]["message"]["metadata"];
+        let Some(required) = meta.get("x402.payment.required") else {
+            if meta["x402.payment.status"] == "payment-required" {
+                return Err(A2aCall::invalid("embedded A2A payment mandates unsupported"));
+            }
+            return Ok(None);
+        };
+        let task = A2aCall::task(message)?;
+        if task.status.state != a2a_types::TaskState::InputRequired || meta["x402.payment.status"] != "payment-required"
+        {
+            return Err(A2aCall::invalid("invalid A2A challenge state"));
+        }
+        self.mcp_challenge(
+            &serde_json::json!({"result":{"isError":true,"structuredContent":required}}),
+            limit,
+        )
+    }
+    fn presented_a2a_credential(&self, message: &Value, limit: usize) -> Result<Option<Value>> {
+        let mut message = message.clone();
+        let meta = A2aCall::metadata(&mut message, false)?;
+        let keys = meta.keys().filter(|key| key.starts_with("x402.payment.")).count();
+        if keys == 0 {
+            return Ok(None);
+        }
+        if keys != 2
+            || !meta.contains_key("x402.payment.payload")
+            || meta.get("x402.payment.status").and_then(Value::as_str) != Some("payment-submitted")
+        {
+            return Err(A2aCall::invalid("invalid A2A payment metadata"));
+        }
+        self.presented_mcp_credential(&serde_json::json!({"x402/payment":meta["x402.payment.payload"]}), limit)
+    }
+    fn a2a_strip_credential(&self, message: &mut Value) -> Result<()> {
+        let meta = A2aCall::metadata(message, false)?;
+        meta.remove("x402.payment.payload");
+        meta.remove("x402.payment.status");
+        Ok(())
+    }
+    fn a2a_apply_credential(&self, message: &mut Value, credential: &PaymentCredential) -> Result<()> {
+        let meta = A2aCall::metadata(message, false)?;
+        if meta.keys().any(|key| key.starts_with("x402.payment.")) {
+            return Err(A2aCall::invalid("existing A2A payment metadata"));
+        }
+        meta.insert("x402.payment.status".into(), serde_json::json!("payment-submitted"));
+        meta.insert("x402.payment.payload".into(), self.mcp_credential(credential)?.value);
+        Ok(())
+    }
+    fn a2a_payment_required(
+        &self,
+        challenge: &PaymentChallenge,
+        task: &a2a_types::Task,
+        rejected: bool,
+    ) -> Result<ProtocolMcpPaymentRequired> {
+        let ProtocolMcpPaymentRequired::Result(required) = self.mcp_payment_required(challenge)? else {
+            return Err(A2aCall::invalid("invalid x402 challenge"));
+        };
+        let mut result = serde_json::to_value(task).map_err(|e| A2aCall::invalid(&e.to_string()))?;
+        result["status"] = serde_json::json!({"state":"input-required","message":{"kind":"message","role":"agent","messageId":uuid::Uuid::new_v4().to_string(),"taskId":task.id,"contextId":task.context_id,"parts":[{"kind":"text","text":"Payment required"}],"metadata":{"x402.payment.status":"payment-required","x402.payment.required":required["structuredContent"]}}});
+        if rejected {
+            result["status"]["message"]["metadata"]["x402.payment.error"] = serde_json::json!("PAYMENT_INVALID");
+        }
+        Ok(ProtocolMcpPaymentRequired::Result(result))
+    }
+    fn a2a_evidence(&self, message: &Value, limit: usize) -> Result<Option<MerchantEvidence>> {
+        let meta = &message["result"]["status"]["message"]["metadata"];
+        let Some(receipts) = meta.get("x402.payment.receipts") else {
+            return Ok(None);
+        };
+        if receipts.as_array().is_none_or(|items| items.len() != 1)
+            || meta["x402.payment.status"] != "payment-completed"
+        {
+            return Err(A2aCall::invalid("invalid A2A receipt metadata"));
+        }
+        self.mcp_merchant_evidence(&serde_json::json!({"x402/payment-response":receipts[0]}), limit)
+    }
+    fn a2a_inject_receipt(
+        &self,
+        message: &mut Value,
+        challenge: &PaymentChallenge,
+        payment: &SettledIncomingPayment,
+    ) -> Result<()> {
+        let task = A2aCall::task(message)?;
+        let status = &mut message["result"]["status"];
+        if status["message"].is_null() {
+            status["message"] = serde_json::json!({"kind":"message","role":"agent","messageId":uuid::Uuid::new_v4().to_string(),"taskId":task.id,"contextId":task.context_id,"parts":[{"kind":"text","text":"Paid"}]});
+        }
+        if status["message"]["metadata"].is_null() {
+            status["message"]["metadata"] = serde_json::json!({});
+        }
+        let meta = status["message"]["metadata"]
+            .as_object_mut()
+            .ok_or_else(|| A2aCall::invalid("invalid Task metadata"))?;
+        if meta.keys().any(|key| key.starts_with("x402.payment.")) {
+            return Err(A2aCall::invalid("handler supplied payment evidence"));
+        }
+        meta.insert("x402.payment.status".into(), serde_json::json!("payment-completed"));
+        meta.insert(
+            "x402.payment.receipts".into(),
+            serde_json::json!([self.mcp_receipt(challenge, payment)?.value]),
+        );
+        Ok(())
+    }
     fn name(&self) -> &'static str {
         "x402"
     }

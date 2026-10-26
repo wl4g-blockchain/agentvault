@@ -65,7 +65,7 @@ fn second_asset() -> AssetIdentity {
 }
 
 fn replace_charge_request(adapter: &MppAdapter, challenge: &mut PaymentChallenge, request: &ChargeRequest) {
-    let original = official_challenge(challenge).unwrap();
+    let original = MppWire::official_challenge(challenge).unwrap();
     let request = Base64UrlJson::from_typed(request).unwrap();
     let replacement = mpp::PaymentChallenge::with_secret_key_full(
         adapter.payee.as_ref().expect("payee adapter").challenge_secret.as_str(),
@@ -81,12 +81,12 @@ fn replace_charge_request(adapter: &MppAdapter, challenge: &mut PaymentChallenge
     );
     let header = format_www_authenticate(&replacement).unwrap();
     challenge.nonce = replacement.id;
-    challenge.challenge_hash = mpp_challenge_hash(&challenge.resource, &header);
+    challenge.challenge_hash = MppWire::challenge_hash(&challenge.resource, &header);
     challenge.payload = json!({"www_authenticate": header});
 }
 
 fn credential_for(challenge: &PaymentChallenge) -> PaymentCredential {
-    let official = official_challenge(challenge).unwrap();
+    let official = MppWire::official_challenge(challenge).unwrap();
     let credential = mpp::PaymentCredential::new(
         official.to_echo(),
         mpp::PaymentPayload::hash(format!("0x{}", "ab".repeat(32))),
@@ -145,8 +145,8 @@ async fn assert_integrity_rejected(adapter: &MppAdapter, challenge: &PaymentChal
     assert!(adapter.settle_payment(challenge, &credential).await.is_err());
 }
 
-fn offer() -> PaymentOffer {
-    PaymentOffer {
+fn offer() -> PaymentPrice {
+    PaymentPrice {
         id: "offer-1".to_owned(),
         scenario_id: "scenario-1".to_owned(),
         policy_id: "policy-1".to_owned(),
@@ -188,7 +188,7 @@ async fn official_sdk_round_trips_charge_challenge() {
     assert_eq!(parsed.nonce, challenge.nonce);
     assert_eq!(parsed.challenge_hash, challenge.challenge_hash);
     assert_eq!(
-        official_challenge(&challenge).unwrap().header.as_deref(),
+        MppWire::official_challenge(&challenge).unwrap().header.as_deref(),
         Some("Payment-Authorization")
     );
 
@@ -210,7 +210,7 @@ async fn http_provider_preserves_bearer_with_the_advertised_credential_header() 
     let delivery = payer_adapter().encode_http_credential(&credential).unwrap();
     assert_eq!(delivery.header_name, "payment-authorization");
 
-    let mut official = official_challenge(&challenge).unwrap();
+    let mut official = MppWire::official_challenge(&challenge).unwrap();
     official.header = None;
     let default = mpp::PaymentCredential::new(
         official.to_echo(),
@@ -283,8 +283,8 @@ async fn payer_builds_an_official_tempo_transaction_credential() {
         )
         .await
         .unwrap();
-    let key = crate::utils::crypto::generate_private_key();
-    let payer = crate::utils::crypto::address(&key).unwrap();
+    let key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let payer = crate::utils::crypto::WalletCrypto::address(&key).unwrap();
     let signing = payer_adapter
         .prepare_signing(&challenge, &payer, now + 1)
         .await
@@ -293,7 +293,7 @@ async fn payer_builds_an_official_tempo_transaction_credential() {
     assert_eq!(signing.payload["kind"], TEMPO_SIGNING_PAYLOAD_KIND);
     assert_eq!(signing.payload["payer"], payer);
 
-    let signature = crate::utils::crypto::sign_eip712_digest(&key, &signing.digest).unwrap();
+    let signature = crate::utils::crypto::WalletCrypto::sign_eip712_digest(&key, &signing.digest).unwrap();
     let credential = payer_adapter
         .complete_signing(&challenge, signing.clone(), &signature)
         .await
@@ -316,8 +316,8 @@ async fn payer_builds_an_official_tempo_transaction_credential() {
         .await
         .is_ok());
 
-    let other_key = crate::utils::crypto::generate_private_key();
-    let wrong_signature = crate::utils::crypto::sign_eip712_digest(&other_key, &signing.digest).unwrap();
+    let other_key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let wrong_signature = crate::utils::crypto::WalletCrypto::sign_eip712_digest(&other_key, &signing.digest).unwrap();
     assert!(payer_adapter
         .complete_signing(&challenge, signing.clone(), &wrong_signature)
         .await
@@ -325,7 +325,7 @@ async fn payer_builds_an_official_tempo_transaction_credential() {
 
     let mut modified = signing;
     modified.payload["transaction"]["gas"] = json!(999_999_u64);
-    let modified_signature = crate::utils::crypto::sign_eip712_digest(&key, &modified.digest).unwrap();
+    let modified_signature = crate::utils::crypto::WalletCrypto::sign_eip712_digest(&key, &modified.digest).unwrap();
     assert!(payer_adapter
         .complete_signing(&challenge, modified, &modified_signature)
         .await
@@ -414,7 +414,7 @@ async fn every_entrypoint_rejects_forged_outer_or_official_charge() {
         .credential_fingerprint(&outer_allowed_asset, &credential)
         .is_err());
 
-    let original = official_challenge(&challenge).unwrap();
+    let original = MppWire::official_challenge(&challenge).unwrap();
     let original_request: ChargeRequest = original.request.decode().unwrap();
 
     let mut inner_other_asset = challenge.clone();
@@ -443,7 +443,7 @@ async fn every_entrypoint_rejects_forged_outer_or_official_charge() {
     assert_integrity_rejected(&adapter, &missing_resource_scope).await;
 
     let mut split_recipient = challenge.clone();
-    let mut request = official_challenge(&challenge)
+    let mut request = MppWire::official_challenge(&challenge)
         .unwrap()
         .request
         .decode::<ChargeRequest>()
@@ -488,7 +488,7 @@ async fn replay_fingerprint_normalizes_official_payment_reference() {
         .build_challenge(&offer(), "0x2222222222222222222222222222222222222222", 2_000_000_000)
         .await
         .unwrap();
-    let official = official_challenge(&challenge).unwrap();
+    let official = MppWire::official_challenge(&challenge).unwrap();
     let upper = mpp::PaymentCredential::new(
         official.to_echo(),
         mpp::PaymentPayload::hash(format!("0x{}", "AB".repeat(32))),
@@ -549,10 +549,10 @@ impl LiveTempoFacilitator {
         &self,
         request: &LiveTempoSettlementRequest,
         settle: bool,
-    ) -> crate::handler::SettlementProviderResult {
+    ) -> crate::model::SettlementProviderResult {
         match self.execute_checked(request, settle).await {
             Ok(result) => result,
-            Err(reason) => crate::handler::SettlementProviderResult {
+            Err(reason) => crate::model::SettlementProviderResult {
                 valid: false,
                 settled: false,
                 payer: None,
@@ -573,7 +573,7 @@ impl LiveTempoFacilitator {
         &self,
         request: &LiveTempoSettlementRequest,
         settle: bool,
-    ) -> std::result::Result<crate::handler::SettlementProviderResult, String> {
+    ) -> std::result::Result<crate::model::SettlementProviderResult, String> {
         use alloy::{network::ReceiptResponse as _, providers::Provider as _};
         use mpp::ChargeMethod as _;
 
@@ -657,7 +657,7 @@ impl LiveTempoFacilitator {
             (false, None)
         };
 
-        Ok(crate::handler::SettlementProviderResult {
+        Ok(crate::model::SettlementProviderResult {
             valid: true,
             settled,
             payer: Some(validated.payer),
@@ -742,7 +742,7 @@ impl LiveTempoFacilitator {
 async fn live_tempo_verify(
     axum::extract::State(facilitator): axum::extract::State<LiveTempoFacilitator>,
     axum::Json(request): axum::Json<LiveTempoSettlementRequest>,
-) -> axum::Json<crate::handler::SettlementProviderResult> {
+) -> axum::Json<crate::model::SettlementProviderResult> {
     let result = facilitator.execute(&request, false).await;
     println!(
         "{}",
@@ -758,7 +758,7 @@ async fn live_tempo_settle(
     axum::Json(request): axum::Json<LiveTempoSettlementRequest>,
 ) -> (
     axum::http::StatusCode,
-    axum::Json<crate::handler::SettlementProviderResult>,
+    axum::Json<crate::model::SettlementProviderResult>,
 ) {
     let result = facilitator.execute(&request, true).await;
     println!(
@@ -797,7 +797,7 @@ async fn fund_live_tempo_payer(provider: &mpp::server::TempoProvider, token: Add
     use alloy::{network::ReceiptResponse as _, providers::Provider as _};
 
     let dev_key = hex::decode(LIVE_TEMPO_DEV_PRIVATE_KEY).expect("dev key hex");
-    let dev = crate::utils::crypto::address(&dev_key)
+    let dev = crate::utils::crypto::WalletCrypto::address(&dev_key)
         .expect("derive Tempo dev account")
         .parse::<Address>()
         .expect("Tempo dev account address");
@@ -821,8 +821,9 @@ async fn fund_live_tempo_payer(provider: &mpp::server::TempoProvider, token: Add
         }],
         ..TempoTransaction::default()
     };
-    let signature = crate::utils::crypto::sign_eip712_digest(&dev_key, transaction.signature_hash().as_slice())
-        .expect("sign Tempo payer funding transaction");
+    let signature =
+        crate::utils::crypto::WalletCrypto::sign_eip712_digest(&dev_key, transaction.signature_hash().as_slice())
+            .expect("sign Tempo payer funding transaction");
     let signature = Signature::from_raw(&signature).expect("decode Tempo payer funding signature");
     let raw = format!(
         "0x{}",
@@ -864,12 +865,12 @@ struct PreparedLiveTempoPayment {
 
 async fn prepare_live_tempo_payment(provider: &mpp::server::TempoProvider) -> PreparedLiveTempoPayment {
     let token = LIVE_TEMPO_PATH_USD.parse::<Address>().expect("pathUSD address");
-    let payer_key = crate::utils::crypto::generate_private_key();
-    let payer = crate::utils::crypto::address(&payer_key).expect("derive isolated payer");
+    let payer_key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let payer = crate::utils::crypto::WalletCrypto::address(&payer_key).expect("derive isolated payer");
     let payer_address = payer.parse::<Address>().expect("payer address");
     fund_live_tempo_payer(provider, token, payer_address).await;
-    let recipient_key = crate::utils::crypto::generate_private_key();
-    let recipient = crate::utils::crypto::address(&recipient_key).expect("derive recipient");
+    let recipient_key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let recipient = crate::utils::crypto::WalletCrypto::address(&recipient_key).expect("derive recipient");
     let recipient_address = recipient.parse::<Address>().expect("recipient address");
     let asset = AssetIdentity {
         network: format!("eip155:{LIVE_TEMPO_CHAIN_ID}"),
@@ -893,7 +894,7 @@ async fn prepare_live_tempo_payment(provider: &mpp::server::TempoProvider) -> Pr
     .expect("create MPP payee adapter");
     let payer_protocol = MppAdapter::new_payer(vec![configured_asset], 60).expect("create MPP payer adapter");
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let offer = PaymentOffer {
+    let offer = PaymentPrice {
         id: "offer-mpp-tempo-live".to_owned(),
         scenario_id: "scenario-mpp-tempo-live".to_owned(),
         policy_id: "policy-mpp-tempo-live".to_owned(),
@@ -924,7 +925,7 @@ async fn prepare_live_tempo_payment(provider: &mpp::server::TempoProvider) -> Pr
         .prepare_signing(&challenge, &payer, now + 1)
         .await
         .expect("Vault prepares intent-bound Tempo signing plan");
-    let signature = crate::utils::crypto::sign_eip712_digest(&payer_key, &signing.digest)
+    let signature = crate::utils::crypto::WalletCrypto::sign_eip712_digest(&payer_key, &signing.digest)
         .expect("Vault signs the Tempo transaction digest");
     let credential = payer_protocol
         .complete_signing(&challenge, signing, &signature)
@@ -958,7 +959,7 @@ async fn start_live_tempo_facilitator(
     provider: &mpp::server::TempoProvider,
     asset: &AssetIdentity,
 ) -> (
-    crate::handler::HttpSettlementProvider,
+    crate::payment::HttpSettlementProvider,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     tokio::task::JoinHandle<()>,
 ) {
@@ -982,11 +983,11 @@ async fn start_live_tempo_facilitator(
         .expect("bind MPP facilitator");
     let base_url = format!("http://{}", listener.local_addr().expect("facilitator address"));
     let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("facilitator server") });
-    let external = crate::handler::HttpSettlementProvider::new(
-        &crate::handler::SettlementProviderConfig {
+    let external = crate::payment::HttpSettlementProvider::new(
+        &crate::payment::SettlementProviderConfig {
             base_url,
             allow_insecure_loopback: true,
-            ..crate::handler::SettlementProviderConfig::default()
+            ..crate::payment::SettlementProviderConfig::default()
         },
         reqwest::header::HeaderMap::new(),
     )
@@ -1101,7 +1102,9 @@ impl LiveTempoEvidence {
 #[tokio::test]
 #[ignore = "requires the pinned Tempo localnet E2E profile"]
 async fn live_tempo_charge_survives_lost_settle_response_and_conserves_token_with_gas() {
-    use crate::handler::{ExternalSettlementProvider, SettlementOperation, SettlementProviderRequest};
+    use crate::model::SettlementOperation;
+    use crate::model::SettlementProviderRequest;
+    use crate::payment::ExternalSettlementProvider;
     use alloy::providers::Provider as _;
 
     let rpc_url = std::env::var("TEMPO_RPC_URL").unwrap_or_else(|_| LIVE_TEMPO_RPC_URL.to_owned());
@@ -1207,12 +1210,12 @@ struct LiveTempoBalanceSource {
 }
 
 #[async_trait::async_trait]
-impl crate::handler::WalletBalanceSource for LiveTempoBalanceSource {
+impl crate::payment::WalletBalanceSource for LiveTempoBalanceSource {
     async fn load(
         &self,
         wallet: &crate::model::Wallet,
         asset: &AssetIdentity,
-    ) -> crate::Result<crate::handler::WalletBalanceSnapshot> {
+    ) -> crate::Result<crate::model::WalletBalanceSnapshot> {
         if asset.network != format!("eip155:{LIVE_TEMPO_CHAIN_ID}")
             || asset.token_contract.as_deref() != Some(LIVE_TEMPO_PATH_USD)
         {
@@ -1227,7 +1230,7 @@ impl crate::handler::WalletBalanceSource for LiveTempoBalanceSource {
         let available = live_tempo_balance(&self.provider, self.token, account).await;
         let available = u128::try_from(available)
             .map_err(|_| crate::Error::Settlement("Tempo balance exceeds Amount".to_owned()))?;
-        Ok(crate::handler::WalletBalanceSnapshot {
+        Ok(crate::model::WalletBalanceSnapshot {
             asset_available: Amount::new(available),
             // Tempo charges gas in the configured fee token. The native-gas
             // threshold is therefore intentionally zero for this source.
@@ -1239,7 +1242,7 @@ impl crate::handler::WalletBalanceSource for LiveTempoBalanceSource {
 
 struct LiveTempoClock(i64);
 
-impl crate::handler::UnixClock for LiveTempoClock {
+impl crate::utils::clock::UnixClock for LiveTempoClock {
     fn now(&self) -> crate::Result<i64> {
         Ok(self.0)
     }
@@ -1265,9 +1268,12 @@ async fn import_live_tempo_storage(
     manifest_path: &std::path::Path,
     manifest: &Value,
 ) -> std::sync::Arc<crate::storage::sqlite::SqliteStorage> {
-    std::fs::write(manifest_path, crate::handler::encode_test_resource_documents(manifest))
-        .expect("write live Tempo resource documents");
-    crate::handler::import_from_paths(config, &[manifest_path.to_path_buf()])
+    std::fs::write(
+        manifest_path,
+        crate::payment::ResourceImporter::encode_test_resource_documents(manifest),
+    )
+    .expect("write live Tempo resource documents");
+    crate::payment::ResourceImporter::import_from_paths(config, &[manifest_path.to_path_buf()])
         .await
         .expect("import live Tempo Vault resources");
     std::sync::Arc::new(
@@ -1281,23 +1287,43 @@ async fn import_live_tempo_storage(
 #[tokio::test]
 #[ignore = "requires the pinned Tempo localnet E2E profile"]
 async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
-    use crate::{
-        apm::AgentVaultMetrics,
-        handler::{
-            EvmEvidenceSource, EvmReceiptRegistry, EvmRpcReceiptConfig, EvmRpcReceiptSource,
-            ExternalSettlementProvider, IssuePaymentChallenge, OutboundEvidenceDependencies, OutboundEvidenceHandler,
-            OutboundSigningDependencies, OutboundSigningHandler, PaymentEvidenceRouter, PaymentHandler,
-            ReconciliationConfig, ReconciliationEvidenceSource, ReconciliationJob, RecordOutboundPaymentResponse,
-            ScenarioHandler, SettleIncomingPayment, SettlementDependencies, SettlementHandler,
-            SettlementProviderRegistry, SignAuthorizedPayment, VerifyIncomingPayment,
-        },
-        model::{wallet::WalletSelectionStrategy, PaymentAuthorizationResult, PaymentEventType, PaymentStatus},
-        protocol::PaymentProtocolFactory,
-        storage::{
-            sqlite::SqliteWalletKeyRepository, EventStorage, LedgerQuery, LedgerStorage, PageRequest, PaymentStorage,
-        },
-        utils::secure_material::{Aes256GcmMaterialProtector, SensitiveMaterialProtector},
-    };
+    use crate::apm::AgentVaultMetrics;
+    use crate::handler::ScenarioHandler;
+    use crate::job::ReconciliationJob;
+    use crate::model::wallet::WalletSelectionStrategy;
+    use crate::model::IssuePaymentChallenge;
+    use crate::model::PaymentAuthorizationResult;
+    use crate::model::PaymentEventType;
+    use crate::model::PaymentStatus;
+    use crate::model::RecordOutboundPaymentResponse;
+    use crate::model::SettleIncomingPayment;
+    use crate::model::SignAuthorizedPayment;
+    use crate::model::VerifyIncomingPayment;
+    use crate::payment::EvmEvidenceSource;
+    use crate::payment::EvmReceiptRegistry;
+    use crate::payment::EvmRpcReceiptConfig;
+    use crate::payment::EvmRpcReceiptSource;
+    use crate::payment::ExternalSettlementProvider;
+    use crate::payment::MerchantEvidenceRecorder;
+    use crate::payment::OutboundEvidenceDependencies;
+    use crate::payment::OutboundSigner;
+    use crate::payment::OutboundSigningDependencies;
+    use crate::payment::PaymentAuthorizer;
+    use crate::payment::PaymentEvidenceRouter;
+    use crate::payment::ReconciliationConfig;
+    use crate::payment::ReconciliationEvidenceSource;
+    use crate::payment::SettlementCoordinator;
+    use crate::payment::SettlementDependencies;
+    use crate::payment::SettlementProviderRegistry;
+    use crate::protocol::PaymentProtocolFactory;
+    use crate::storage::wallet::sqlite::SqliteWalletKeyRepository;
+    use crate::storage::EventStorage;
+    use crate::storage::LedgerQuery;
+    use crate::storage::LedgerStorage;
+    use crate::storage::PageRequest;
+    use crate::storage::PaymentStorage;
+    use crate::utils::secure_material::Aes256GcmMaterialProtector;
+    use crate::utils::secure_material::SensitiveMaterialProtector;
     use alloy::providers::Provider as _;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use std::{sync::Arc, time::Duration};
@@ -1310,12 +1336,12 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     );
 
     let token = LIVE_TEMPO_PATH_USD.parse::<Address>().expect("pathUSD address");
-    let payer_key = crate::utils::crypto::generate_private_key();
-    let payer = crate::utils::crypto::address(&payer_key).expect("derive isolated payer");
+    let payer_key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let payer = crate::utils::crypto::WalletCrypto::address(&payer_key).expect("derive isolated payer");
     let payer_address = payer.parse::<Address>().expect("payer address");
     fund_live_tempo_payer(&provider, token, payer_address).await;
-    let recipient_key = crate::utils::crypto::generate_private_key();
-    let recipient = crate::utils::crypto::address(&recipient_key).expect("derive recipient");
+    let recipient_key = crate::utils::crypto::WalletCrypto::generate_private_key();
+    let recipient = crate::utils::crypto::WalletCrypto::address(&recipient_key).expect("derive recipient");
     let recipient_address = recipient.parse::<Address>().expect("recipient address");
     let asset = AssetIdentity {
         network: format!("eip155:{LIVE_TEMPO_CHAIN_ID}"),
@@ -1415,8 +1441,16 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
             .build()
             .expect("payee protocol registry"),
     );
-    let payer_scenarios = Arc::new(ScenarioHandler::new(payer_storage.clone(), payer_storage.clone()));
-    let payee_scenarios = Arc::new(ScenarioHandler::new(payee_storage.clone(), payee_storage.clone()));
+    let payer_ports = crate::storage::IStorage::ports(payer_storage.clone());
+    let payee_ports = crate::storage::IStorage::ports(payee_storage.clone());
+    let payer_scenarios = Arc::new(ScenarioHandler::new(
+        payer_ports.clients.clone(),
+        payer_ports.scenarios.clone(),
+    ));
+    let payee_scenarios = Arc::new(ScenarioHandler::new(
+        payee_ports.clients.clone(),
+        payee_ports.scenarios.clone(),
+    ));
     let protector: Arc<dyn SensitiveMaterialProtector> = Arc::new(
         Aes256GcmMaterialProtector::new(
             "live-tempo-recovery-v1",
@@ -1425,10 +1459,10 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
         .expect("recovery protector"),
     );
 
-    let payer_handler = PaymentHandler::new(
+    let payer_handler = PaymentAuthorizer::new(
         payer_scenarios.clone(),
-        payer_storage.clone(),
-        payer_storage.clone(),
+        payer_ports.policies.clone(),
+        payer_ports.payments.clone(),
         payer_protocols.clone(),
         30,
         WalletSelectionStrategy::LeastSpent,
@@ -1439,8 +1473,8 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
         SqliteWalletKeyRepository::from_config((*payer_storage).clone(), &payer_config.agentvault.key_management)
             .expect("payer custody signer"),
     );
-    let signing_handler = OutboundSigningHandler::new(OutboundSigningDependencies {
-        storage: payer_storage.clone(),
+    let signing_handler = OutboundSigner::new(OutboundSigningDependencies {
+        storage: payer_ports.signing.clone(),
         protocols: payer_protocols.clone(),
         balances: Arc::new(LiveTempoBalanceSource {
             provider: provider.clone(),
@@ -1463,14 +1497,14 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     );
     let empty_sources: Vec<(String, Arc<dyn EvmEvidenceSource>)> = Vec::new();
     let payee_handler = Arc::new(
-        SettlementHandler::new(
+        SettlementCoordinator::new(
             SettlementDependencies {
                 scenarios: payee_scenarios,
-                offers: payee_storage.clone(),
-                policies: payee_storage.clone(),
-                wallets: payee_storage.clone(),
-                payments: payee_storage.clone(),
-                events: payee_storage.clone(),
+                offers: payee_ports.offers.clone(),
+                policies: payee_ports.policies.clone(),
+                wallets: payee_ports.wallets.clone(),
+                payments: payee_ports.payments.clone(),
+                events: payee_ports.events.clone(),
                 protocols: payee_protocols,
                 providers,
                 material_protector: protector.clone(),
@@ -1511,7 +1545,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     let authorization = payer_handler
         .authorize(
             "principal:tempo-payer",
-            &crate::handler::AuthorizePayment {
+            &crate::model::AuthorizePayment {
                 scenario_id: scenario_id.to_owned(),
                 run_id: run_id.to_owned(),
                 challenge: challenge.clone(),
@@ -1615,10 +1649,10 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     );
     let receipt_registry =
         Arc::new(EvmReceiptRegistry::new([(asset.network.clone(), receipt_source)]).expect("Tempo receipt registry"));
-    let outbound = Arc::new(OutboundEvidenceHandler::new(OutboundEvidenceDependencies {
+    let outbound = Arc::new(MerchantEvidenceRecorder::new(OutboundEvidenceDependencies {
         scenarios: payer_scenarios,
-        payments: payer_storage.clone(),
-        events: payer_storage.clone(),
+        payments: payer_ports.payments.clone(),
+        events: payer_ports.events.clone(),
         protocols: payer_protocols,
         material_protector: protector,
         receipts: receipt_registry,
@@ -1645,7 +1679,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     let router: Arc<dyn ReconciliationEvidenceSource> =
         Arc::new(PaymentEvidenceRouter::new(provider_evidence, outbound));
     let job = ReconciliationJob::with_clock(
-        payer_storage.clone(),
+        payer_ports.payments.clone(),
         router,
         Arc::new(LiveTempoClock(now.saturating_add(20))),
         ReconciliationConfig {
@@ -1659,7 +1693,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     .expect("payer reconciliation job");
     let reconciliation = job.run_once().await.expect("reconcile payer MPP receipt");
     assert_eq!(reconciliation.settled, 1);
-    let payer_intent = PaymentStorage::get(payer_storage.as_ref(), &intent_id)
+    let payer_intent = PaymentStorage::get(payer_ports.payments.as_ref(), &intent_id)
         .await
         .expect("load payer intent")
         .expect("payer intent exists");
@@ -1668,7 +1702,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     assert_eq!(payer_intent.tx_hash.as_deref(), Some(transaction.as_str()));
 
     let payer_ledger = LedgerStorage::list(
-        payer_storage.as_ref(),
+        payer_ports.ledger.as_ref(),
         &LedgerQuery {
             intent_id: Some(intent_id.clone()),
             ..LedgerQuery::default()
@@ -1677,7 +1711,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     .await
     .expect("payer ledger");
     let payee_ledger = LedgerStorage::list(
-        payee_storage.as_ref(),
+        payee_ports.ledger.as_ref(),
         &LedgerQuery {
             intent_id: Some(settled.intent.id.clone()),
             ..LedgerQuery::default()
@@ -1690,7 +1724,7 @@ async fn live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers() {
     assert_eq!(payer_ledger.items[0].tx_hash.as_deref(), Some(transaction.as_str()));
     assert_eq!(payee_ledger.items[0].tx_hash.as_deref(), Some(transaction.as_str()));
     let payee_events = EventStorage::list_for_intent(
-        payee_storage.as_ref(),
+        payee_ports.events.as_ref(),
         &settled.intent.id,
         PageRequest { offset: 0, limit: 100 },
     )

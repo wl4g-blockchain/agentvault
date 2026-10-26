@@ -15,7 +15,7 @@ use crate::{
 const MAX_SECRETS_ENV_FILE_BYTES: usize = 1024 * 1024;
 
 /// Resolves sensitive field-path values without placing them in `AppConfig`.
-struct SecretReader {
+pub(crate) struct SecretReader {
     projection: Option<PathBuf>,
 }
 
@@ -170,7 +170,11 @@ impl SecretReader {
         Ok(value)
     }
 
-    fn read_ref(reference: &SecretRefConfig, description: &str, max_bytes: usize) -> Result<Zeroizing<String>> {
+    pub(crate) fn read_ref(
+        reference: &SecretRefConfig,
+        description: &str,
+        max_bytes: usize,
+    ) -> Result<Zeroizing<String>> {
         match (reference.file.trim(), reference.env.trim()) {
             (path, "") if !path.is_empty() => Self::read_private_text(path, description, max_bytes),
             ("", variable) if !variable.is_empty() => {
@@ -183,18 +187,11 @@ impl SecretReader {
     }
 }
 
-/// Reads a named secret value; the selected projection takes precedence over process env.
-pub(crate) fn read_secret_env(variable: &str, description: &str, max_bytes: usize) -> Result<Zeroizing<String>> {
-    SecretReader::from_environment().read_env(variable, description, max_bytes, |name| std::env::var_os(name))
-}
-
-/// Resolves an indirect reference without serializing secret values into configuration.
-pub(crate) fn read_secret_ref(
-    reference: &SecretRefConfig,
-    description: &str,
-    max_bytes: usize,
-) -> Result<Zeroizing<String>> {
-    SecretReader::read_ref(reference, description, max_bytes)
+impl SecretReader {
+    /// Reads a named secret value; the selected projection takes precedence over process env.
+    pub(crate) fn read_env_value(variable: &str, description: &str, max_bytes: usize) -> Result<Zeroizing<String>> {
+        SecretReader::from_environment().read_env(variable, description, max_bytes, |name| std::env::var_os(name))
+    }
 }
 
 #[cfg(test)]

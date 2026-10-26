@@ -35,7 +35,7 @@ func TestPayeeMiddlewareRejectsInvalidPaymentBeforeSettlement(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = core.Protect(context.Background(), model.PayeeOperation{
-		ScenarioID: "scenario", RunID: "run", OfferID: "offer",
+		ScenarioID: "scenario", RunID: "run", PriceID: "offer",
 		Resource: "mcp://marketpulse/realtime", Origin: "https://marketpulse.example",
 		Protocol: "x402", RequestHash: "request-hash", CredentialPayload: map[string]any{"signature": "present"},
 	})
@@ -58,7 +58,7 @@ func TestPayeeMiddlewareCreatesBoundChallenge(t *testing.T) {
 		t.Fatal(err)
 	}
 	challenge, err := core.Challenge(context.Background(), model.PayeeOperation{
-		ScenarioID: "scenario", RunID: "run", OfferID: "offer",
+		ScenarioID: "scenario", RunID: "run", PriceID: "offer",
 		Resource: "mcp://marketpulse/realtime", Origin: "https://marketpulse.example",
 		Protocol: "x402", RequestHash: "hash",
 	})

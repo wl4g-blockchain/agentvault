@@ -10,3 +10,7 @@ pub(crate) use telemetry::{inject_current_trace_context, set_span_parent_from_he
 #[cfg(test)]
 #[path = "../../tests/apm/mod_test.rs"]
 mod tests;
+
+pub mod management;
+pub use management::ManagementServer;
+pub(crate) use management::{ManagementEndpoints, ManagementState, ReadinessProbe};

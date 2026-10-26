@@ -4,12 +4,15 @@ import asyncio
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Mapping, MutableMapping
 
 from ..model import PayeeOperation, PaymentChallenge, SettledIncomingPayment
 from ..protocol import PaymentProtocol
 from ..transport import APIError
+from a2a.server.tasks import TaskStore
+from .a2a import A2APaymentCall
+
 from .payee import PayeeMiddleware, PaymentRejectedError, _event
 
 ASGIApp = Callable[
@@ -32,6 +35,7 @@ class FastPayeeRoute:
     origin: str
     protocol: str = "x402"
     mcp_tool_name: str | None = None
+    a2a_task_store: TaskStore | None = None
 
     @classmethod
     def mcp_tool(
@@ -87,6 +91,8 @@ class FastPayeeMiddleware:
             raise ValueError("payee middleware and body limit are required")
         self.app = app
         self.middleware = middleware
+        if any(route.mcp_tool_name and route.a2a_task_store for route in routes):
+            raise ValueError("MCP and A2A routes are mutually exclusive")
         self.routes = {(route.method.upper(), route.path): route for route in routes}
         self.max_body_bytes = max_body_bytes
 
@@ -132,6 +138,15 @@ class FastPayeeMiddleware:
             await self._error(send, 400, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
             return
         try:
+            operation = PayeeOperation(
+                route.scenario_id, run_id, route.offer_id, route.resource,
+                route.origin, route.protocol, self._request_hash(route.method, route.path, body),
+            )
+            if route.a2a_task_store is not None:
+                call = await self.middleware.a2a().prepare(body, operation, route.a2a_task_store, headers, scope.get("state", {}).get("a2a_context"))
+                if call is None:
+                    await self.app(scope, self._body_receiver(body), send)
+                    return
             adapter = self.middleware.protocol(route.protocol)
             http_credential = self.middleware.presented_credential(
                 route.protocol, headers
@@ -146,15 +161,10 @@ class FastPayeeMiddleware:
                 else http_credential
             )
             hash_body = call.canonical_body if call is not None else body
-            operation = PayeeOperation(
-                route.scenario_id,
-                run_id,
-                route.offer_id,
-                route.resource,
-                route.origin,
-                route.protocol,
-                self._request_hash(route.method, route.path, hash_body),
-                credential,
+            operation = replace(
+                operation,
+                request_hash=self._request_hash(route.method, route.path, hash_body),
+                credential_payload=credential,
             )
             outcome = await asyncio.to_thread(self.middleware.protect, operation)
         except PaymentRejectedError as error:
@@ -288,7 +298,8 @@ class FastPayeeMiddleware:
         rejected: bool,
     ) -> None:
         try:
-            wire = self.middleware.mcp_payment_required(challenge, rejected)
+            wire = (await self.middleware.a2a().challenge(call, challenge, rejected)
+                    if isinstance(call, A2APaymentCall) else self.middleware.mcp_payment_required(challenge, rejected))
             message: dict[str, object] = {"jsonrpc": "2.0", "id": call.id}
             if wire.result is not None:
                 message["result"] = wire.result
@@ -309,6 +320,8 @@ class FastPayeeMiddleware:
                 (b"content-type", b"application/json"),
                 (b"payment-protocol", challenge.protocol.encode("ascii")),
                 (b"payment-expires-at", str(challenge.expires_at).encode("ascii")),
+                *([(b"x-a2a-extensions", self.middleware.protocol(challenge.protocol).a2a_extension().encode("ascii"))]
+                  if isinstance(call, A2APaymentCall) and self.middleware.protocol(challenge.protocol).a2a_extension() else []),
             ],
         })
         await send({"type": "http.response.body", "body": body})
@@ -429,31 +442,34 @@ class FastPayeeMiddleware:
             message = json.loads(bodies[0].get("body", b""))
             if not isinstance(message, dict) or message.get("id") != call.id:
                 raise ValueError("paid MCP response id does not match its request")
-            result = message.get("result")
-            if result is not None and not isinstance(result, dict):
-                raise ValueError("paid MCP handler returned an invalid JSON-RPC result")
-            meta = result.get("_meta", {}) if isinstance(result, dict) else {}
-            if not isinstance(meta, dict):
-                raise ValueError("paid MCP result._meta must be an object")
-            if isinstance(result, dict):
-                protocol_name, evidence = self.middleware.mcp_merchant_evidence(meta)
-                if evidence is not None:
-                    raise ValueError(
-                        f"paid MCP handler attempted to supply {protocol_name} settlement metadata"
-                    )
-            if not 200 <= status < 300:
-                if result is None and not isinstance(message.get("error"), dict):
-                    raise ValueError("paid MCP handler must return a JSON-RPC result or error")
-                await send(starts[0])
-                await send(bodies[0])
-                return False
-            if not isinstance(result, dict):
-                raise ValueError("paid MCP handler must return a JSON-RPC result")
-            receipt = self.middleware.mcp_receipt(challenge, payment)
-            if receipt.key in meta:
-                raise ValueError("paid MCP handler attempted to supply settlement metadata")
-            meta[receipt.key] = receipt.value
-            result["_meta"] = meta
+            if isinstance(call, A2APaymentCall):
+                message = await self.middleware.a2a().receipt(call, message, challenge, payment)
+            else:
+                result = message.get("result")
+                if result is not None and not isinstance(result, dict):
+                    raise ValueError("paid MCP handler returned an invalid JSON-RPC result")
+                meta = result.get("_meta", {}) if isinstance(result, dict) else {}
+                if not isinstance(meta, dict):
+                    raise ValueError("paid MCP result._meta must be an object")
+                if isinstance(result, dict):
+                    protocol_name, evidence = self.middleware.mcp_merchant_evidence(meta)
+                    if evidence is not None:
+                        raise ValueError(
+                            f"paid MCP handler attempted to supply {protocol_name} settlement metadata"
+                        )
+                if not 200 <= status < 300:
+                    if result is None and not isinstance(message.get("error"), dict):
+                        raise ValueError("paid MCP handler must return a JSON-RPC result or error")
+                    await send(starts[0])
+                    await send(bodies[0])
+                    return False
+                if not isinstance(result, dict):
+                    raise ValueError("paid MCP handler must return a JSON-RPC result")
+                receipt = self.middleware.mcp_receipt(challenge, payment)
+                if receipt.key in meta:
+                    raise ValueError("paid MCP handler attempted to supply settlement metadata")
+                meta[receipt.key] = receipt.value
+                result["_meta"] = meta
             encoded = json.dumps(message, separators=(",", ":")).encode()
             if len(encoded) > self.max_body_bytes:
                 raise ValueError("paid MCP response exceeds configured limit")
@@ -548,7 +564,14 @@ class FastPayeeMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
-def settled_payment(scope: Mapping[str, Any]) -> SettledIncomingPayment | None:
-    state = scope.get("state")
-    value = state.get("agentvault_payment") if isinstance(state, dict) else None
-    return value if isinstance(value, SettledIncomingPayment) else None
+    @staticmethod
+    def settled_payment(scope: Mapping[str, Any]) -> SettledIncomingPayment | None:
+        state = scope.get("state")
+        value = state.get("agentvault_payment") if isinstance(state, dict) else None
+        return value if isinstance(value, SettledIncomingPayment) else None
+
+
+
+
+# Compatibility export; implementation belongs to the middleware.
+settled_payment = FastPayeeMiddleware.settled_payment

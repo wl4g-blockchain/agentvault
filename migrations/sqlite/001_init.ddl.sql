@@ -349,7 +349,7 @@ CREATE TABLE pay_policy_wallet (
 CREATE INDEX ix_pay_policy_wallet_wallet
     ON pay_policy_wallet(wallet_id, policy_id);
 
-CREATE TABLE pay_offer (
+CREATE TABLE pay_price (
     id                  TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
     scenario_id         TEXT NOT NULL REFERENCES pay_scenario(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     policy_id           TEXT NOT NULL REFERENCES pay_policy(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -388,11 +388,11 @@ CREATE TABLE pay_offer (
 -- lists alternate wire adapters for that same price and recipient; allowing a
 -- second active row would make resolve(scenario, resource, protocol)
 -- nondeterministic.
-CREATE UNIQUE INDEX uq_pay_offer_active_resource
-    ON pay_offer(scenario_id, resource)
+CREATE UNIQUE INDEX uq_pay_price_active_resource
+    ON pay_price(scenario_id, resource)
     WHERE enabled = 1;
-CREATE INDEX ix_pay_offer_scenario_enabled
-    ON pay_offer(scenario_id, enabled, created_at);
+CREATE INDEX ix_pay_price_scenario_enabled
+    ON pay_price(scenario_id, enabled, created_at);
 
 CREATE TABLE pay_intent (
     id                  TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
@@ -400,7 +400,7 @@ CREATE TABLE pay_intent (
     run_id              TEXT NOT NULL CHECK (length(trim(run_id)) > 0),
     wallet_id           TEXT REFERENCES pay_wallet(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     policy_id           TEXT REFERENCES pay_policy(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    offer_id            TEXT REFERENCES pay_offer(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    offer_id            TEXT REFERENCES pay_price(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     direction           TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
     protocol            TEXT NOT NULL CHECK (length(trim(protocol)) > 0),
     network             TEXT NOT NULL CHECK (length(trim(network)) > 0),
@@ -465,7 +465,7 @@ CREATE TABLE pay_intent (
     FOREIGN KEY (policy_id, wallet_id)
         REFERENCES pay_policy_wallet(policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     FOREIGN KEY (offer_id, scenario_id, policy_id, wallet_id)
-        REFERENCES pay_offer(id, scenario_id, policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+        REFERENCES pay_price(id, scenario_id, policy_id, wallet_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
     CHECK (
         length(settled_amount) < length(amount)
         OR (length(settled_amount) = length(amount) AND settled_amount <= amount)

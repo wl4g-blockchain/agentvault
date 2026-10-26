@@ -30,6 +30,10 @@ type GrpcVaultTransport struct {
 }
 
 func NewGrpcVaultTransport(settings config.GrpcConfig) (*GrpcVaultTransport, error) {
+	return (&GrpcVaultTransport{}).new(settings)
+}
+
+func (*GrpcVaultTransport) new(settings config.GrpcConfig) (*GrpcVaultTransport, error) {
 	settings.ApplyDefaults()
 	if err := settings.Validate(); err != nil {
 		return nil, err
@@ -70,7 +74,7 @@ func (transport *GrpcVaultTransport) Do(ctx context.Context, request TransportRe
 	if transport == nil || transport.connection == nil {
 		return TransportResponse{}, errors.New("AgentVault gRPC transport is not configured")
 	}
-	traceContext, err := newProducerTraceContext(request.Headers)
+	traceContext, err := request.producerTraceContext()
 	if err != nil {
 		return TransportResponse{}, err
 	}
@@ -94,7 +98,7 @@ func (transport *GrpcVaultTransport) Do(ctx context.Context, request TransportRe
 		requestContext,
 		"traceparent", traceContext.headers["traceparent"],
 	)
-	if tracestate := headerValue(traceContext.headers, "tracestate"); tracestate != "" {
+	if tracestate := (TransportRequest{Headers: traceContext.headers}).headerValue("tracestate"); tracestate != "" {
 		requestContext = metadata.AppendToOutgoingContext(requestContext, "tracestate", tracestate)
 	}
 	slog.Info("calling AgentVault gRPC with W3C Trace Context",

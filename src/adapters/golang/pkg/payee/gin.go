@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/gin-gonic/gin"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/protocol"
@@ -20,14 +21,15 @@ const (
 )
 
 type GinPayeeRoute struct {
-	Method     string
-	Path       string
-	ScenarioID string
-	OfferID    string
-	Resource   string
-	Origin     string
-	Protocol   string
-	MCPTool    string
+	A2ATaskStore a2asrv.TaskStore
+	Method       string
+	Path         string
+	ScenarioID   string
+	PriceID      string
+	Resource     string
+	Origin       string
+	Protocol     string
+	MCPTool      string
 }
 
 func NewMCPToolRoute(path, tool, scenarioID, offerID, resource, origin string) GinPayeeRoute {
@@ -38,7 +40,7 @@ func NewMCPToolRouteWithProtocol(
 	path, tool, scenarioID, offerID, resource, origin, protocolName string,
 ) GinPayeeRoute {
 	return GinPayeeRoute{
-		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, OfferID: offerID,
+		Method: http.MethodPost, Path: path, ScenarioID: scenarioID, PriceID: offerID,
 		Resource: resource, Origin: origin, Protocol: protocolName, MCPTool: tool,
 	}
 }
@@ -60,7 +62,7 @@ type ginReceiptResponseWriter struct {
 	rejected        bool
 }
 
-func newGinReceiptResponseWriter(
+func (GinPayeeMiddleware) newGinReceiptResponseWriter(
 	writer gin.ResponseWriter,
 	receiptHeaders map[string]string,
 	evidenceHeaders []string,
@@ -204,19 +206,23 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			return
 		}
 		if middleware.PayeeMiddleware == nil || middleware.maxBodyBytes <= 0 {
-			abort(ginContext, http.StatusInternalServerError, "PAYEE_CONFIG_INVALID", "payee middleware is not configured")
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusInternalServerError, "PAYEE_CONFIG_INVALID", "payee middleware is not configured")
 			return
 		}
 		body, err := middleware.readBody(ginContext.Request, middleware.maxBodyBytes)
 		if err != nil {
-			abort(ginContext, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", err.Error())
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", err.Error())
+			return
+		}
+		if route.MCPTool != "" && route.A2ATaskStore != nil {
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusInternalServerError, "PAYEE_CONFIG_INVALID", "MCP and A2A routes are mutually exclusive")
 			return
 		}
 		var call *mcpCall
 		if route.MCPTool != "" {
 			call, err = middleware.parseMCPCall(body, route.MCPTool, route.Protocol)
 			if err != nil {
-				abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
+				(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
 				return
 			}
 			if call == nil {
@@ -227,22 +233,35 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 				ginContext.Request.Header,
 			)
 			if credentialErr != nil {
-				abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", credentialErr.Error())
+				(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", credentialErr.Error())
 				return
 			}
 			if hasCredential {
-				abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", "MCP payment credentials must use protocol metadata, not HTTP headers")
+				(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", "MCP payment credentials must use protocol metadata, not HTTP headers")
 				return
 			}
 		}
 		runID := strings.TrimSpace(ginContext.GetHeader("X-Run-Id"))
+		if route.A2ATaskStore != nil {
+			call, err = middleware.prepareA2ACall(ginContext.Request.Context(), body, runID, model.PayeeOperation{
+				ScenarioID: route.ScenarioID, PriceID: route.PriceID, Resource: route.Resource, Origin: route.Origin, Protocol: route.Protocol,
+			}, route.A2ATaskStore, ginContext.Request.Header)
+			if err != nil {
+				(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
+				return
+			}
+			if call == nil {
+				ginContext.Next()
+				return
+			}
+		}
 		if runID == "" {
-			abort(ginContext, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_CONTEXT_REQUIRED", "x-run-id is required")
 			return
 		}
 		adapter, err := middleware.Protocol(route.Protocol)
 		if err != nil {
-			abort(ginContext, http.StatusBadGateway, "PAYMENT_PROTOCOL_UNAVAILABLE", err.Error())
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "PAYMENT_PROTOCOL_UNAVAILABLE", err.Error())
 			return
 		}
 		var payload any
@@ -255,13 +274,13 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 				route.Protocol, ginContext.Request.Header, middleware.maxBodyBytes,
 			)
 			if err != nil {
-				abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
+				(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadRequest, "PAYMENT_INVALID", err.Error())
 				return
 			}
 		}
 		outcome, err := middleware.Protect(ginContext.Request.Context(), model.PayeeOperation{
 			ScenarioID: route.ScenarioID, RunID: runID,
-			OfferID: route.OfferID, Resource: route.Resource, Origin: route.Origin,
+			PriceID: route.PriceID, Resource: route.Resource, Origin: route.Origin,
 			Protocol: route.Protocol, RequestHash: middleware.requestHash(ginContext.Request, requestBody),
 			CredentialPayload: payload,
 		})
@@ -282,7 +301,7 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			} else if errors.Is(err, ErrInvalidPayment) {
 				status, code = http.StatusPaymentRequired, "PAYMENT_INVALID"
 			}
-			abort(ginContext, status, code, err.Error())
+			(GinPayeeMiddleware{}).abort(ginContext, status, code, err.Error())
 			return
 		}
 		if outcome.Outcome == "payment_required" && outcome.Challenge != nil {
@@ -294,7 +313,7 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 			return
 		}
 		if outcome.Outcome != "authorized" || outcome.Payment == nil {
-			abort(ginContext, http.StatusBadGateway, "SETTLEMENT_INVALID", "AgentVault returned an invalid protection outcome")
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "SETTLEMENT_INVALID", "AgentVault returned an invalid protection outcome")
 			return
 		}
 		ginContext.Set(settlementContextKey, outcome.Payment)
@@ -309,11 +328,11 @@ func (middleware *GinPayeeMiddleware) Handler() gin.HandlerFunc {
 		}
 		receipt, err := adapter.Receipt(outcome.Payment)
 		if err != nil {
-			abort(ginContext, http.StatusBadGateway, "SETTLEMENT_EVIDENCE_INVALID", err.Error())
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "SETTLEMENT_EVIDENCE_INVALID", err.Error())
 			return
 		}
 		original := ginContext.Writer
-		receiptWriter := newGinReceiptResponseWriter(
+		receiptWriter := (GinPayeeMiddleware{}).newGinReceiptResponseWriter(
 			original, receipt.Headers, middleware.MerchantEvidenceHeaderNames(),
 		)
 		ginContext.Writer = receiptWriter
@@ -342,8 +361,18 @@ func (middleware *GinPayeeMiddleware) writeMCPChallenge(
 ) {
 	body, err := middleware.encodeMCPPaymentRequired(call, challenge, rejected)
 	if err != nil {
-		abort(ginContext, http.StatusBadGateway, "CHALLENGE_INVALID", err.Error())
+		(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "CHALLENGE_INVALID", err.Error())
 		return
+	}
+	if call.a2a != nil {
+		if err := middleware.persistA2ATask(call, body); err != nil {
+			(GinPayeeMiddleware{}).abort(ginContext, 502, "PAYMENT_TASK_INVALID", err.Error())
+			return
+		}
+		adapter, _ := middleware.protocols.A2A(call.a2a.protocol)
+		if extension := adapter.A2AExtension(); extension != "" {
+			ginContext.Header("X-A2A-Extensions", extension)
+		}
 	}
 	ginContext.Header("Payment-Protocol", challenge.Protocol)
 	ginContext.Header("Payment-Expires-At", fmt.Sprint(challenge.ExpiresAt))
@@ -364,18 +393,23 @@ func (middleware *GinPayeeMiddleware) serveMCPResult(
 	ginContext.Writer = capture
 	ginContext.Next()
 	ginContext.Writer = original
+	// a2a-go's non-streaming handler leaves Content-Type unset. Its result is
+	// still bounded and validated against the JSON-RPC request and Task below.
+	if call.a2a != nil && capture.header.Get("Content-Type") == "" {
+		capture.header.Set("Content-Type", "application/json")
+	}
 	if capture.err != nil ||
 		!strings.HasPrefix(strings.ToLower(capture.header.Get("Content-Type")), "application/json") {
-		abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", "paid MCP handlers must return a bounded, non-streaming application/json result")
+		(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", "paid MCP handlers must return a bounded, non-streaming application/json result")
 		return false
 	}
 	if middleware.hasMerchantEvidenceHeader(capture.header) {
-		abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", "paid MCP handler attempted to supply settlement evidence")
+		(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", "paid MCP handler attempted to supply settlement evidence")
 		return false
 	}
 	if capture.status < http.StatusOK || capture.status >= http.StatusMultipleChoices {
 		if _, _, err := middleware.decodeMCPResponse(call, capture.body.Bytes(), false); err != nil {
-			abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", err.Error())
+			(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "MCP_RESPONSE_INVALID", err.Error())
 			return false
 		}
 		for name, values := range capture.header {
@@ -390,7 +424,7 @@ func (middleware *GinPayeeMiddleware) serveMCPResult(
 	}
 	body, err := middleware.injectMCPReceipt(call, challenge, payment, capture.body.Bytes())
 	if err != nil {
-		abort(ginContext, http.StatusBadGateway, "SETTLEMENT_EVIDENCE_INVALID", err.Error())
+		(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "SETTLEMENT_EVIDENCE_INVALID", err.Error())
 		return false
 	}
 	for name, values := range capture.header {
@@ -411,7 +445,7 @@ func (middleware *GinPayeeMiddleware) serveMCPResult(
 func (middleware *GinPayeeMiddleware) writeChallenge(ginContext *gin.Context, adapter protocol.Adapter, challenge *model.PaymentChallenge) {
 	response, err := adapter.Challenge(challenge)
 	if err != nil {
-		abort(ginContext, http.StatusBadGateway, "CHALLENGE_INVALID", err.Error())
+		(GinPayeeMiddleware{}).abort(ginContext, http.StatusBadGateway, "CHALLENGE_INVALID", err.Error())
 		return
 	}
 	for name, value := range response.Headers {
@@ -423,6 +457,6 @@ func (middleware *GinPayeeMiddleware) writeChallenge(ginContext *gin.Context, ad
 	ginContext.Abort()
 }
 
-func abort(ginContext *gin.Context, status int, code, message string) {
+func (GinPayeeMiddleware) abort(ginContext *gin.Context, status int, code, message string) {
 	ginContext.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }

@@ -1,19 +1,12 @@
-//! Inbound transport adapters for the shared payment application service.
-
+//! Inbound API route registration and SDK transport listeners.
+pub mod api;
 mod grpc;
-pub mod http;
-#[cfg(unix)]
-mod local;
-mod management;
 mod mqtt;
-
+pub mod principal_context;
+pub use api::ApiController;
 pub use grpc::GrpcController;
-#[cfg(unix)]
-pub use local::LocalController;
-pub use management::ManagementServer;
-pub(crate) use management::ReadinessProbe;
 pub use mqtt::MqttController;
-
+pub use principal_context::{CallerPrincipal, PrincipalContext};
 #[cfg(test)]
 #[path = "../../tests/controller/mod_test.rs"]
 mod tests;

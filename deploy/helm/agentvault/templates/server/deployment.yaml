@@ -87,7 +87,6 @@ spec:
               mountPath: /etc/agentvault-import/{{ $backend.resourceImport.key }}
               subPath: {{ $backend.resourceImport.key | quote }}
               readOnly: true
-            - { name: runtime, mountPath: /run/agentvault }
             {{- if or (eq $provider "gcp") (eq $provider "aws") }}
             - name: csi-secrets
               mountPath: {{ include "agentvault.csiSecretsMountPath" . }}
@@ -132,26 +131,26 @@ spec:
           readinessProbe: { httpGet: { path: /readyz, port: management }, periodSeconds: 5, timeoutSeconds: 2 }
           resources:
             {{- toYaml $backend.resources | nindent 12 }}
+          {{- if or $runtimeConfig (eq $provider "gcp") (eq $provider "aws") }}
           volumeMounts:
             {{- if $runtimeConfig }}
             - { name: config, mountPath: /etc/agentvault, readOnly: true }
             {{- end }}
-            - { name: runtime, mountPath: /run/agentvault }
             {{- if or (eq $provider "gcp") (eq $provider "aws") }}
             - name: csi-secrets
               mountPath: {{ include "agentvault.csiSecretsMountPath" . }}
               readOnly: true
             {{- end }}
+          {{- end }}
         {{- with $backend.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- if or $runtimeConfig $backend.resourceImport.enabled (eq $provider "gcp") (eq $provider "aws") $backend.extraVolumes }}
       volumes:
         {{- if $runtimeConfig }}
         - name: config
           configMap: { name: {{ include "agentvault.fullname" . }}-config }
         {{- end }}
-        - name: runtime
-          emptyDir: {}
         {{- if $backend.resourceImport.enabled }}
         - name: resource-import
           configMap:
@@ -171,6 +170,7 @@ spec:
         {{- with $backend.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- end }}
       {{- with $backend.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}

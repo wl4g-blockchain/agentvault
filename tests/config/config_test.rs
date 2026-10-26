@@ -141,6 +141,21 @@ fn rejects_listener_address_collisions() {
         config.validate_for_serve(),
         Err(Error::Config(message)) if message.contains("listeners")
     ));
+    for host in ["0.0.0.0", "::"] {
+        config.server.host = host.parse().unwrap();
+        config.agentvault.transport.grpc.host = "127.0.0.1".parse().unwrap();
+        assert!(matches!(
+            config.validate_for_serve(),
+            Err(Error::Config(message)) if message.contains("listeners")
+        ));
+    }
+    config.agentvault.transport.grpc.enabled = false;
+    config.mgmt.host = "127.0.0.1".parse().unwrap();
+    config.mgmt.port = config.server.port;
+    assert!(matches!(
+        config.validate_for_serve(),
+        Err(Error::Config(message)) if message.contains("listeners")
+    ));
 }
 
 #[test]
@@ -550,7 +565,7 @@ fn rejects_remote_plain_http_provider() {
     };
 
     assert!(matches!(
-        validate_external_provider("agentvault.payee.x402.facilitator", &provider),
+        ConfigValidation::validate_external_provider("agentvault.payee.x402.facilitator", &provider),
         Err(Error::Config(message)) if message.contains("HTTPS")
     ));
 }
@@ -564,7 +579,7 @@ fn permits_explicit_loopback_development_provider() {
         ..ExternalProviderConfig::default()
     };
 
-    validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
+    ConfigValidation::validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
 }
 
 #[test]
@@ -572,8 +587,23 @@ fn trace_context_headers_are_transport_owned() {
     for name in ["traceparent", "tracestate"] {
         let headers = BTreeMap::from([(name.to_owned(), SecretHeaderConfig::default())]);
         assert!(matches!(
-            validate_secret_headers("agentvault.chains.test.rpc", &headers),
+            ConfigValidation::validate_secret_headers("agentvault.chains.test.rpc", &headers),
             Err(Error::Config(message)) if message.contains("unsafe secret header")
         ));
     }
+}
+
+#[test]
+fn removed_local_listener_environment_cannot_silently_create_a_ghost_transport() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(file.path(), "{}").unwrap();
+    let error = AppConfig::load_with_environment(
+        file.path(),
+        std::collections::HashMap::from([(
+            "AGENTVAULT__AGENTVAULT__TRANSPORT__LOCAL__ENABLED".to_owned(),
+            "true".to_owned(),
+        )]),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("local"));
 }

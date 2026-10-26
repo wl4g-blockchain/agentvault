@@ -155,7 +155,7 @@ jobs:
           make fmt-check
           make lint
           CARGO_BUILD_JOBS=4 cargo test --all-targets --locked
-          cargo test --locked --lib handler::wallet_handler::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
+          cargo test --locked --lib payment::wallet_import::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
 
       - name: Verify Rust SDK
         env:
@@ -204,9 +204,11 @@ jobs:
           npm run build
 
       - name: Verify E2E source and deployment contracts
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
           python3 use-cases/marketpulse-feed-subscription/e2e/runner.py run \
-            --scenario structure --scenario infrastructure --cleanup-after-run
+            --scenario structure --scenario infrastructure --scenario a2a --cleanup-after-run
 
       - name: Package dirty Helm chart
         env:

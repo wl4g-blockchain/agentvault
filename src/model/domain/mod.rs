@@ -6,9 +6,9 @@ mod approval;
 mod client;
 mod event;
 mod ledger;
-mod offer;
 mod payment;
 mod policy;
+mod price;
 mod receipt;
 mod scenario;
 mod wallet;
@@ -16,13 +16,11 @@ mod wallet;
 pub use approval::{ApprovalRequest, ApprovalStatus, PaymentScenarioApprover};
 pub use client::PaymentClient;
 pub use event::{PaymentEvent, PaymentEventType};
-pub use ledger::{settlement_posting_key, LedgerEntryType, PaymentLedgerEntry};
-pub(crate) use ledger::{
-    MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS, MAX_SETTLEMENT_EFFECTIVE_TIME_PAST_SKEW_SECONDS,
-};
-pub use offer::PaymentOffer;
+pub(crate) use ledger::MAX_SETTLEMENT_EFFECTIVE_TIME_FUTURE_SKEW_SECONDS;
+pub use ledger::{LedgerEntryType, PaymentLedgerEntry};
 pub use payment::{PaymentIntent, PaymentStatus, ReservationStatus};
 pub use policy::{PaymentPolicy, PaymentPolicyLimits};
+pub use price::PaymentPrice;
 pub use receipt::PaymentReceipt;
 pub use scenario::PaymentScenario;
 pub use wallet::Wallet;
@@ -30,3 +28,6 @@ pub use wallet::Wallet;
 #[cfg(test)]
 #[path = "../../../tests/model/domain/mod_test.rs"]
 mod tests;
+
+/// Compatibility name for existing callers; pricing is stored by `PaymentPrice`.
+pub type PaymentPrice = PaymentPrice;

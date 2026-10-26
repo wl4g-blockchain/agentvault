@@ -242,3 +242,63 @@ func readMCPFixture(t *testing.T) map[string]any {
 	}
 	return fixture
 }
+
+func TestSharedA2AContract(t *testing.T) {
+	raw, err := os.ReadFile("../../../tests/payment_protocol_a2a.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Protocols map[string]map[string]map[string]any `json:"protocols"`
+		Matrix    []map[string]string                  `json:"matrix"`
+	}
+	if err = json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := protocol.NewPaymentProtocolFactory().Create([]string{"x402", "mpp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]bool{}
+	for _, transport := range []string{"grpc", "mqtt"} {
+		for _, name := range []string{"x402", "mpp"} {
+			for _, role := range []string{"payer", "payee"} {
+				expected[transport+"/"+name+"/"+role] = true
+			}
+		}
+	}
+	if len(fixture.Matrix) != 8 {
+		t.Fatal("incomplete fixture matrix")
+	}
+	for _, row := range fixture.Matrix {
+		key := row["transport"] + "/" + row["protocol"] + "/" + row["role"]
+		if !expected[key] {
+			t.Fatal("duplicate/unknown row", key)
+		}
+		delete(expected, key)
+	}
+	if len(expected) != 0 {
+		t.Fatal("missing rows")
+	}
+	for name, entry := range fixture.Protocols {
+		adapter, err := registry.A2A(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, err := adapter.A2AChallenge(entry["challenge_response"], 65536); err != nil || value == nil {
+			t.Fatal(name, "challenge", err)
+		}
+		if selected, value, err := registry.PresentedA2ACredential(entry["credential_request"], 65536); err != nil || value == nil || selected != name {
+			t.Fatal(name, "credential", err)
+		}
+		if value, err := adapter.A2AMerchantEvidence(entry["settled_response"], 65536); err != nil || value == nil {
+			t.Fatal(name, "receipt", err)
+		}
+		if err = registry.StripA2ACredentials(entry["credential_request"]); err != nil {
+			t.Fatal(err)
+		}
+		if _, value, err := registry.PresentedA2ACredential(entry["credential_request"], 65536); err != nil || value != nil {
+			t.Fatal("credential not stripped", err)
+		}
+	}
+}

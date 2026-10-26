@@ -8,7 +8,7 @@ env:
 # A native sidecar init container becomes ready before the one-shot payer
 # starts, so its loopback-only Vault transports cannot race Envoy startup.
 initContainers:
-  - name: loopback-bridge
+  - name: local-envoy-cm
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
     imagePullPolicy: IfNotPresent
     restartPolicy: Always
@@ -26,8 +26,8 @@ initContainers:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { cpu: 100m, memory: 64Mi }
     volumeMounts:
-      - { name: loopback-bridge-config, mountPath: /etc/envoy, readOnly: true }
+      - { name: local-envoy-cm-config, mountPath: /etc/envoy, readOnly: true }
 
 extraVolumes:
-  - name: loopback-bridge-config
-    configMap: { name: loopback-bridge }
+  - name: local-envoy-cm-config
+    configMap: { name: local-envoy-cm }

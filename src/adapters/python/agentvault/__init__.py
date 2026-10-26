@@ -27,7 +27,7 @@ from .model import (
     PaymentCredential,
     PaymentDirection,
     PaymentIntent,
-    PaymentOffer,
+    PaymentPrice,
     PaymentReceipt,
     PaymentRequired,
     ProtocolEvidence,
@@ -37,7 +37,7 @@ from .model import (
     ReportOutboundResponseRequest,
     ReportOutboundResponseResponse,
     ReservationStatus,
-    ResolveOfferRequest,
+    ResolvePriceRequest,
     SettlePaymentRequest,
     SettledIncomingPayment,
     SubmitApprovalDecisionRequest,
@@ -45,6 +45,9 @@ from .model import (
 )
 from .payee import FastPayeeMiddleware, FastPayeeRoute, PayeeMiddleware, StandardPayeeMiddleware, settled_payment
 from .payer import HttpxPayerMiddleware, PayerMiddleware
+from .model.a2a import A2ACall
+from .payer.a2a import A2APayerMiddleware
+from .payee.a2a import A2APayeeMiddleware, A2APaymentCall
 from .protocol import MppAdapter, PaymentProtocol, PaymentProtocolFactory, ProtocolRegistry, X402Adapter
 from .transport import (
     APIError, AsyncVaultTransport, GrpcVaultTransport, MqttVaultTransport,
