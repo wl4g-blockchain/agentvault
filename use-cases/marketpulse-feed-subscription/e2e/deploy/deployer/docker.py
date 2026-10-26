@@ -17,16 +17,12 @@ from common.context import VerificationContext
 from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
 from common.project import CONFIG_ROOT, E2E_ROOT, REPOSITORY_ROOT
-from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
+from common.sdk_matrix import TRANSPORTS, SdkMatrixJournal, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
 
 
 LOGGER = logging.getLogger("agentvault.e2e.runner.deployer")
-MATRIX_REPORTS = frozenset({
-    "s20_full.md", "s21_payer_signing.md", "s22_payee_settlement.md",
-    "s23_balance_sync.md", "s24_gateway_balance.md",
-})
 PROJECT = "agentvault-e2e"
 COMPOSE_FILE = E2E_ROOT / "docker-compose.yaml"
 RUNTIME_ROOT = E2E_ROOT / "reports" / ".runtime"
@@ -115,48 +111,6 @@ BUILD_PROXY_PREFIXES = (
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 EVM_ADDRESS_PATTERN = re.compile(r"(?im)^\s*(0x[0-9a-f]{40})\s*$")
 UINT_OUTPUT_PATTERN = re.compile(r"(?m)^\s*([0-9]+)(?:\s+\[[^\n]*\])?\s*$")
-
-
-def _load_matrix_checkpoint(target: Path, name: str) -> dict[str, str] | None:
-    if not target.is_file():
-        return None
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"invalid matrix checkpoint {target}: {error}") from error
-    if payload.get("case") != name:
-        raise RuntimeError(f"matrix checkpoint identity mismatch: {target}")
-    outputs = payload.get("reports")
-    if not isinstance(outputs, dict) or not MATRIX_REPORTS.issubset(outputs):
-        raise RuntimeError(f"matrix checkpoint evidence is incomplete: {target}")
-    if any(not isinstance(outputs[key], str) or not outputs[key].strip() for key in MATRIX_REPORTS):
-        raise RuntimeError(f"matrix checkpoint evidence is empty: {target}")
-    return {str(key): str(value) for key, value in outputs.items()}
-
-
-def _ensure_matrix_plan(target: Path, scope: str) -> dict[str, Any]:
-    plan = {
-        "scope": scope,
-        "languages": list(matrix_languages(scope)),
-        "transports": list(TRANSPORTS),
-        "cases": [case.name for case in matrix_cases(scope)],
-    }
-    if target.is_file():
-        try:
-            stored = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"invalid matrix plan {target}: {error}") from error
-        if stored != plan:
-            raise RuntimeError(
-                f"matrix scope does not match the immutable resume plan: "
-                f"requested={scope}, stored={stored.get('scope') if isinstance(stored, dict) else 'invalid'}"
-            )
-        return plan
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(".tmp")
-    temporary.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(target)
-    return plan
 
 
 COMPOSE_PROVIDER_PREFIX = ">>>> Executing external compose provider "
@@ -1274,6 +1228,7 @@ class DockerE2EDeployer(E2EDeployer):
         )
         directory.mkdir(parents=True, exist_ok=True)
         payload = {
+            "backend": self.backend,
             "payer_language": evidence.payer_language,
             "payee_language": evidence.payee_language,
             "transport": evidence.transport,
@@ -1365,6 +1320,7 @@ class DockerE2EDeployer(E2EDeployer):
                 ),
                 runtime={"facilitator": self._facilitator_capabilities()},
             )
+            self._persist_full_evidence(evidence)
             from verifier.payment import s21_payer_signing, s22_payee_settlement, s23_balance_sync, s24_gateway_balance
 
             reports = {
@@ -1377,7 +1333,6 @@ class DockerE2EDeployer(E2EDeployer):
                 "s23_balance_sync.md": s23_balance_sync.verify_evidence(evidence, balance_sync),
                 "s24_gateway_balance.md": s24_gateway_balance.verify_evidence(evidence),
             }
-            self._persist_full_evidence(evidence)
             return reports
         except BaseException:
             self._diagnostics(payer_language, payee_language)
@@ -1508,10 +1463,7 @@ class DockerE2EDeployer(E2EDeployer):
         languages = matrix_languages(scope)
         selected_cases = matrix_cases(scope)
         total = len(selected_cases)
-        _ensure_matrix_plan(
-            self.context.report_root / "payment" / "matrix-plan.json",
-            scope,
-        )
+        journal = SdkMatrixJournal(self.context.report_root / "payment", scope, self.backend)
         progress_path = RUNTIME_ROOT / "matrix-progress.log"
         progress_path.write_text(f"matrix scope={scope} 0/{total} initialized\n", encoding="utf-8")
         progress_lock = threading.Lock()
@@ -1523,21 +1475,6 @@ class DockerE2EDeployer(E2EDeployer):
                 with progress_path.open("a", encoding="utf-8") as stream:
                     stream.write(message + "\n")
 
-        def checkpoint(case_number: int, name: str, outputs: dict[str, str]) -> None:
-            root = self.context.report_root / "payment" / "matrix-cases"
-            root.mkdir(parents=True, exist_ok=True)
-            target = root / f"case-{case_number:02d}.json"
-            temporary = target.with_suffix(".tmp")
-            temporary.write_text(
-                json.dumps({"case": name, "reports": outputs}, ensure_ascii=False, sort_keys=True),
-                encoding="utf-8",
-            )
-            temporary.replace(target)
-
-        def restore_checkpoint(case_number: int, name: str) -> dict[str, str] | None:
-            target = self.context.report_root / "payment" / "matrix-cases" / f"case-{case_number:02d}.json"
-            return _load_matrix_checkpoint(target, name)
-
         cases = [
             (case_number, case.transport, case.payer, case.payee)
             for case_number, case in enumerate(selected_cases, 1)
@@ -1546,7 +1483,7 @@ class DockerE2EDeployer(E2EDeployer):
         pending: list[tuple[int, str, str, str]] = []
         for case_number, transport, payer, payee in cases:
             name = f"payer={payer} payee={payee} transport={transport}"
-            outputs = restore_checkpoint(case_number, name)
+            outputs = journal.load(case_number, name)
             if outputs is None:
                 pending.append((case_number, transport, payer, payee))
             else:
@@ -1597,7 +1534,7 @@ class DockerE2EDeployer(E2EDeployer):
                 name = f"payer={payer} payee={payee} transport={transport}"
                 try:
                     outputs = case.full(payer, payee, clean_start=False, render_config=False)
-                    checkpoint(case_number, name, outputs)
+                    journal.save(case_number, name, outputs)
                     completed.append((case_number, name, outputs))
                 except BaseException as error:
                     stop.set()

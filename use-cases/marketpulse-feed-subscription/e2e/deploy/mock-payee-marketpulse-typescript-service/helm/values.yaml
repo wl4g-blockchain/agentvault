@@ -49,6 +49,7 @@ config:
   content: |
     
 persistence:
+  existingClaim: ""
   enabled: true
   mountPath: "/var/lib/marketpulse"
 resources:

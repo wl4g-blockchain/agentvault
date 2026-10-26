@@ -9,6 +9,7 @@ logs, and PostgreSQL access.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+import base64
 from dataclasses import dataclass, replace
 import json
 import logging
@@ -18,6 +19,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -26,7 +28,7 @@ from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
 from common.project import CONFIG_ROOT, E2E_ROOT, REPOSITORY_ROOT
 from common.resource_import import ConsoleResourceFixture
-from common.sdk_matrix import TRANSPORTS, matrix_cases, matrix_languages
+from common.sdk_matrix import TRANSPORTS, SdkMatrixJournal, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
 from .docker import (
@@ -45,9 +47,7 @@ from .docker import (
     TOKEN_CONTRACT,
     DockerE2EDeployer,
     _agentvault_build_targets,
-    _ensure_matrix_plan,
     _inherit_build_proxy_environment,
-    _load_matrix_checkpoint,
 )
 
 
@@ -66,6 +66,8 @@ SHARED_KUBERNETES_MANIFESTS = (
 )
 NAMESPACE_PREFIX = "e2e-agentvault-"
 NAMESPACE_SELECTOR = "app.kubernetes.io/part-of=agentvault-e2e"
+BUSINESS_EVIDENCE_LABEL = "agentvault.io/e2e-business-evidence"
+BUSINESS_EVIDENCE_SELECTOR = f"{NAMESPACE_SELECTOR},{BUSINESS_EVIDENCE_LABEL}=true"
 INSTANCE_LABEL = "app.kubernetes.io/instance"
 FINALIZER_PATCH = '{"metadata":{"finalizers":[]}}'
 DEFAULT_KUBECONFIG = Path("/etc/rancher/k3s/k3s.yaml")
@@ -190,8 +192,10 @@ class KubernetesE2ECleaner:
             if retry.returncode != 0 and release in self._releases(namespaces):
                 output.extend(self._remove_helm_records(release))
 
+        output.extend(self._remove_business_evidence(namespaces, "jobs"))
         self._wait_for_pods(namespaces)
         output.extend(self._recover_remaining_pods(namespaces))
+        output.extend(self._remove_business_evidence(namespaces, "persistentvolumeclaims"))
 
         remaining_releases = self._releases(namespaces)
         remaining_pods = self._pods(namespaces)
@@ -201,6 +205,26 @@ class KubernetesE2ECleaner:
                 f"{remaining_releases} and pods {remaining_pods}"
             )
         return "\n".join(part.strip() for part in output if part.strip())
+
+    def _remove_business_evidence(self, namespaces: tuple[str, ...], kind: str) -> list[str]:
+        if kind not in {"jobs", "persistentvolumeclaims"} or not set(namespaces).issubset(self._declared_namespaces()):
+            raise ValueError("business evidence cleanup must remain inside declared E2E namespaces")
+        output = []
+        for namespace in namespaces:
+            result = self._kubectl_command([
+                "delete", kind, "--namespace", namespace, "--selector", BUSINESS_EVIDENCE_SELECTOR,
+                "--ignore-not-found", "--wait=true", "--timeout=60s",
+            ], timeout_seconds=70)
+            if result.returncode != 0:
+                raise RuntimeError(f"could not remove owned business evidence {namespace}/{kind}: {result.stdout}")
+            output.append(result.stdout)
+            remaining = self._kubectl_command([
+                "get", kind, "--namespace", namespace, "--selector", BUSINESS_EVIDENCE_SELECTOR,
+                "--ignore-not-found", "--output=name",
+            ])
+            if remaining.returncode != 0 or remaining.stdout.strip():
+                raise RuntimeError(f"owned business evidence remains in {namespace}/{kind}: {remaining.stdout}")
+        return output
 
     def _target_namespaces(self) -> tuple[str, ...]:
         declared = self._declared_namespaces()
@@ -494,7 +518,11 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             "E2E_AGENTVAULT_RUNTIME_IMAGE",
             KUBERNETES_AGENTVAULT_RUNTIME_IMAGE,
         )
-        for key, image in LOCAL_IMAGES.items():
+        self.images = {
+            key: self.environment.get(COMPOSE_IMAGE_ENV[key], image)
+            for key, image in LOCAL_IMAGES.items()
+        }
+        for key, image in self.images.items():
             self.environment[COMPOSE_IMAGE_ENV[key]] = image
         self.environment.setdefault("COMPOSE_BAKE", "false")
         self.agentvault_config = RUNTIME_ROOT / "agentvault-kubernetes.yaml"
@@ -613,7 +641,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
     def cleanup_images(self) -> str:
         removed: list[str] = []
         cluster_images = self._cluster_images()
-        for reference in sorted(set(LOCAL_IMAGES.values())):
+        for reference in sorted(set(LOCAL_IMAGES.values()) & set(self.images.values())):
             if reference in cluster_images:
                 completed = execute(
                     [
@@ -666,7 +694,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 build_args.append("--pull")
             self._run([*build_args, *targets], self.context.timeout_seconds)
         for key in keys:
-            self._ensure_cluster_image(LOCAL_IMAGES[key])
+            self._ensure_cluster_image(self.images[key])
 
     def _build_matrix_images(self, languages: tuple[str, ...]) -> None:
         if not self.context.skip_build:
@@ -696,21 +724,24 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             *(f"payer-{item}" for item in languages),
         )
         for key in keys:
-            self._ensure_cluster_image(LOCAL_IMAGES[key])
+            self._ensure_cluster_image(self.images[key])
 
     def _cluster_images(self) -> set[str]:
         output = self._run(["sudo", "-n", "k3s", "ctr", "-n", "k8s.io", "images", "list", "-q"], 60)
         return {line.strip() for line in output.splitlines() if line.strip()}
 
     def _ensure_cluster_image(self, reference: str) -> None:
-        if reference in self._cluster_images():
-            return
-        inspect = execute([*self.docker, "image", "inspect", reference], E2E_ROOT, self.environment, 30)
+        inspect = execute([*self.docker, "image", "inspect", "--format={{.Id}}", reference], E2E_ROOT, self.environment, 30)
         if inspect.returncode != 0:
             raise RuntimeError(
-                f"Kubernetes image {reference} is absent from both the cluster and local image engine; "
+                f"Kubernetes image {reference} is absent from the local source-image engine; "
                 "rerun without --skip-build"
             )
+        image_id = inspect.stdout.strip().removeprefix("sha256:")
+        if not re.fullmatch(r"[a-f0-9]{64}", image_id):
+            raise RuntimeError(f"invalid source image ID for {reference}")
+        if self._cluster_image_id(reference) == image_id:
+            return
         exporter = subprocess.Popen(
             [*self.docker, "save", reference],
             cwd=E2E_ROOT,
@@ -736,6 +767,16 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 f"export={exporter.returncode} import={importer.returncode}\n"
                 f"{exporter_stderr[-2048:]}\n{importer_output[-2048:]}"
             )
+        if self._cluster_image_id(reference) != image_id:
+            raise RuntimeError(f"imported Kubernetes image does not match the source image ID: {reference}")
+
+    def _cluster_image_id(self, reference: str) -> str | None:
+        result = execute(["sudo", "-n", "k3s", "crictl", "inspecti", reference], E2E_ROOT, self.environment, 30)
+        if result.returncode != 0:
+            return None
+        value = json.loads(result.stdout).get("status", {}).get("id", "")
+        image_id = str(value).removeprefix("sha256:")
+        return image_id if re.fullmatch(r"[a-f0-9]{64}", image_id) else None
 
     def _apply_namespaces(self) -> None:
         self._kubectl("apply", "--filename", str(NAMESPACE_MANIFEST))
@@ -936,13 +977,36 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 PAYMENT_NAMESPACE,
             )
 
+    def _image_values(self, key: str, prefix: str = "image") -> dict[str, str]:
+        reference = self.images[key]
+        repository, separator, tag = reference.rpartition(":")
+        if not separator or not repository or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", tag):
+            raise ValueError(f"Kubernetes E2E image must have an explicit tag: {reference}")
+        return {f"{prefix}.repository": repository, f"{prefix}.tag": tag, f"{prefix}.pullPolicy": "Never"}
+
+    @staticmethod
+    def _business_claim(role: str, language: str) -> str:
+        if role not in {"payer", "payee"} or language not in LANGUAGES:
+            raise ValueError("invalid business evidence owner")
+        return f"business-{role}-{language}"
+
+    def _apply_business_claims(self, payer: str, payee: str) -> None:
+        for role, language, namespace in (("payer", payer, PAYER_NAMESPACE), ("payee", payee, PAYEE_NAMESPACE)):
+            self._apply_document({
+                "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                "metadata": {"name": self._business_claim(role, language), "namespace": namespace,
+                    "labels": {"app.kubernetes.io/part-of": "agentvault-e2e", BUSINESS_EVIDENCE_LABEL: "true"}},
+                "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "64Mi"}}},
+            })
+
     def _install_agentvault(self) -> None:
-        self._ensure_cluster_image(LOCAL_IMAGES["agentvault"])
+        self._ensure_cluster_image(self.images["agentvault"])
         self._helm_install(
             "agentvault",
             AGENTVAULT_CHART,
             AGENTVAULT_NAMESPACE,
             values=(AGENTVAULT_VALUES,),
+            set_strings=self._image_values("agentvault", "agentvault.backend.image"),
         )
 
     def _payee_chart(self, language: str) -> Path:
@@ -960,7 +1024,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         return f"quantstream-{LANGUAGE_CHART_NAMES[language]}"
 
     def _install_payee(self, language: str) -> None:
-        self._ensure_cluster_image(LOCAL_IMAGES[f"payee-{language}"])
+        self._ensure_cluster_image(self.images[f"payee-{language}"])
         name = self._payee_name(language)
         fqdn = f"{name}.{PAYEE_NAMESPACE}.svc.cluster.local"
         chart = self._payee_chart(language)
@@ -970,6 +1034,8 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             PAYEE_NAMESPACE,
             values=self._shared_overrides_for_chart(chart),
             set_strings={
+                **self._image_values(f"payee-{language}"),
+                "persistence.existingClaim": self._business_claim("payee", language),
                 "env.AGENTVAULT_TRANSPORT": self.context.transport,
                 "env.AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
                 "env.MARKETPULSE_RESOURCE_URL": f"http://{fqdn}:8081/mcp",
@@ -978,13 +1044,14 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         )
 
     def _install_admin_ui(self, payer: str) -> None:
-        self._ensure_cluster_image(LOCAL_IMAGES["admin-ui"])
+        self._ensure_cluster_image(self.images["admin-ui"])
         identity = payer_identity(payer)
         self._helm_install(
             "quantstream-ui",
             self._component_chart("mock-payer-quantstream-ui"),
             PAYER_NAMESPACE,
             set_strings={
+                **self._image_values("admin-ui"),
                 "env.QUANTSTREAM_CLIENT_ID": identity.client_id,
                 "env.QUANTSTREAM_SCENARIO_ID": identity.scenario_id,
                 "env.QUANTSTREAM_APPROVER_PRINCIPAL": identity.approver_principal,
@@ -1229,35 +1296,61 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             raise RuntimeError(f"expected {len(addresses)} Kubernetes token balances, got {len(values)}")
         return dict(zip(addresses, values, strict=True))
 
-    def _audit(self, payer: str, payee: str) -> dict[str, Any]:
-        del payee
-        identity = payer_identity(payer)
-        output = self._sql(
-            payer,
-            "",
-            "SELECT run_id,"
-            "max(CASE WHEN direction='outbound' THEN id END),"
-            "max(CASE WHEN direction='inbound' THEN id END) "
-            "FROM pay_intent WHERE status='settled' AND ("
-            f"(direction='outbound' AND scenario_id='{identity.scenario_id}') OR "
-            "(direction='inbound' AND scenario_id='scenario-marketpulse-feed')) "
-            "GROUP BY run_id HAVING count(*) FILTER (WHERE direction='outbound')=1 "
-            "AND count(*) FILTER (WHERE direction='inbound')=1 ORDER BY min(created_at);",
+    def _snapshot_business_database(self, role: str, language: str, directory: Path) -> None:
+        namespace = PAYER_NAMESPACE if role == "payer" else PAYEE_NAMESPACE
+        name = f"snapshot-{role}-{language}"
+        filename = "ingestion.sqlite3" if role == "payer" else "marketpulse.sqlite3"
+        script = (
+            "import base64,json,sqlite3,sys; from pathlib import Path; "
+            "source=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); "
+            "target=sqlite3.connect(sys.argv[2]); source.backup(target); "
+            "mode=target.execute(\"PRAGMA journal_mode=DELETE\").fetchone()[0]; "
+            "assert mode==\"delete\", \"snapshot journal must be standalone\"; "
+            "target.close(); source.close(); "
+            "print(json.dumps({'sqlite_snapshot':base64.b64encode(Path(sys.argv[2]).read_bytes()).decode()}))"
         )
-        rows = [line.split("|") for line in output.splitlines() if line.strip()]
-        if len(rows) != 2 or any(len(row) != 3 or not all(row) for row in rows):
-            raise RuntimeError(f"Kubernetes payment audit did not return two bidirectional runs: {output!r}")
-        return {
-            "payer_language": payer,
-            "payee_language": self.context.payee_language,
-            "run_ids": [row[0] for row in rows],
-            "outbound_intent_ids": [row[1] for row in rows],
-            "inbound_intent_ids": [row[2] for row in rows],
-            "free_deliveries": 2,
-            "paid_deliveries": 2,
-            "merchant_delivery_status": "delivered",
-            "post_settlement_failure_recoveries": 1,
-        }
+        labels = {"app.kubernetes.io/part-of": "agentvault-e2e", BUSINESS_EVIDENCE_LABEL: "true"}
+        self._apply_document({
+            "apiVersion": "batch/v1", "kind": "Job",
+            "metadata": {"name": name, "namespace": namespace, "labels": labels},
+            "spec": {"backoffLimit": 0, "activeDeadlineSeconds": 120, "template": {
+                "metadata": {"labels": labels}, "spec": {
+                    "restartPolicy": "Never", "automountServiceAccountToken": False,
+                    "securityContext": {"runAsNonRoot": True, "runAsUser": 65532, "fsGroup": 65532},
+                    "containers": [{"name": "snapshot", "image": self.environment.get("E2E_AUDITOR_IMAGE", "docker.io/library/python:3.12-slim"),
+                        "command": ["python3", "-c", script, f"/data/{filename}", "/tmp/snapshot.sqlite3"],
+                        "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}},
+                        "resources": {"requests": {"cpu": "20m", "memory": "32Mi"}, "limits": {"cpu": "500m", "memory": "128Mi"}},
+                        "volumeMounts": [{"name": "evidence", "mountPath": "/data", "readOnly": True}, {"name": "temporary", "mountPath": "/tmp"}]}],
+                    "volumes": [{"name": "evidence", "persistentVolumeClaim": {"claimName": self._business_claim(role, language), "readOnly": True}},
+                        {"name": "temporary", "emptyDir": {}}],
+                },
+            }},
+        })
+        self._kubectl("wait", "--namespace", namespace, f"job/{name}", "--for=condition=complete", "--timeout=180s", timeout=190)
+        raw = self._kubectl("logs", "--namespace", namespace, f"job/{name}", "--container", "snapshot")
+        encoded = json.loads(raw).get("sqlite_snapshot")
+        if not isinstance(encoded, str) or len(encoded) > 16 * 1024 * 1024:
+            raise RuntimeError("business evidence snapshot is missing or oversized")
+        snapshot = base64.b64decode(encoded, validate=True)
+        if not snapshot.startswith(b"SQLite format 3\0"):
+            raise RuntimeError("business evidence snapshot is not SQLite")
+        component = "quantstream" if role == "payer" else "marketpulse"
+        target = directory / f"{component}-{language}" / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(snapshot)
+
+    def _audit(self, payer: str, payee: str) -> dict[str, Any]:
+        directory = self.context.report_root / "payment" / "business-evidence" / f"{payer}-{payee}-{self.context.transport}"
+        self._snapshot_business_database("payer", payer, directory)
+        self._snapshot_business_database("payee", payee, directory)
+        environment = {**self.environment, "E2E_PAYER_LANGUAGE": payer, "E2E_PAYEE_LANGUAGE": payee,
+            "E2E_EVIDENCE_ROOT": str(directory.resolve())}
+        output = run([sys.executable, str(E2E_ROOT / "verifier/payment/assert_full.py")], E2E_ROOT, environment, 30)
+        evidence = json.loads(output)
+        if len(evidence.get("outbound_intent_ids", [])) != 2 or len(evidence.get("inbound_intent_ids", [])) != 2:
+            raise RuntimeError("business evidence auditor did not return two bidirectional payment pairs")
+        return evidence
 
     def _deployment_logs(self, namespace: str, deployment: str, container: str | None = None) -> str:
         arguments = ["logs", "--namespace", namespace, f"deployment/{deployment}", "--tail=5000"]
@@ -1305,6 +1398,8 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         identity = payer_identity(payer)
         payee_service = self._payee_name(payee)
         return {
+            **self._image_values(f"payer-{payer}"),
+            "persistence.existingClaim": self._business_claim("payer", payer),
             "env.MARKETPULSE_URL": (
                 f"http://{payee_service}.{PAYEE_NAMESPACE}.svc.cluster.local:8081/mcp"
             ),
@@ -1323,7 +1418,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         }
 
     def _start_payer_job(self, payer: str, payee: str, *, failure_once: bool) -> str:
-        self._ensure_cluster_image(LOCAL_IMAGES[f"payer-{payer}"])
+        self._ensure_cluster_image(self.images[f"payer-{payer}"])
         job = self._payer_name(payer)
         self._uninstall_release(PAYER_NAMESPACE, job)
         self._kubectl(
@@ -1442,29 +1537,43 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         logs = self._wait_job(job)
         return f"approval {approval_id} for intent {intent_id} was consumed through the Kubernetes Admin UI\n{logs}"
 
+    def _diagnostic_output(self, namespace: str, filename: str, arguments: list[str]) -> str:
+        directory = self.context.report_root / "payment" / "diagnostics" / (
+            f"{self.context.payer_language}-{self.context.payee_language}-{self.context.transport}"
+        ) / namespace
+        directory.mkdir(parents=True, exist_ok=True)
+        try:
+            completed = execute(self._privileged_command(self._kubectl_executable or "kubectl", *arguments),
+                E2E_ROOT, self.environment, 30)
+            output = completed.stdout
+        except Exception as error:
+            output = f"diagnostic command failed: {error}"
+        (directory / filename).write_text(output, encoding="utf-8")
+        return output
+
     def _diagnostics(self, payer: str, payee: str) -> None:
         LOGGER.error("collecting Kubernetes diagnostics payer=%s payee=%s", payer, payee)
-        for namespace in (
-            AGENTVAULT_NAMESPACE,
-            INFRA_NAMESPACE,
-            PAYMENT_NAMESPACE,
-            PAYEE_NAMESPACE,
-            PAYER_NAMESPACE,
-        ):
-            completed = execute(
-                self._privileged_command(
-                    self._kubectl_executable or "kubectl",
-                    "get",
-                    "pods,jobs",
-                    "--namespace",
-                    namespace,
-                    "--output=wide",
-                ),
-                E2E_ROOT,
-                self.environment,
-                15,
-            )
-            LOGGER.error("namespace=%s\n%s", namespace, completed.stdout[-4096:])
+        for namespace in (AGENTVAULT_NAMESPACE, INFRA_NAMESPACE, PAYMENT_NAMESPACE, PAYEE_NAMESPACE, PAYER_NAMESPACE):
+            self._diagnostic_output(namespace, "resources.txt", ["get", "pods,jobs", "--namespace", namespace, "--output=wide"])
+            self._diagnostic_output(namespace, "events.txt", ["get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"])
+            try:
+                raw = self._kubectl("get", "pods", "--namespace", namespace, "--output=json", timeout=15)
+                pods = json.loads(raw).get("items", [])
+            except Exception as error:
+                LOGGER.error("could not inventory diagnostic pods namespace=%s error=%s", namespace, error)
+                continue
+            for pod in pods:
+                name = pod.get("metadata", {}).get("name", "")
+                if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9.-]+", name):
+                    continue
+                # Status is useful for scheduling/probe failures without exposing Pod env or Secrets.
+                directory = self.context.report_root / "payment" / "diagnostics" / f"{payer}-{payee}-{self.context.transport}" / namespace
+                (directory / f"{name}-status.json").write_text(json.dumps(pod.get("status", {}), indent=2) + "\n", encoding="utf-8")
+                for previous in (False, True):
+                    arguments = ["logs", "--namespace", namespace, name, "--all-containers=true", "--prefix=true", "--tail=200"]
+                    if previous:
+                        arguments.append("--previous")
+                    self._diagnostic_output(namespace, f"{name}-{'previous' if previous else 'current'}.log", arguments)
 
     def full(
         self,
@@ -1485,6 +1594,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         try:
             self._build_images(payer_language, payee_language)
             self._deploy_base("payee", include_solana=False, payee_language=payee_language)
+            self._apply_business_claims(payer_language, payee_language)
             self._install_agentvault()
             self._install_payee(payee_language)
             self._install_admin_ui(payer_language)
@@ -1563,6 +1673,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                     ),
                     runtime={"facilitator": self._facilitator_capabilities()},
                 )
+                self._persist_full_evidence(evidence)
                 from verifier.payment import (
                     s21_payer_signing,
                     s22_payee_settlement,
@@ -1570,7 +1681,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                     s24_gateway_balance,
                 )
 
-                return {
+                reports = {
                     "s20_full.md": "\n".join(
                         (
                             f"payer={payer_language} payee={payee_language} "
@@ -1586,6 +1697,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                     "s23_balance_sync.md": s23_balance_sync.verify_evidence(evidence, balance_sync),
                     "s24_gateway_balance.md": s24_gateway_balance.verify_evidence(evidence),
                 }
+                return reports
         except BaseException:
             self._diagnostics(payer_language, payee_language)
             raise
@@ -1779,7 +1891,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         languages = matrix_languages(scope)
         selected_cases = matrix_cases(scope)
         total = len(selected_cases)
-        _ensure_matrix_plan(self.context.report_root / "payment" / "matrix-plan.json", scope)
+        journal = SdkMatrixJournal(self.context.report_root / "payment", scope, self.backend)
         progress_path = RUNTIME_ROOT / "matrix-progress.log"
         progress_path.write_text(
             f"matrix scope={scope} 0/{total} initialized backend=kubernetes\n",
@@ -1791,32 +1903,11 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             with progress_path.open("a", encoding="utf-8") as stream:
                 stream.write(message + "\n")
 
-        def checkpoint(case_number: int, name: str, outputs: dict[str, str]) -> None:
-            root = self.context.report_root / "payment" / "matrix-cases"
-            root.mkdir(parents=True, exist_ok=True)
-            target = root / f"case-{case_number:02d}.json"
-            temporary = target.with_suffix(".tmp")
-            temporary.write_text(
-                json.dumps(
-                    {"case": name, "reports": outputs},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
-            )
-            temporary.replace(target)
-
         completed: list[tuple[int, str, dict[str, str]]] = []
         pending: list[tuple[int, str, str, str]] = []
         for case_number, case in enumerate(selected_cases, 1):
             name = case.name
-            target = (
-                self.context.report_root
-                / "payment"
-                / "matrix-cases"
-                / f"case-{case_number:02d}.json"
-            )
-            outputs = _load_matrix_checkpoint(target, name)
+            outputs = journal.load(case_number, name)
             if outputs is None:
                 pending.append((case_number, case.transport, case.payer, case.payee))
             else:
@@ -1855,7 +1946,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 clean_start=True,
                 render_config=False,
             )
-            checkpoint(case_number, name, outputs)
+            journal.save(case_number, name, outputs)
             completed.append((case_number, name, outputs))
             progress(f"matrix scope={scope} case {case_number}/{total} passed: {name}")
 

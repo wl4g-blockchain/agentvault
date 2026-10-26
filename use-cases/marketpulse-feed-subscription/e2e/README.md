@@ -211,7 +211,8 @@ volumes, global builder caches, or resources outside those namespaces.
 
 `--cleanup-after-run` remains intentionally narrower. The Docker backend removes
 only current Compose containers and volumes; the Kubernetes backend uninstalls
-only the current E2E Helm releases. Both preserve locally built images. Docker
+the current E2E Helm releases and removes the labelled business-evidence Jobs
+and PVCs in the declared E2E namespaces. Both preserve locally built images. Docker
 post-run cleanup never touches a separately deployed Kubernetes review environment.
 
 All ten language service images use separate builder and runtime stages. Rust
@@ -223,8 +224,19 @@ its static binary plus Alpine runtime.
 
 ## Kubernetes namespace contract
 
-`runner.py` exposes `--deployer docker|kubernetes`; Docker remains the CI
-default. The Kubernetes backend owns local-image build/import, Helm lifecycle,
+`runner.py` exposes `--deployer docker|kubernetes`; Docker is the CLI default.
+PR CI runs both backends in parallel on separate runners after the build gate,
+using the same immutable dirty AgentVault image. Each backend executes the eight
+Rust/Go × Rust/Go × MQTT/gRPC cases and publishes its own report artifact. The
+Kubernetes job creates a fresh, version-pinned K3s cluster and runs its cases
+serially (`--matrix-workers 1`); Docker keeps isolated concurrent workers. The
+final PR comment renders both Markdown summaries and reports success only when
+the build and both E2E jobs succeed.
+Matrix resume plans and checkpoints bind the backend and SDK scope. A Docker
+checkpoint cannot satisfy Kubernetes acceptance; older records without a backend
+must be replaced by a new run.
+
+The Kubernetes backend owns local-image build/import, Helm lifecycle,
 port forwards, payer Jobs, approval, and PostgreSQL/on-chain evidence. Matrix
 cases run serially on the shared cluster to prevent cross-case state leakage.
 The component Helm charts enforce a deployment boundary for Kubernetes consumers:

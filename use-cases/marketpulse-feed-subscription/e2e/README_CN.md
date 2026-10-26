@@ -185,7 +185,8 @@ AgentVault/MarketPulse/QuantStream `*:local` 镜像，以及清单中声明且�
 外部基础镜像、镜像仓库、无关卷、全局 builder cache，亦不会触碰上述命名空间之外的资源。
 
 `--cleanup-after-run` 刻意保持更窄范围：Docker backend 只回收当前 Compose 容器和卷，
-Kubernetes backend 只卸载当前 E2E Helm release；两者都保留本地构建镜像。单独部署、
+Kubernetes backend 卸载当前 E2E Helm release，并删除声明的 E2E namespace 内带专用
+标签的业务证据 Job 和 PVC；两者都保留本地构建镜像。单独部署、
 用于人工验收的 Kubernetes 环境不会被 Docker backend 的运行后清理触碰。
 
 十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
@@ -195,8 +196,16 @@ Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进
 
 ## Kubernetes Namespace 契约
 
-`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，默认仍为 CI 使用的
-Docker。Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
+`runner.py` 通过 `--deployer docker|kubernetes` 公开两个 backend，CLI 默认使用 Docker。
+PR CI 在构建门禁后，用两个独立 runner 并行执行 Docker 和 Kubernetes，复用同一个
+不可变 dirty AgentVault 镜像。每种模式均执行 Rust/Go × Rust/Go × MQTT/gRPC 的八个
+组合，分别上传报告。Kubernetes job 创建固定版本的全新 K3s 集群，内部 Case 串行
+运行（`--matrix-workers 1`）；Docker 保持隔离 worker 并发。最终 PR 评论直接渲染
+两份 Markdown 摘要，只有构建和两种 E2E 都成功才报告整体成功。
+Matrix 的续跑计划和断点绑定 backend 与 SDK scope，Docker 断点不能作为 K8s 通过
+证据；旧记录若未标明 backend，必须开启新 run。
+
+Kubernetes backend 负责本地镜像构建/导入、Helm 生命周期、端口转发、payer
 Job、审批和 PostgreSQL/链上证据采集；共享集群上的 Matrix 会强制串行，避免跨 Case
 状态污染。各组件 Helm Chart 强制 Kubernetes 部署边界：渲染出的 Deployment、Job、
 ConfigMap 和 Service 都从固定 Chart annotation
