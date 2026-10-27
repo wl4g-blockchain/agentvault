@@ -187,7 +187,7 @@ class ManualAcceptanceDeployer(KubernetesE2EDeployer):
                         + ["--log"],
                 "env": {"RUST_LOG": "warn"},
                 "persistence": {"enabled": True, "existingClaim": claim},
-                "resources": {"limits": {"cpu": "1500m"}},
+                "resources": {"limits": {"cpu": "500m"}},
             }))
             values = (*values, override)
         return super()._helm_install(release, chart, namespace, values=values, **options)

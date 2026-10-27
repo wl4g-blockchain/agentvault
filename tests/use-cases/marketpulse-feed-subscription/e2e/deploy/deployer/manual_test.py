@@ -367,7 +367,7 @@ class ManualLifecycleTest(unittest.TestCase):
                     self.assertEqual(override["args"],["--rpc-port=8899","--ledger=/tmp/solana-ledger","--log"])
                     self.assertEqual(override["env"],{"RUST_LOG":"warn"})
                     self.assertEqual(override["persistence"],{"enabled":True,"existingClaim":"manual-solana-ledger"})
-                    self.assertEqual(override["resources"]["limits"]["cpu"],"1500m")
+                    self.assertEqual(override["resources"]["limits"]["cpu"],"500m")
             claims=[call.args[0] for call in port._apply_document.call_args_list]
             self.assertEqual(len(claims),2)
             self.assertEqual(claims[0],claims[1])
@@ -418,7 +418,7 @@ class ManualLifecycleTest(unittest.TestCase):
                     self.assertNotIn("emptyDir",data)
                     self.assertEqual(deployment["spec"]["strategy"]["type"],"Recreate")
                     self.assertEqual(deployment["spec"]["replicas"],1)
-                    self.assertEqual(app["resources"]["limits"]["cpu"],"1500m")
+                    self.assertEqual(app["resources"]["limits"]["cpu"],"500m")
                     self.assertEqual(app["volumeMounts"],[{"name":"data","mountPath":"/tmp/solana-ledger"}])
                 else:
                     self.assertIn("--reset",app["args"])

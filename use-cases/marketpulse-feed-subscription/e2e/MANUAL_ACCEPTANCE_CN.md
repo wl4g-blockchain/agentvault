@@ -448,7 +448,7 @@ Classic SPL mint 不自动写入 name/symbol；这里的 E2EUSDC/USDC 是夹具�
 
 初始化真实执行：生成密钥 → 创建 mint → 创建 payer/payee ATA → mint 1000 Token 到每个付款 ATA；私钥只进入 Secret/Vault。人工部署报告保存公开 mint、ATA、fee-payer 和 network。显式清理并重新初始化链后地址可能变化，读取本轮报告，不使用旧地址。
 
-manual 模式把 `/tmp/solana-ledger` 挂载到独立的 `manual-solana-ledger` PVC（8Gi、ReadWriteOnce），启动参数移除 `--reset/-r`，Deployment 使用 Recreate，避免两个 validator 同时打开同一账本。普通容器重启或 Pod 重建会加载同一账本、mint、账户和交易历史；这与显式执行 `manual`/`cleanup` 删除旧环境不同。普通隔离 E2E 仍使用临时卷和 reset，不适合代替 manual 保留环境。当前 CPU 上限为 1500m，原因与停启方法见第 11 节。
+manual 模式把 `/tmp/solana-ledger` 挂载到独立的 `manual-solana-ledger` PVC（8Gi、ReadWriteOnce），启动参数移除 `--reset/-r`，Deployment 使用 Recreate，避免两个 validator 同时打开同一账本。普通容器重启或 Pod 重建会加载同一账本、mint、账户和交易历史；这与显式执行 `manual`/`cleanup` 删除旧环境不同。普通隔离 E2E 仍使用临时卷和 reset，不适合代替 manual 保留环境。当前 CPU 上限为 500m，原因与停启方法见第 11 节。
 
 manual 的后续部署使用 `RUST_LOG=warn` 和 v3.1.14 官方布尔参数 `--log`，让应用日志保留在 stderr，由 Kubelet 轮转；不要写成 `--log=-`。`--quiet` 只隐藏 dashboard，仍会在 ledger 目录增长日志。该设置不删除交易账本，也不改变确认规则。
 
@@ -531,7 +531,7 @@ vmstat 1 5
 
 本地 Solana validator 自己产块，不是同步主网。减少 RPC 轮询不能消除 PoH/产块基础开销；改变 ticks/slot 会改变确认时间。CPU 上限、线程和 slot 参数以当前部署配置及固定版本支持项为准。调优后仍需验证 slot 前进、有效 blockhash、真实转账及确认耗时，不能关闭确认来“降低 CPU”。
 
-长期验证否定了最初的 300m 方案：虽然 mint/ATA/转账可以执行，运行约一小时后链时钟落后十余分钟，导致付款方独立对账拒绝过旧回执。没有放宽时间校验；通过 Kubernetes 1.35 的 `/resize` 原地增配追赶，Pod UID、重启次数和链账户保持不变，随后限制为 1500m 并持续采样 slot/blockTime。Helm 当前上限为 `1500m`，Docker 默认 `E2E_SOLANA_CPUS=1.50`。这是保证本版本计时正确的资源边界，不能声称已经把长期稳定消耗降到 300m。
+长期验证否定了最初的 300m 方案：虽然 mint/ATA/转账可以执行，运行约一小时后链时钟落后十余分钟，导致付款方独立对账拒绝过旧回执。没有放宽时间校验；通过 Kubernetes 1.35 的 `/resize` 原地增配追赶，Pod UID、重启次数和链账户保持不变，随后限制为 500m 并持续采样 slot/blockTime。Helm 当前上限为 `500m`，Docker 默认 `E2E_SOLANA_CPUS=1.50`。这是保证本版本计时正确的资源边界，不能声称已经把长期稳定消耗降到 300m。
 
 [v3.1.14 官方交易调度源码](https://github.com/anza-xyz/agave/blob/v3.1.14/core/src/banking_stage/transaction_scheduler/receive_and_buffer.rs#L148)在单验证者担任 leader 时持续轮询；主要开销来自交易调度而非主网同步。该版本 test-validator 未提供空闲休眠/调度器切换或 `--hashes-per-tick` CLI，不能靠降低 RPC 同步频率消除忙循环。需要更低持续占用时，应另行验证上游修复版本，避免通过改 slot、warp 或放宽回执校验掩盖问题。
 
