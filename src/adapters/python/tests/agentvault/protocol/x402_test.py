@@ -1,4 +1,5 @@
 import copy
+import base64
 import json
 import unittest
 from pathlib import Path
@@ -16,6 +17,70 @@ from agentvault.protocol import X402Adapter
 
 
 class X402AdapterTest(unittest.TestCase):
+    def test_rust_json_field_order_and_optional_fields_preserve_native_credentials(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).resolve().parents[4] / "tests" / "x402_v2_chain_payloads.json").read_text()
+        )
+        adapter = X402Adapter()
+        for name in ("evm_eip3009", "solana_spl_exact"):
+            original = fixture["cases"][name]["payment_payload"]
+            for optional in (False, True):
+                with self.subTest(chain=name, optional=optional):
+                    wire = copy.deepcopy(original)
+                    if optional:
+                        wire["extensions"] = None
+                        wire["resource"]["description"] = None
+                    # serde_json::Value maps use lexical field order. These are
+                    # public fixtures, never credentials from a running Vault.
+                    raw = json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()
+                    header = base64.b64encode(raw).decode()
+                    native = PaymentPayload.model_validate(wire)
+                    self.assertNotEqual(header, encode_payment_signature_header(native))
+                    expected = native.model_dump(by_alias=True, exclude_none=True)
+                    delivery = HttpCredential("https://merchant.example", "PAYMENT-SIGNATURE", header)
+                    credential = PaymentCredential("x402", "challenge", "credential", wire, delivery)
+                    self.assertEqual(adapter.credential(credential), delivery)
+                    self.assertEqual(adapter.presented_credential({"PAYMENT-SIGNATURE": header}, 65536), expected)
+                    self.assertEqual(adapter.mcp_credential(credential).value, expected)
+                    message = {"params": {"message": {"metadata": {}}}}
+                    adapter.a2a_apply_credential(message, credential)
+                    self.assertEqual(message["params"]["message"]["metadata"]["x402.payment.payload"], expected)
+
+    def test_header_validation_rejects_unknown_shapes_and_noncanonical_base64(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).resolve().parents[4] / "tests" / "x402_v2_chain_payloads.json").read_text()
+        )
+        adapter = X402Adapter()
+        solana = fixture["cases"]["solana_spl_exact"]["payment_payload"]
+        evm = fixture["cases"]["evm_eip3009"]["payment_payload"]
+        variants = []
+        for source, owner, field, value in (
+            (solana, "payload", "unknown", True),
+            (solana, "payload", "transaction", "{not-base64}"),
+            (solana, "accepted", "unknown", True),
+            (solana, "resource", "unknown", True),
+            (evm, "payload", "transaction", "AQ=="),
+        ):
+            wire = copy.deepcopy(source)
+            wire[owner][field] = value
+            variants.append(wire)
+        wire = copy.deepcopy(solana)
+        wire["unknown"] = True
+        variants.append(wire)
+        wire = copy.deepcopy(evm)
+        wire["payload"]["authorization"]["validAfter"] = 0
+        variants.append(wire)
+        for wire in variants:
+            header = base64.b64encode(json.dumps(wire).encode()).decode()
+            credential = PaymentCredential("x402", "challenge", "credential", wire,
+                HttpCredential("https://merchant.example", "PAYMENT-SIGNATURE", header))
+            with self.assertRaises(ValueError): adapter.credential(credential)
+            with self.assertRaises(ValueError): adapter.presented_credential({"PAYMENT-SIGNATURE": header}, 65536)
+        valid = base64.b64encode(json.dumps(solana).encode()).decode()
+        for header in (valid + "\n", " " + valid, valid + "=", "!" + valid[1:]):
+            with self.assertRaises(ValueError):
+                adapter.presented_credential({"PAYMENT-SIGNATURE": header}, 65536)
+
     def test_native_challenge_header(self) -> None:
         fixture = json.loads(
             (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()

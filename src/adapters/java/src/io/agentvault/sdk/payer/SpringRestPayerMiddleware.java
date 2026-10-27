@@ -1,6 +1,6 @@
 package io.agentvault.sdk.payer;
 
-import static io.agentvault.sdk.payer.SpringPayerMessages.JSON;
+import static io.agentvault.sdk.payer.PayerMessages.JSON;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.agentvault.sdk.model.Payer.PayerHttpRequest;
 import io.agentvault.sdk.model.Payer.PayerHttpResponse;
 import io.agentvault.sdk.model.Payer.PayerRequestContext;
-import io.agentvault.sdk.payer.SpringPayerMessages.Call;
+import io.agentvault.sdk.payer.PayerMessages.Call;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpRequest;
@@ -34,7 +34,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
     }
 
     private final PayerMiddleware core;
-    private final SpringPayerMessages messages;
+    private final PayerMessages messages;
     private final ContextResolver resolver;
 
     public SpringRestPayerMiddleware(PayerMiddleware core) {
@@ -43,7 +43,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
 
     public SpringRestPayerMiddleware(PayerMiddleware core, ContextResolver resolver) {
         this.core = java.util.Objects.requireNonNull(core, "core");
-        this.messages = new SpringPayerMessages(core);
+        this.messages = new PayerMessages(core);
         this.resolver = java.util.Objects.requireNonNull(resolver, "resolver");
     }
 
@@ -99,7 +99,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
                             request, body, execution, context.get(), target, call, first);
             return paid == null ? first : paid;
         }
-        SpringPayerMessages.event(
+        PayerMessages.event(
                 "agentvault.sdk.payer.payment_required", context.get().runId(), null, null);
         byte[] challenge;
         try (first) {
@@ -108,7 +108,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
         if (challenge.length > core.config().maxChallengeBytes()) {
             throw new IOException("payment challenge exceeds configured limit");
         }
-        SpringPayerMessages.event(
+        PayerMessages.event(
                 "agentvault.sdk.payer.signing_requested", context.get().runId(), null, null);
         var authorized =
                 core.authorize(
@@ -122,7 +122,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
                         new PayerHttpResponse(
                                 402, PayerMiddleware.copyHeaders(first.getHeaders()), challenge),
                         context.get());
-        SpringPayerMessages.event(
+        PayerMessages.event(
                 "agentvault.sdk.payer.signed",
                 context.get().runId(),
                 authorized.intent().id(),
@@ -168,8 +168,7 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
             Call call,
             ClientHttpResponse first)
             throws IOException {
-        if (call == null
-                || !SpringPayerMessages.isJson(first.getHeaders().getFirst("content-type")))
+        if (call == null || !PayerMessages.isJson(first.getHeaders().getFirst("content-type")))
             return null;
         BufferedResponse initial = buffer(first);
         final JsonNode message;
@@ -192,9 +191,8 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
                         context,
                         PayerMiddleware.copyHeaders(initial.getHeaders()));
         if (authorized == null) return initial;
-        SpringPayerMessages.event(
-                "agentvault.sdk.payer.payment_required", context.runId(), null, null);
-        SpringPayerMessages.event(
+        PayerMessages.event("agentvault.sdk.payer.payment_required", context.runId(), null, null);
+        PayerMessages.event(
                 "agentvault.sdk.payer.signed", context.runId(), authorized.intent().id(), null);
         byte[] paidBody;
         if (call.a2a() != null)
@@ -285,6 +283,11 @@ public final class SpringRestPayerMiddleware implements ClientHttpRequestInterce
         @Override
         public HttpHeaders getHeaders() {
             return headers;
+        }
+
+        @Override
+        public java.util.Map<String, Object> getAttributes() {
+            return delegate.getAttributes();
         }
     }
 

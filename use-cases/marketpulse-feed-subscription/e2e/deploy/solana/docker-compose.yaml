@@ -2,6 +2,8 @@ services:
   solana:
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/anza_solana:3.1.14
     command: ["--rpc-port=8899", "--faucet-port=8900", "--ledger=/tmp/solana-ledger", "--reset"]
+    cpus: "${E2E_SOLANA_CPUS:-1.50}"
+    mem_limit: 2g
     ports:
       - "127.0.0.1:${E2E_SOLANA_RPC_PORT:-28899}:8899"
       - "127.0.0.1:${E2E_SOLANA_FAUCET_PORT:-28900}:8900"

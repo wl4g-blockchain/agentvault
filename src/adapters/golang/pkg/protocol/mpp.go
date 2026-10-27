@@ -314,8 +314,20 @@ func (adapter *MppAdapter) MCPCredential(credential model.PaymentCredential) (MC
 	if err != nil {
 		return MCPMetadata{}, err
 	}
-	value, err := adapter.authorizationJSON(delivery.HeaderValue)
+	native, err := mpp.FromAuthorization(delivery.HeaderValue)
 	if err != nil {
+		return MCPMetadata{}, err
+	}
+	// The SDK JSON codec expands request for MCP; HTTP keeps its base64url echo.
+	value, err := adapter.object(native, "MPP MCP credential")
+	if err != nil {
+		return MCPMetadata{}, err
+	}
+	raw, err := adapter.authorizationJSON(delivery.HeaderValue)
+	if err != nil {
+		return MCPMetadata{}, err
+	}
+	if err := adapter.preserveCredentialFields(value, raw); err != nil {
 		return MCPMetadata{}, err
 	}
 	return MCPMetadata{Key: mppCredentialMetaKey, Value: value}, nil
@@ -334,12 +346,70 @@ func (adapter *MppAdapter) PresentedMCPCredential(meta any, limit int64) (any, e
 	if err != nil || int64(len(body)) > limit {
 		return nil, errors.New("MPP MCP credential is invalid or oversized")
 	}
-	authorization := "Payment " + base64.RawURLEncoding.EncodeToString(body)
-	credential, err := mpp.FromAuthorization(authorization)
-	if err != nil || credential.Challenge.Method != "tempo" || credential.Challenge.Intent != "charge" {
+	var credential mpp.Credential
+	if err := json.Unmarshal(body, &credential); err != nil || credential.Challenge.Method != "tempo" || credential.Challenge.Intent != "charge" {
 		return nil, errors.New("MPP MCP credential is not a valid Tempo charge credential")
 	}
+	raw, err := adapter.object(value, "MPP MCP credential")
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := raw["payload"].(map[string]any); !ok {
+		return nil, errors.New("MPP MCP credential payload must be an object")
+	}
+	challenge, err := adapter.object(raw["challenge"], "MPP credential challenge")
+	if err != nil {
+		return nil, err
+	}
+	// Opaque is authenticated server data. Preserve its original encoding.
+	if opaque, ok := challenge["opaque"].(string); ok {
+		credential.Challenge.Opaque = map[string]string{"_raw": opaque}
+	}
+	authorization := credential.ToAuthorization()
+	normalized, err := adapter.authorizationJSON(authorization)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := adapter.object(normalized, "MPP credential")
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.preserveCredentialFields(envelope, raw); err != nil {
+		return nil, err
+	}
+	body, err = json.Marshal(envelope)
+	if err != nil {
+		return nil, err
+	}
+	authorization = "Payment " + base64.RawURLEncoding.EncodeToString(body)
 	return map[string]any{"authorization": authorization}, nil
+}
+
+// mpp-go v0.2 does not retain raw opaque bytes or the optional header extension.
+func (adapter *MppAdapter) preserveCredentialFields(target map[string]any, original any) error {
+	source, err := adapter.object(original, "MPP credential")
+	if err != nil {
+		return err
+	}
+	challenge, err := adapter.object(source["challenge"], "MPP credential challenge")
+	if err != nil {
+		return err
+	}
+	destination, err := adapter.object(target["challenge"], "MPP credential challenge")
+	if err != nil {
+		return err
+	}
+	if opaque, ok := challenge["opaque"].(string); ok {
+		destination["opaque"] = opaque
+	}
+	if header, exists := challenge["header"]; exists {
+		if name, ok := header.(string); !ok || !strings.EqualFold(name, "Payment-Authorization") {
+			return errors.New("MPP credential selected an unsupported credential header")
+		}
+		destination["header"] = "Payment-Authorization"
+	}
+	target["challenge"] = destination
+	return nil
 }
 
 func (adapter *MppAdapter) MCPPaymentRequired(challenge *model.PaymentChallenge) (MCPPaymentRequired, error) {
@@ -532,13 +602,27 @@ func (adapter *MppAdapter) paymentScheme(value string) string {
 // field. Preserve that single upstream extension from the original MCP value;
 // all core fields continue to come from mpp.Challenge.
 func (adapter *MppAdapter) challengeHeader(challenge *mpp.Challenge, rawChallenge any) (string, error) {
-	header, err := challenge.ToAuthenticateStrict(challenge.Realm)
-	if err != nil {
-		return "", err
-	}
 	object, err := adapter.object(rawChallenge, "MPP MCP challenge")
 	if err != nil {
 		return "", err
+	}
+	native := *challenge
+	opaque, rawOpaque := object["opaque"].(string)
+	if rawOpaque {
+		native.Opaque = nil
+	}
+	header, err := native.ToAuthenticateStrict(native.Realm)
+	if err != nil {
+		return "", err
+	}
+	if rawOpaque {
+		if _, err := base64.RawURLEncoding.DecodeString(opaque); err != nil {
+			return "", errors.New("MPP challenge opaque is not canonical base64url")
+		}
+		header += `, opaque="` + opaque + `"`
+		if _, err := mpp.FromAuthenticate(header); err != nil {
+			return "", errors.New("MPP challenge opaque is invalid")
+		}
 	}
 	if selectedHeader, _ := object["header"].(string); selectedHeader != "" {
 		if !strings.EqualFold(selectedHeader, "Payment-Authorization") {

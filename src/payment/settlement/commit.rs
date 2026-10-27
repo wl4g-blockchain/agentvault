@@ -318,13 +318,13 @@ impl SettlementCoordinator {
     pub(super) async fn load_receipt(&self, intent: &PaymentIntent) -> Result<PaymentReceipt> {
         let settled = self
             .events
-            .find_for_intent_type(&intent.id, PaymentEventType::Settled, 0)
+            .find_latest_for_intent_type(&intent.id, PaymentEventType::Settled)
             .await?;
         let reconciled = if settled.is_some() {
             None
         } else {
             self.events
-                .find_for_intent_type(&intent.id, PaymentEventType::Reconciled, 0)
+                .find_latest_for_intent_type(&intent.id, PaymentEventType::Reconciled)
                 .await?
         };
         SettlementFacts::durable_receipt(settled.as_ref(), reconciled.as_ref())

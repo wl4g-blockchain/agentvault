@@ -10,6 +10,9 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import java.net.URI;
+import java.net.http.HttpRequest;
+import io.agentvault.sdk.payer.JdkHttpPayerMiddleware;
+import io.agentvault.sdk.model.Payer.PayerRequestContext;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,6 +47,7 @@ public final class MCPHelper implements AutoCloseable {
     private final ThreadLocal<Operation> operation = new ThreadLocal<>();
     private final Map<String, Operation> activeOperations = new ConcurrentHashMap<>();
     private final AgentVault vault;
+    private final JdkHttpPayerMiddleware a2aPayer;
     private final McpSyncClient mcp;
     private final Map<String, Boolean> tools;
 
@@ -59,7 +63,9 @@ public final class MCPHelper implements AutoCloseable {
                     Duration.ofSeconds(1),
                     1,
                     256 * 1024);
-            var payer = selected.payer(payerConfig).spring();
+            var core = selected.payer(payerConfig);
+            var payer = core.spring();
+            a2aPayer = core.jdkHttp();
             System.getLogger("io.agentvault.e2e").log(System.Logger.Level.INFO,
                     "agentvault.sdk.payer.transport_selected transport={0}", transportName);
             URI endpoint = URI.create(required("MARKETPULSE_URL"));
@@ -115,6 +121,9 @@ public final class MCPHelper implements AutoCloseable {
 
     private ToolResult call(String tool, String runId, boolean failAfterSettlement)
             throws Exception {
+        if (REALTIME_TOOL.equals(tool) && "a2a".equals(System.getenv("MARKETPULSE_MESSAGE_PROTOCOL"))) {
+            return a2a(runId, failAfterSettlement);
+        }
         Boolean paid = tools.get(tool);
         if (paid == null) throw new IllegalArgumentException("MarketPulse MCP tool is not registered: " + tool);
         Operation current = new Operation(runId, paid, failAfterSettlement);
@@ -138,6 +147,28 @@ public final class MCPHelper implements AutoCloseable {
             activeOperations.remove(runId);
             operation.remove();
         }
+    }
+
+    private ToolResult a2a(String runId, boolean failAfterSettlement) throws Exception {
+        String url = System.getenv().getOrDefault("MARKETPULSE_A2A_URL", required("MARKETPULSE_URL").replaceFirst("/mcp$", "/a2a"));
+        byte[] body = JSON.writeValueAsBytes(Map.of("jsonrpc", "2.0", "id", runId, "method", "message/send", "params",
+                Map.of("message", Map.of("kind", "message", "messageId", runId, "role", "user", "parts",
+                        java.util.List.of(Map.of("kind", "text", "text", REALTIME_TOOL))))));
+        var builder = HttpRequest.newBuilder(URI.create(url)).header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        if (failAfterSettlement) builder.header("x-e2e-fail-after-settlement", "once");
+        var result = a2aPayer.send(builder.build(), body, new PayerRequestContext(runId));
+        var response = JSON.readTree(result.response().body());
+        var task = response.path("result");
+        if (result.response().statusCode() != 200 || !"completed".equals(task.path("status").path("state").asText())) {
+            throw new IllegalStateException("A2A business Task did not complete");
+        }
+        var data = task.path("artifacts").path(0).path("parts").path(0).path("data");
+        if (!data.isObject() || result.payment() == null) throw new IllegalStateException("paid A2A result omitted news or payment evidence");
+        System.getLogger("io.agentvault.e2e").log(System.Logger.Level.INFO,
+                "manual.payer.completed run_id={0} task_id={1} message_protocol=a2a payment_protocol={2} intent_id={3} receipt_verified=true",
+                runId, task.path("id").asText(), result.payment().intent().protocol(), result.payment().intent().id());
+        return new ToolResult(JSON.writeValueAsBytes(data), result.payment().intent().id());
     }
 
     private ExchangeFilterFunction operationHeaders() {

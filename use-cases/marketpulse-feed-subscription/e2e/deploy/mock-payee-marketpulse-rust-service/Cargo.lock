@@ -2188,7 +2188,9 @@ dependencies = [
 name = "mock-payee-marketpulse-rust-service"
 version = "0.1.0"
 dependencies = [
+ "a2a-types",
  "agentvault-sdk",
+ "async-trait",
  "axum",
  "reqwest",
  "rusqlite",

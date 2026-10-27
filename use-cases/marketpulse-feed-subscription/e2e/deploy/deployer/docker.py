@@ -16,7 +16,7 @@ from typing import Any, Iterable
 from common.context import VerificationContext
 from common.payer_identity import LANGUAGES, PAYER_IDENTITIES, payer_identity
 from common.process import execute, run
-from common.project import CONFIG_ROOT, E2E_ROOT, REPOSITORY_ROOT
+from common.project import CONFIG_ROOT, DEPLOY_COMPONENTS, E2E_ROOT, REPOSITORY_ROOT
 from common.sdk_matrix import TRANSPORTS, SdkMatrixJournal, matrix_cases, matrix_languages
 
 from .base import E2EDeployer, FullFlowEvidence
@@ -314,10 +314,13 @@ class DockerE2EDeployer(E2EDeployer):
                 self._full(payer, payee, "config", "--quiet")
         compose_files = sorted(self.context.deploy_root.glob("*/docker-compose.yaml"))
         charts = sorted(self.context.deploy_root.glob("*/helm"))
-        if len(compose_files) != 19 or len(charts) != len(compose_files):
+        expected = set(DEPLOY_COMPONENTS)
+        compose_components = {path.parent.name for path in compose_files}
+        chart_components = {path.parent.name for path in charts}
+        if compose_components != expected or chart_components != expected:
             raise RuntimeError(
-                "expected 19 paired component manifests, found "
-                f"{len(compose_files)} Compose and {len(charts)} Helm"
+                f"paired component manifests drifted: expected={sorted(expected)}, "
+                f"Compose={sorted(compose_components)}, Helm={sorted(chart_components)}"
             )
         for compose in compose_files:
             self._run([*self.docker, "compose", "-f", str(compose), "config", "--quiet"])

@@ -13,6 +13,7 @@ import base64
 from dataclasses import dataclass, replace
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -68,6 +69,8 @@ NAMESPACE_PREFIX = "e2e-agentvault-"
 NAMESPACE_SELECTOR = "app.kubernetes.io/part-of=agentvault-e2e"
 BUSINESS_EVIDENCE_LABEL = "agentvault.io/e2e-business-evidence"
 BUSINESS_EVIDENCE_SELECTOR = f"{NAMESPACE_SELECTOR},{BUSINESS_EVIDENCE_LABEL}=true"
+MANUAL_IMAGE_PIN = "io.cri-containerd.pinned"
+MANUAL_IMAGE_PIN_OWNER = "io.agentvault.manual-image-pin"
 INSTANCE_LABEL = "app.kubernetes.io/instance"
 FINALIZER_PATCH = '{"metadata":{"finalizers":[]}}'
 DEFAULT_KUBECONFIG = Path("/etc/rancher/k3s/k3s.yaml")
@@ -118,7 +121,7 @@ SERVICE_NAMES = {
     "agentvault-management": (AGENTVAULT_NAMESPACE, "agentvault-management", 9091),
     "anvil": (PAYMENT_NAMESPACE, "anvil", 8545),
     "tempo": (PAYMENT_NAMESPACE, "tempo", 8545),
-    "solana": (PAYMENT_NAMESPACE, "solana", 8899),
+    "solana": (PAYMENT_NAMESPACE, "solana-validator", 8899),
     "facilitator": (PAYMENT_NAMESPACE, "x402-facilitator", 8085),
     "emqx-mqtt": (INFRA_NAMESPACE, "emqx", 1883),
     "emqx-dashboard": (INFRA_NAMESPACE, "emqx", 18083),
@@ -165,9 +168,9 @@ class KubernetesE2ECleaner:
         if not namespaces:
             message = "Kubernetes cleanup found no labelled AgentVault E2E namespaces"
             LOGGER.info(message)
-            return message
+            return "\n".join([message, *self._release_manual_image_pins()])
 
-        output: list[str] = []
+        output: list[str] = self._remove_manual_workloads(namespaces)
         releases = self._releases(namespaces)
         for release in releases:
             LOGGER.info(
@@ -204,7 +207,46 @@ class KubernetesE2ECleaner:
                 "Kubernetes E2E cleanup left releases "
                 f"{remaining_releases} and pods {remaining_pods}"
             )
+        output.extend(self._release_manual_image_pins())
         return "\n".join(part.strip() for part in output if part.strip())
+
+    def _release_manual_image_pins(self) -> list[str]:
+        k3s = shutil.which("k3s")
+        if k3s is None:
+            return []
+        command = ["sudo", "-n", k3s, "ctr", "-n", "k8s.io", "images"]
+        environment = {"KUBECONFIG": str(self._kubeconfig)}
+        owned = execute([*command, "list", "--quiet", f'labels."{MANUAL_IMAGE_PIN_OWNER}"=="true"'],
+                        E2E_ROOT, environment, self._command_timeout)
+        if owned.returncode != 0:
+            raise RuntimeError("could not inventory manual-owned image pins")
+        output = []
+        for reference in sorted(set(owned.stdout.splitlines())):
+            cleared = execute([*command, "label", reference, f"{MANUAL_IMAGE_PIN}=", f"{MANUAL_IMAGE_PIN_OWNER}="],
+                              E2E_ROOT, environment, self._command_timeout)
+            if cleared.returncode != 0:
+                raise RuntimeError(f"could not release manual-owned image pin: {reference}")
+            output.append(f"released manual-owned image pin: {reference}")
+        return output
+
+    def _remove_manual_workloads(self, namespaces: tuple[str, ...]) -> list[str]:
+        if not set(namespaces).issubset(self._declared_namespaces()):
+            raise ValueError("manual acceptance cleanup must remain inside declared E2E namespaces")
+        output = []
+        for namespace in namespaces:
+            arguments = ["deployment,service,cronjob", "--namespace", namespace,
+                         "--selector", "agentvault.io/manual-acceptance=true"]
+            result = self._kubectl_command([
+                "delete", *arguments, "--ignore-not-found", "--cascade=foreground",
+                "--wait=true", "--timeout=60s",
+            ], timeout_seconds=70)
+            if result.returncode != 0:
+                raise RuntimeError(f"could not remove manual acceptance controllers in {namespace}: {result.stdout}")
+            output.append(result.stdout)
+            remaining = self._kubectl_command(["get", *arguments, "--ignore-not-found", "--output=name"])
+            if remaining.returncode != 0 or remaining.stdout.strip():
+                raise RuntimeError(f"manual acceptance controllers remain in {namespace}: {remaining.stdout}")
+        return output
 
     def _remove_business_evidence(self, namespaces: tuple[str, ...], kind: str) -> list[str]:
         if kind not in {"jobs", "persistentvolumeclaims"} or not set(namespaces).issubset(self._declared_namespaces()):
@@ -1175,7 +1217,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             "exec",
             "--namespace",
             PAYMENT_NAMESPACE,
-            "deployment/solana",
+            "deployment/solana-validator",
             "--",
             f"{SOLANA_CLI_ROOT}/{executable}",
             *arguments,
@@ -1187,7 +1229,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             "exec",
             "--namespace",
             PAYMENT_NAMESPACE,
-            "deployment/solana",
+            "deployment/solana-validator",
             "--",
             "/bin/cat",
             keypair_path,
@@ -1365,6 +1407,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
             PAYER_NAMESPACE,
             f"job/{job}",
             "--tail=5000",
+            timeout=15,
         )
 
     def _service_logs(self, payer: str, payee: str, payer_logs: str) -> dict[str, str]:
@@ -1445,46 +1488,70 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
         return job
 
     def _wait_job(self, job: str, timeout_seconds: float = 180) -> str:
-        completed = execute(
-            self._privileged_command(
-                self._kubectl_executable or "kubectl",
-                "wait",
-                "--namespace",
-                PAYER_NAMESPACE,
-                f"job/{job}",
-                "--for=condition=complete",
-                f"--timeout={int(timeout_seconds)}s",
-            ),
-            E2E_ROOT,
-            self.environment,
-            timeout_seconds + 10,
-        )
-        logs = self._job_logs(job)
-        if completed.returncode != 0:
-            raise RuntimeError(f"Kubernetes payer Job {job} did not complete:\n{completed.stdout}\n{logs}")
-        return logs
+        if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
+            raise ValueError("Job timeout must be finite and positive")
+        deadline = time.monotonic() + timeout_seconds
+        observation = "Job status has not been observed"
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                completed = execute(
+                    self._privileged_command(
+                        self._kubectl_executable or "kubectl", "get", "job", job,
+                        "--namespace", PAYER_NAMESPACE, "--output=json",
+                        f"--request-timeout={min(10, remaining):.3f}s",
+                    ), E2E_ROOT, self.environment, min(15, remaining),
+                )
+            except RuntimeError as error:
+                observation = str(error)
+            else:
+                if completed.returncode != 0:
+                    observation = completed.stdout[-4096:]
+                else:
+                    try:
+                        document = json.loads(completed.stdout)
+                        status = document.get("status", {})
+                        if not isinstance(status, dict):
+                            raise ValueError("Job status is not an object")
+                    except (AttributeError, ValueError):
+                        observation = "Job status response is not a JSON object"
+                    else:
+                        observation = json.dumps(status, sort_keys=True)
+                        failed = self._job_terminal_evidence(job, status)
+                        if failed is not None:
+                            raise RuntimeError(f"Kubernetes payer Job {job} failed:\n{failed}")
+                        if any(condition.get("type") == "Complete" and condition.get("status") == "True"
+                               for condition in status.get("conditions", [])):
+                            return self._job_logs(job)
+            if (remaining := deadline - time.monotonic()) > 0:
+                time.sleep(min(2, remaining))
+        try:
+            logs = self._job_logs(job)
+        except RuntimeError as error:
+            logs = f"Job logs unavailable: {error}"
+        raise RuntimeError(f"Kubernetes payer Job {job} did not complete within {timeout_seconds}s; "
+                           f"last_status={observation}\n{logs}")
 
-    def _job_terminal_evidence(self, job: str) -> str | None:
-        completed = execute(
-            self._privileged_command(
-                self._kubectl_executable or "kubectl",
-                "get",
-                "job",
-                job,
-                "--namespace",
-                PAYER_NAMESPACE,
-                "--output=json",
-            ),
-            E2E_ROOT,
-            self.environment,
-            15,
-        )
-        if completed.returncode != 0:
+    def _job_terminal_evidence(self, job: str, status: dict | None = None) -> str | None:
+        if status is None:
+            completed = execute(
+                self._privileged_command(
+                    self._kubectl_executable or "kubectl", "get", "job", job,
+                    "--namespace", PAYER_NAMESPACE, "--output=json", "--request-timeout=10s",
+                ), E2E_ROOT, self.environment, 15,
+            )
+            if completed.returncode != 0:
+                return None
+            status = json.loads(completed.stdout).get("status", {})
+        # Failed Pod counts alone are not terminal while backoff retries remain.
+        failed = next((condition for condition in status.get("conditions", [])
+                       if condition.get("type") == "Failed" and condition.get("status") == "True"), None)
+        if failed is None:
             return None
-        status = json.loads(completed.stdout).get("status", {})
-        if int(status.get("failed", 0) or 0) <= 0:
-            return None
-        return f"failed={status.get('failed')} logs={self._job_logs(job)[-4096:]!r}"
+        try:
+            logs = self._job_logs(job)[-4096:]
+        except RuntimeError as error:
+            logs = f"Job logs unavailable: {error}"
+        return f"condition={json.dumps(failed, sort_keys=True)} failed_pods={status.get('failed', 0)} logs={logs!r}"
 
     def _wait_and_approve_job(self, payer: str, payee: str, job: str) -> str:
         token = self.environment.get(

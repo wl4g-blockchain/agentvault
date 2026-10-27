@@ -1,5 +1,7 @@
 # MarketPulse Feed Subscription E2E
 
+For a retained K3s stack, explicit five-language cross-payments, and commands to inspect signatures, ledgers, and chain receipts, see the [manual acceptance guide](MANUAL_ACCEPTANCE_CN.md).
+
 This is a from-zero, process-level acceptance project for AgentVault. It models
 two real business systems rather than a unit-test fixture:
 

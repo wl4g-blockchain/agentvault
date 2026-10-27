@@ -11,6 +11,9 @@ machines out of business code:
 | TypeScript | `FetchPayerMiddleware` | `ExpressPayeeMiddleware` |
 | Java | `JdkHttpPayerMiddleware` / `SpringRestPayerMiddleware` (MVC/WebFlux) | `SpringInterceptorPayeeMiddleware` |
 
+Java's Spring adapters use Spring Framework 7.0.9 and Jakarta Servlet 6.1;
+the Java examples use Spring Boot 4.0.8.
+
 `PayerMiddleware` owns 402 detection, stable operation identity, approval wait,
 credential-origin binding, bounded retry, and settlement-response reporting.
 `PayeeMiddleware` owns Price-bound Challenge creation, Credential verification,

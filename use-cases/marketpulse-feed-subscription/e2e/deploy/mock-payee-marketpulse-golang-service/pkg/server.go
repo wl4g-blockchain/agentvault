@@ -39,7 +39,8 @@ func NewServerFromEnv() (*Server, error) {
 			_ = vault.Close()
 		}
 	}()
-	core, err := vault.Payee(agentvault.PayeeConfig{})
+	protocolName := envDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402")
+	core, err := vault.Payee(agentvault.PayeeConfig{Protocols: []string{protocolName}})
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +62,12 @@ func NewServerFromEnv() (*Server, error) {
 	engine.Use(gin.Recovery())
 	route.NewFeedRouter(feedHandler).Register(engine)
 	engine.POST("/mcp", middleware.Handler(), feedHandler.MCP)
+	a2aRoute := feedRoute
+	a2aRoute.Path, a2aRoute.MCPTool = "/a2a", ""
+	a2aRoute.PriceID = envDefault("MARKETPULSE_A2A_PRICE_ID", feedRoute.PriceID)
+	a2aRoute.Resource = envDefault("MARKETPULSE_A2A_RESOURCE_URL", strings.Replace(feedRoute.Resource, "/mcp", "/a2a", 1))
+	a2aRoute.A2ATaskStore = database
+	engine.POST("/a2a", core.Gin(a2aRoute).Handler(), (&handler.A2AHandler{Feed: feedHandler}).Send)
 	bind, err := required("MARKETPULSE_BIND")
 	if err != nil {
 		return nil, err
@@ -86,7 +93,7 @@ func mcpRoute() (payee.GinPayeeRoute, error) {
 	if err != nil {
 		return payee.GinPayeeRoute{}, err
 	}
-	return payee.NewMCPToolRoute("/mcp", "marketpulse.realtime_news", scenarioID, priceID, resourceURL, origin), nil
+	return payee.NewMCPToolRouteWithProtocol("/mcp", "marketpulse.realtime_news", scenarioID, priceID, resourceURL, origin, envDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402")), nil
 }
 
 // Run starts the HTTP listener. The /mcp endpoint is the only payment-protected route.

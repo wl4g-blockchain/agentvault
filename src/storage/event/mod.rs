@@ -25,6 +25,13 @@ pub trait IEventRepository: Send + Sync {
         attempt_no: u32,
     ) -> Result<Option<PaymentEvent>>;
 
+    /// Finds the newest event of this type across all reconciliation attempts.
+    async fn find_latest_for_intent_type(
+        &self,
+        intent_id: &str,
+        event_type: PaymentEventType,
+    ) -> Result<Option<PaymentEvent>>;
+
     async fn list_for_intent(&self, intent_id: &str, page: PageRequest) -> Result<Page<PaymentEvent>>;
 }
 

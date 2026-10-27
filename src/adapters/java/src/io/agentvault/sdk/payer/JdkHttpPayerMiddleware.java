@@ -1,15 +1,14 @@
 package io.agentvault.sdk.payer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import static io.agentvault.sdk.payer.PayerMessages.JSON;
 
-import io.agentvault.sdk.model.A2a;
+import com.fasterxml.jackson.databind.JsonNode;
+
 import io.agentvault.sdk.model.Payer.AuthorizedPayment;
 import io.agentvault.sdk.model.Payer.PayerHttpRequest;
 import io.agentvault.sdk.model.Payer.PayerHttpResponse;
 import io.agentvault.sdk.model.Payer.PayerRequestContext;
+import io.agentvault.sdk.payer.PayerMessages.Call;
 
 import java.io.IOException;
 import java.net.URI;
@@ -21,14 +20,12 @@ import java.util.Map;
 
 /** Spring-independent JDK HttpClient payer wrapper with replayable byte bodies. */
 public final class JdkHttpPayerMiddleware {
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     public record Result(HttpResponse<byte[]> response, AuthorizedPayment payment) {}
 
-    private record McpCall(JsonNode id, ObjectNode message, A2a.Call a2a) {}
-
     private final PayerMiddleware core;
     private final HttpClient client;
+    private final PayerMessages messages;
 
     public JdkHttpPayerMiddleware(PayerMiddleware core) {
         this(core, HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build());
@@ -37,6 +34,7 @@ public final class JdkHttpPayerMiddleware {
     public JdkHttpPayerMiddleware(PayerMiddleware core, HttpClient client) {
         this.core = java.util.Objects.requireNonNull(core, "core");
         this.client = java.util.Objects.requireNonNull(client, "client");
+        this.messages = new PayerMessages(core);
         if (client.followRedirects() != HttpClient.Redirect.NEVER) {
             throw new IllegalArgumentException("payer HTTP client must disable redirects");
         }
@@ -49,7 +47,7 @@ public final class JdkHttpPayerMiddleware {
         if (body.length > core.config().maxChallengeBytes()) {
             throw new IllegalArgumentException("paid request body exceeds configured limit");
         }
-        McpCall call = mcpCall(request, body);
+        Call call = messages.parse(request.method(), headers(request.headers().map()), body);
         if (call != null && call.a2a() != null && context != null)
             request =
                     copy(
@@ -134,7 +132,7 @@ public final class JdkHttpPayerMiddleware {
     private Result handleMcpChallenge(
             HttpRequest request,
             byte[] body,
-            McpCall call,
+            Call call,
             HttpResponse<byte[]> first,
             URI target,
             PayerRequestContext context)
@@ -175,7 +173,7 @@ public final class JdkHttpPayerMiddleware {
                                     PayerMiddleware.origin(target));
         else {
             var metadata = core.mcpCredential(authorized, PayerMiddleware.origin(target));
-            paidBody = attachMcpCredential(call, metadata.key(), metadata.value());
+            paidBody = messages.credential(call, metadata.key(), metadata.value());
         }
         HttpRequest paid = copy(request, paidBody, null);
         final HttpResponse<byte[]> response;
@@ -208,103 +206,18 @@ public final class JdkHttpPayerMiddleware {
                                     // Byte-array responses are already fully consumed.
                                 }
                             },
-                            value -> reportMcp(context, authorized, call, value));
+                            value ->
+                                    messages.report(
+                                            context,
+                                            authorized,
+                                            call,
+                                            value.statusCode(),
+                                            headers(value.headers().map()),
+                                            value.body()));
         } catch (InterruptedDelivery error) {
             throw error.interrupted;
         }
         return new Result(response, authorized);
-    }
-
-    private void reportMcp(
-            PayerRequestContext context,
-            AuthorizedPayment authorized,
-            McpCall call,
-            HttpResponse<byte[]> response)
-            throws IOException {
-        if (response.statusCode() == 503
-                || response.statusCode() < 200
-                || response.statusCode() >= 300) return;
-        if (!isJson(response.headers().firstValue("content-type").orElse(null))) {
-            throw new IOException("paid MCP response must be application/json");
-        }
-        if (response.body().length > core.config().maxChallengeBytes()) {
-            throw new IOException("paid MCP response exceeds configured limit");
-        }
-        final JsonNode message;
-        try {
-            message = JSON.readTree(response.body());
-        } catch (JsonProcessingException error) {
-            throw new IOException("paid MCP response is not valid JSON", error);
-        }
-        if (!PayerMiddleware.boundMcpResponse(message, call.id(), true)) {
-            throw new IOException("paid MCP response has no matching JSON-RPC result");
-        }
-        if (call.a2a() != null) {
-            core.a2a()
-                    .report(
-                            context,
-                            authorized,
-                            call.a2a(),
-                            message,
-                            headers(response.headers().map()));
-            return;
-        }
-        JsonNode metadata = message.path("result").path("_meta");
-        core.reportMcp(
-                context, authorized, metadata.isObject() ? metadata : JSON.createObjectNode());
-    }
-
-    private McpCall mcpCall(HttpRequest request, byte[] body) {
-        if (!"POST".equalsIgnoreCase(request.method())
-                || !isJson(request.headers().firstValue("content-type").orElse(null))) return null;
-        try {
-            var a2a = A2a.parse(body, core.config().maxChallengeBytes());
-            if (a2a != null) return new McpCall(a2a.id(), a2a.wire(), a2a);
-            JsonNode value = JSON.readTree(body);
-            if (value == null
-                    || !value.isObject()
-                    || !"2.0".equals(value.path("jsonrpc").asText())
-                    || !"tools/call".equals(value.path("method").asText())
-                    || !value.path("params").isObject()
-                    || !(value.path("id").isTextual() || value.path("id").isNumber())) return null;
-            return new McpCall(value.get("id"), (ObjectNode) value, null);
-        } catch (IOException error) {
-            return null;
-        }
-    }
-
-    private byte[] attachMcpCredential(McpCall call, String key, JsonNode value) {
-        ObjectNode message = call.message().deepCopy();
-        ObjectNode params = (ObjectNode) message.path("params");
-        JsonNode rootExisting = message.get("_meta");
-        if (rootExisting != null && !rootExisting.isObject()) {
-            throw new IllegalArgumentException("JSON-RPC root _meta must be an object");
-        }
-        if (rootExisting != null
-                && core.mcpRootRequestMetadataKeys().stream().anyMatch(rootExisting::has)) {
-            throw new IllegalArgumentException(
-                    "MCP request already contains root payment credentials");
-        }
-        JsonNode existing = params.get("_meta");
-        if (existing != null && !existing.isObject()) {
-            throw new IllegalArgumentException("MCP params._meta must be an object");
-        }
-        ObjectNode metadata =
-                existing == null ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
-        if (core.mcpRequestMetadataKeys().stream().anyMatch(metadata::has)) {
-            throw new IllegalArgumentException("MCP request already contains payment credentials");
-        }
-        metadata.set(key, value);
-        params.set("_meta", metadata);
-        try {
-            byte[] encoded = JSON.writeValueAsBytes(message);
-            if (encoded.length > core.config().maxChallengeBytes()) {
-                throw new IllegalArgumentException("paid MCP request exceeds configured limit");
-            }
-            return encoded;
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("paid MCP request cannot be encoded", error);
-        }
     }
 
     private static boolean isJson(String value) {

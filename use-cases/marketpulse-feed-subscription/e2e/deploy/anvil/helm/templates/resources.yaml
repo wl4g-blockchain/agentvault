@@ -25,6 +25,9 @@ metadata:
   labels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
 spec:
   replicas: {{ .Values.workload.replicas }}
+{{- if .Values.persistence.existingClaim }}
+  strategy: { type: Recreate }
+{{- end }}
   selector:
     matchLabels: { app.kubernetes.io/name: {{ .Chart.Name }}, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
@@ -98,7 +101,11 @@ spec:
 {{- end }}
 {{- if .Values.persistence.enabled }}
         - name: data
+{{- if .Values.persistence.existingClaim }}
+          persistentVolumeClaim: { claimName: {{ .Values.persistence.existingClaim | quote }} }
+{{- else }}
           emptyDir: {}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.config.enabled }}

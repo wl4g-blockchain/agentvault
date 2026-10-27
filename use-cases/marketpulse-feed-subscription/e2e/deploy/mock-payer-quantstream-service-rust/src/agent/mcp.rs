@@ -32,6 +32,7 @@ pub struct MCPHelper {
     client: Arc<RunningService<RoleClient, ()>>,
     payment_intents: Arc<Mutex<HashMap<String, String>>>,
     _vault: Arc<AgentVault<ConfiguredVaultTransport>>,
+    http: ClientWithMiddleware,
 }
 
 pub struct ToolResult {
@@ -86,7 +87,7 @@ impl MCPHelper {
         let payment_intents = Arc::new(Mutex::new(HashMap::new()));
         let transport = StreamableHttpClientTransport::with_client(
             AgentVaultMCPClient {
-                http,
+                http: http.clone(),
                 payment_intents: Arc::clone(&payment_intents),
             },
             StreamableHttpClientTransportConfig::with_uri(required_env("MARKETPULSE_URL")?),
@@ -102,6 +103,7 @@ impl MCPHelper {
             client,
             payment_intents,
             _vault: vault,
+            http,
         })
     }
 
@@ -129,6 +131,9 @@ impl MCPHelper {
         run_id: &str,
         fail_after_settlement_once: bool,
     ) -> Result<ToolResult, DynError> {
+        if tool == REALTIME_TOOL && env::var("MARKETPULSE_MESSAGE_PROTOCOL").is_ok_and(|value| value == "a2a") {
+            return self.a2a(run_id, fail_after_settlement_once).await;
+        }
         let paid = tool == REALTIME_TOOL;
         let mut meta = RequestMetaObject::new();
         meta.insert(
@@ -157,6 +162,50 @@ impl MCPHelper {
         }
         Ok(ToolResult {
             body,
+            payment_intent_id,
+        })
+    }
+    async fn a2a(&self, run_id: &str, fail_after_settlement: bool) -> Result<ToolResult, DynError> {
+        let url = env::var("MARKETPULSE_A2A_URL").unwrap_or(format!(
+            "{}/a2a",
+            required_env("MARKETPULSE_URL")?.trim_end_matches("/mcp")
+        ));
+        let mut request = self
+            .http
+            .post(url)
+            .header("content-type", "application/json")
+            .body(
+                json!({"jsonrpc":"2.0", "id":run_id, "method":"message/send", "params":{"message":{
+                "kind":"message", "messageId":run_id, "role":"user", "parts":[{"kind":"text", "text":REALTIME_TOOL}]}}})
+                .to_string(),
+            )
+            .with_payment(PayerRequestContext::new(run_id)?);
+        if fail_after_settlement {
+            request = request.header("x-e2e-fail-after-settlement", "once");
+        }
+        let mut response = request.send().await?;
+        let payment_intent_id = response
+            .extensions()
+            .get::<AuthorizedPayment>()
+            .map(|payment| payment.intent.id.clone());
+        let body: Value = serde_json::from_slice(&read_limited(&mut response).await?)?;
+        if !response.status().is_success() || body["result"]["status"]["state"] != "completed" {
+            return Err(format!(
+                "A2A business Task did not complete: http={}, rpc_code={}, task_state={}",
+                response.status(),
+                body["error"]["code"],
+                body["result"]["status"]["state"]
+            )
+            .into());
+        }
+        let data = &body["result"]["artifacts"][0]["parts"][0]["data"];
+        if !data.is_object() || payment_intent_id.is_none() {
+            return Err("paid A2A result omitted news or payment evidence".into());
+        }
+        tracing::info!(event.name="manual.payer.completed", run.id=%run_id, task.id=%body["result"]["id"],
+            message_protocol="a2a", payment.intent_id=?payment_intent_id, receipt_verified=true);
+        Ok(ToolResult {
+            body: serde_json::to_vec(data)?,
             payment_intent_id,
         })
     }

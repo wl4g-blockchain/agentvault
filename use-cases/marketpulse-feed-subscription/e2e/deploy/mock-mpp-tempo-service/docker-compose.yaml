@@ -1,0 +1,17 @@
+services:
+  manual-payment-provider:
+    image: ${E2E_MANUAL_PROVIDER_IMAGE:-localhost/manual-payment-provider:local}
+    environment:
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-http://solana:8899}
+      # Supply custody values through the caller environment; never inline keys.
+      SOLANA_CHAIN_REFERENCE:
+      SOLANA_FACILITATOR_KEYPAIR:
+      EVM_FACILITATOR_URL: ${EVM_FACILITATOR_URL:-http://facilitator:8085}
+      TEMPO_RPC_URL: ${TEMPO_RPC_URL:-http://tempo:8545}
+      TEMPO_RECIPIENT: ${TEMPO_RECIPIENT:-0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc}
+      TEMPO_DEV_PRIVATE_KEY:
+      TOKIO_WORKER_THREADS: "2"
+    ports: ["127.0.0.1:${E2E_MANUAL_PROVIDER_PORT:-38087}:8087"]
+    cpus: "0.5"
+    mem_limit: 512m
+    restart: unless-stopped

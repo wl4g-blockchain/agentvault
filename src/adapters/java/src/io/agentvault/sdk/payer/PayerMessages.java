@@ -12,13 +12,13 @@ import io.agentvault.sdk.model.Payer.PayerRequestContext;
 import java.io.IOException;
 import java.util.Map;
 
-/** Shared native MCP/A2A carrier mapping for Spring MVC and WebFlux. */
-final class SpringPayerMessages {
+/** Native MCP/A2A carrier mapping shared by JDK, Spring MVC and WebFlux. */
+final class PayerMessages {
     static final ObjectMapper JSON = new ObjectMapper();
     private static final System.Logger LOG = System.getLogger("io.agentvault.sdk");
     private final PayerMiddleware core;
 
-    SpringPayerMessages(PayerMiddleware core) {
+    PayerMessages(PayerMiddleware core) {
         this.core = core;
     }
 
@@ -50,22 +50,24 @@ final class SpringPayerMessages {
         if (rootExisting != null && !rootExisting.isObject()) {
             throw new IllegalArgumentException("JSON-RPC root _meta must be an object");
         }
-        if (rootExisting != null
-                && core.mcpRootRequestMetadataKeys().stream().anyMatch(rootExisting::has)) {
-            throw new IllegalArgumentException(
-                    "MCP request already contains root payment credentials");
-        }
-        JsonNode existing = params.get("_meta");
-        if (existing != null && !existing.isObject()) {
+        JsonNode paramsExisting = params.get("_meta");
+        if (paramsExisting != null && !paramsExisting.isObject()) {
             throw new IllegalArgumentException("MCP params._meta must be an object");
         }
+        for (JsonNode existing : new JsonNode[] {rootExisting, paramsExisting}) {
+            if (existing != null
+                    && core.mcpRequestMetadataKeys().stream().anyMatch(existing::has)) {
+                throw new IllegalArgumentException(
+                        "MCP request already contains payment credentials");
+            }
+        }
+        boolean atRoot = core.mcpRootRequestMetadataKeys().contains(key);
+        ObjectNode carrier = atRoot ? message : params;
+        JsonNode existing = atRoot ? rootExisting : paramsExisting;
         ObjectNode metadata =
                 existing == null ? JSON.createObjectNode() : ((ObjectNode) existing).deepCopy();
-        if (core.mcpRequestMetadataKeys().stream().anyMatch(metadata::has)) {
-            throw new IllegalArgumentException("MCP request already contains payment credentials");
-        }
         metadata.set(key, value);
-        params.set("_meta", metadata);
+        carrier.set("_meta", metadata);
         try {
             byte[] encoded = JSON.writeValueAsBytes(message);
             if (encoded.length > core.config().maxChallengeBytes()) {
@@ -103,6 +105,9 @@ final class SpringPayerMessages {
         if (status == 503 || status < 200 || status >= 300) return;
         if (!isJson(PayerMiddleware.header(headers, "content-type")))
             throw new IOException("paid JSON-RPC response must be application/json");
+        if (body.length > core.config().maxChallengeBytes()) {
+            throw new IOException("paid JSON-RPC response exceeds configured limit");
+        }
         final JsonNode message;
         try {
             message = JSON.readTree(body);

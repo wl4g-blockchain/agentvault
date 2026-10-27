@@ -4,7 +4,7 @@ import {
   GrpcConfig,
   MqttConfig,
   type VaultTransportConfig,
-  mcpToolRoute,
+  mcpToolRouteWithProtocol,
 } from '@agentvault/sdk';
 import express, { type Express } from 'express';
 import type { Server as HttpServer } from 'node:http';
@@ -26,24 +26,31 @@ export class MarketPulseServer {
     const [host, port] = parseBind(required('MARKETPULSE_BIND'));
     const vault = payeeVault();
     const payee = vault.payee();
-    const middleware: ExpressPayeeMiddleware = payee.express([mcpToolRoute(
+    const storage = new FeedSqliteRepository(required('MARKETPULSE_DATABASE'));
+    const taskStore = storage;
+    const middleware: ExpressPayeeMiddleware = payee.express([mcpToolRouteWithProtocol(
       '/mcp',
       'marketpulse.realtime_news',
       required('MARKETPULSE_SCENARIO_ID'),
       required('MARKETPULSE_PRICE_ID'),
       required('MARKETPULSE_RESOURCE_URL'),
       required('MARKETPULSE_ORIGIN'),
-    )]);
-    const storage = new FeedSqliteRepository(required('MARKETPULSE_DATABASE'));
+      process.env.MARKETPULSE_PAYMENT_PROTOCOL ?? 'x402',
+    ), {method:'POST', path:'/a2a', scenarioId:required('MARKETPULSE_SCENARIO_ID'),
+      priceId:process.env.MARKETPULSE_A2A_PRICE_ID ?? required('MARKETPULSE_PRICE_ID'),
+      resource:process.env.MARKETPULSE_A2A_RESOURCE_URL ?? required('MARKETPULSE_RESOURCE_URL').replace(/\/mcp$/, '/a2a'),
+      origin:required('MARKETPULSE_ORIGIN'), protocol:process.env.MARKETPULSE_PAYMENT_PROTOCOL ?? 'x402',
+      a2aTaskStore:taskStore}]);
     const handler = new FeedHandler(
       storage,
-      process.env.MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION === 'true',
+      process.env.MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION === 'true', taskStore,
     );
     const application = express();
     application.disable('x-powered-by');
     application.use(...middleware.handlers());
     new FeedRouter(handler).register(application);
     application.post('/mcp', handler.mcp);
+    application.post('/a2a', handler.a2a);
     return new MarketPulseServer(application, storage, vault, host, port);
   }
 

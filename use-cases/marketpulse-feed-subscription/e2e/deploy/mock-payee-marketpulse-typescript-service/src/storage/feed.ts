@@ -1,3 +1,5 @@
+import type {Task} from '@a2a-js/sdk';
+import type {TaskStore} from '@a2a-js/sdk/server';
 import { DatabaseSync } from 'node:sqlite';
 import type { SettledIncomingPayment } from '@agentvault/sdk';
 
@@ -38,7 +40,7 @@ export interface DeliveryState {
   response?: string;
 }
 
-export class FeedSqliteRepository {
+export class FeedSqliteRepository implements TaskStore {
   private readonly database: DatabaseSync;
 
   constructor(path: string) {
@@ -46,6 +48,7 @@ export class FeedSqliteRepository {
     this.database = new DatabaseSync(path);
     this.database.exec(`
       PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS a2a_task(id TEXT PRIMARY KEY, task_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS feed_item(
         id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,topic TEXT NOT NULL,
         symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,sentiment_bps INTEGER NOT NULL,
@@ -55,6 +58,16 @@ export class FeedSqliteRepository {
         response_json TEXT,status TEXT NOT NULL CHECK(status IN ('settled','delivered')),
         failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL);`);
     this.seed();
+  }
+
+  async load(taskId:string):Promise<Task|undefined> {
+    const row = this.database.prepare('SELECT task_json FROM a2a_task WHERE id=?').get(taskId) as {task_json:string}|undefined;
+    return row ? JSON.parse(row.task_json) as Task : undefined;
+  }
+
+  async save(task:Task):Promise<void> {
+    this.database.prepare('INSERT INTO a2a_task VALUES(?,?) ON CONFLICT(id) DO UPDATE SET task_json=excluded.task_json')
+      .run(task.id, JSON.stringify(task));
   }
 
   close(): void { this.database.close(); }

@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+from a2a.types import Artifact, DataPart, MessageSendParams, Part, TaskStatus
 from agentvault import FastPayeeMiddleware
 from fastapi import Request, Response
 
@@ -11,9 +12,10 @@ from app.storage.feed import FeedSqliteRepository
 
 
 class FeedHandler:
-    def __init__(self, storage: FeedSqliteRepository, allow_failure_injection: bool) -> None:
+    def __init__(self, storage: FeedSqliteRepository, allow_failure_injection: bool, task_store=None) -> None:
         self._storage = storage
         self._allow_failure_injection = allow_failure_injection
+        self._task_store = task_store
 
     async def health(self) -> dict[str, str]:
         return {"status": "ready", "service": "marketpulse-python"}
@@ -50,6 +52,29 @@ class FeedHandler:
         if method == "tools/call":
             return self._call_tool(request, body, identifier, params)
         return self._response(404, self._error(identifier, -32601, "method not found"))
+
+    async def a2a(self, request: Request) -> Response:
+        """Native A2A Task delivery reuses the durable paid-news business operation."""
+        rpc = json.loads(await request.body())
+        if rpc.get("method") != "message/send" or self._task_store is None:
+            return self._response(400, self._error(rpc.get("id"), -32601, "message/send is required"))
+        params = MessageSendParams.model_validate(rpc["params"])
+        task = await self._task_store.get(params.message.task_id)
+        if task is None:
+            return self._response(409, self._error(rpc.get("id"), -32009, "payment Task is missing"))
+        operation = {"name": "marketpulse.realtime_news", "arguments": {}}
+        # Payment credentials and Task continuation must not alter business idempotency.
+        canonical = json.dumps({"jsonrpc": "2.0", "id": request.headers["x-run-id"],
+                                "method": "tools/call", "params": operation}, separators=(",", ":")).encode()
+        response = self._call_tool(request, canonical, rpc["id"], operation)
+        value = json.loads(response.body)
+        if "error" in value:
+            return response
+        task.status = TaskStatus(state="completed")
+        task.artifacts = [Artifact(artifact_id="realtime-news", parts=[Part(root=DataPart(
+            data=value["result"]["structuredContent"]))])]
+        await self._task_store.save(task)
+        return self._response(200, self._result(rpc["id"], task.model_dump(by_alias=True, exclude_none=True)))
 
     def _call_tool(self, request: Request, body: bytes, identifier: Any, params: dict[str, Any]) -> Response:
         name = params.get("name")

@@ -38,6 +38,16 @@ class KubernetesEvidenceTest(unittest.TestCase):
         value.environment = {}
         return value
 
+    def test_solana_cli_and_keypair_use_actual_chart_deployment_name(self):
+        value = self.deployer()
+        value._kubectl = Mock(return_value="public-key")
+        self.assertEqual(value._solana_command("solana", "cluster-version"), "public-key")
+        self.assertIn("deployment/solana-validator", value._kubectl.call_args.args)
+        value._kubectl = Mock(return_value=json.dumps([7] * 64))
+        self.assertEqual(json.loads(value._solana_keypair_json("/tmp/test-keypair.json")), [7] * 64)
+        self.assertIn("deployment/solana-validator", value._kubectl.call_args.args)
+        value._kubectl.assert_called_once()
+
     def test_prebuilt_dirty_image_reaches_import_and_helm_without_runtime_rebuild(self):
         kubeconfig = self.root / "kubeconfig"
         kubeconfig.write_text("unit fixture")
@@ -124,6 +134,42 @@ class KubernetesEvidenceTest(unittest.TestCase):
         cleaner._kubectl_command = Mock(side_effect=[subprocess.CompletedProcess([], 0, "deleted"), subprocess.CompletedProcess([], 0, "persistentvolumeclaim/stuck")])
         with self.assertRaisesRegex(RuntimeError, "remains"):
             cleaner._remove_business_evidence((backend.PAYER_NAMESPACE,), "persistentvolumeclaims")
+
+    def test_manual_controller_cleanup_is_label_and_namespace_scoped(self):
+        cleaner = object.__new__(backend.KubernetesE2ECleaner)
+        cleaner._kubectl_command = Mock(side_effect=[subprocess.CompletedProcess([], 0, "deleted"),
+                                                     subprocess.CompletedProcess([], 0, "")])
+        cleaner._remove_manual_workloads((backend.PAYEE_NAMESPACE,))
+        for call in cleaner._kubectl_command.call_args_list:
+            args = call.args[0]
+            self.assertEqual(args[1], "deployment,service,cronjob")
+            self.assertEqual(args[args.index("--namespace")+1], backend.PAYEE_NAMESPACE)
+            self.assertEqual(args[args.index("--selector")+1], "agentvault.io/manual-acceptance=true")
+            self.assertNotIn("persistentvolumeclaims", args)
+            self.assertNotIn("--all", args)
+        with self.assertRaises(ValueError): cleaner._remove_manual_workloads(("production",))
+        cleaner._kubectl_command = Mock(side_effect=[subprocess.CompletedProcess([], 0, "deleted"),
+                                                     subprocess.CompletedProcess([], 0, "deployment/stuck")])
+        with self.assertRaisesRegex(RuntimeError,"controllers remain"):
+            cleaner._remove_manual_workloads((backend.PAYEE_NAMESPACE,))
+
+    def test_cli_cleanup_removes_manual_controllers_before_waiting_for_pods(self):
+        cleaner = object.__new__(backend.KubernetesE2ECleaner)
+        cleaner._kubeconfig = self.root / "kubeconfig"
+        cleaner._kubeconfig.write_text("unit")
+        cleaner._kubectl = "kubectl"; cleaner._helm = "helm"
+        cleaner._target_namespaces = Mock(return_value=(backend.PAYEE_NAMESPACE,))
+        order = []
+        cleaner._remove_manual_workloads = Mock(side_effect=lambda _: order.append("controllers") or [])
+        cleaner._releases = Mock(return_value=())
+        cleaner._remove_business_evidence = Mock(side_effect=lambda _,kind: order.append(kind) or [])
+        cleaner._wait_for_pods = Mock(side_effect=lambda _: order.append("pods"))
+        cleaner._recover_remaining_pods = Mock(return_value=[])
+        cleaner._pods = Mock(return_value=())
+        cleaner._release_manual_image_pins = Mock(side_effect=lambda: order.append("pins") or [])
+        cleaner.cleanup()
+        self.assertEqual(order,["controllers","jobs","pods","persistentvolumeclaims","pins"])
+        self.assertEqual(backend.SERVICE_NAMES["solana"],(backend.PAYMENT_NAMESPACE,"solana-validator",8899))
 
     def test_snapshot_reads_committed_live_wal_and_produces_repeatably_readable_standalone_database(self):
         source = self.root / "live.sqlite3"
@@ -215,6 +261,153 @@ class KubernetesEvidenceTest(unittest.TestCase):
             connection.execute("UPDATE mcp_delivery SET failure_injections=0")
         with self.assertRaisesRegex(RuntimeError, "post-settlement recovery"):
             value._audit("rust", "go")
+
+
+class JobWaitTest(unittest.TestCase):
+    class Clock:
+        def __init__(self): self.now = 0.0
+        def monotonic(self): return self.now
+        def sleep(self, seconds): self.now += seconds
+
+    def setUp(self):
+        self.clock = self.Clock()
+        self.addCleanup(patch.stopall)
+        patch.object(backend.time, "monotonic", self.clock.monotonic).start()
+        self.sleep = patch.object(backend.time, "sleep", side_effect=self.clock.sleep).start()
+        self.port = object.__new__(backend.KubernetesE2EDeployer)
+        self.port.environment = {}
+        self.port._kubectl_executable = "kubectl"
+        self.port._privileged_command = lambda *args: list(args)
+        self.port._job_logs = Mock(return_value="payer log evidence")
+
+    def response(self, status):
+        return subprocess.CompletedProcess([], 0, json.dumps({"status": status,
+            "spec": {"env": "do not include the full Job spec in timeout diagnostics"}}))
+
+    def test_completed_job_returns_logs_without_sleeping_or_second_get(self):
+        status = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+        with patch.object(backend, "execute", return_value=self.response(status)) as command:
+            self.assertEqual(self.port._wait_job("completed", 960), "payer log evidence")
+        command.assert_called_once()
+        self.assertIn("get", command.call_args.args[0])
+        self.assertNotIn("wait", command.call_args.args[0])
+        self.sleep.assert_not_called()
+        self.port._job_logs.assert_called_once_with("completed")
+
+    def test_failed_condition_returns_diagnostics_immediately_without_second_get(self):
+        status = {"failed": 1, "conditions": [{"type": "Failed", "status": "True",
+                   "reason": "BackoffLimitExceeded", "message": "payer exited with an error"}]}
+        with patch.object(backend, "execute", return_value=self.response(status)) as command:
+            with self.assertRaisesRegex(RuntimeError, "BackoffLimitExceeded.*payer log evidence"):
+                self.port._wait_job("failed", 960)
+        command.assert_called_once()
+        self.sleep.assert_not_called()
+        self.port._job_logs.assert_called_once_with("failed")
+        self.assertEqual(self.clock.now, 0)
+
+    def test_failed_pod_count_and_false_conditions_allow_retry_then_completion(self):
+        pending = {"failed": 1, "active": 1, "conditions": [{"type": "Failed", "status": "False"}]}
+        complete = {"failed": 1, "succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+        with patch.object(backend, "execute", side_effect=[self.response(pending), self.response(complete)]) as command:
+            self.assertEqual(self.port._wait_job("retrying", 10), "payer log evidence")
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(self.clock.now, 2)
+        self.port._job_logs.assert_called_once_with("retrying")
+
+    def test_timeout_retains_latest_status_and_logs_with_bounded_polling(self):
+        with patch.object(backend, "execute", return_value=self.response({"active": 1})) as command:
+            with self.assertRaises(RuntimeError) as caught:
+                self.port._wait_job("pending", 3)
+        message = str(caught.exception)
+        self.assertIn('last_status={"active": 1}', message)
+        self.assertIn("payer log evidence", message)
+        self.assertNotIn("full Job spec", message)
+        self.assertEqual(self.clock.now, 3)
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual([call.args[3] for call in command.call_args_list], [3, 1])
+        self.port._job_logs.assert_called_once_with("pending")
+
+    def test_transient_api_error_is_retried_within_deadline(self):
+        error = subprocess.CompletedProcess([], 1, "API temporarily unavailable")
+        complete = self.response({"conditions": [{"type": "Complete", "status": "True"}]})
+        with patch.object(backend, "execute", side_effect=[error, complete]) as command:
+            self.assertEqual(self.port._wait_job("recovering-api", 10), "payer log evidence")
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(self.clock.now, 2)
+
+    def test_failed_condition_is_preserved_even_when_log_collection_fails(self):
+        status = {"conditions": [{"type": "Failed", "status": "True", "reason": "DeadlineExceeded"}]}
+        self.port._job_logs.side_effect = RuntimeError("log request failed")
+        with patch.object(backend, "execute", return_value=self.response(status)):
+            with self.assertRaisesRegex(RuntimeError, "DeadlineExceeded.*logs unavailable"):
+                self.port._wait_job("failed", 960)
+        self.sleep.assert_not_called()
+
+    def test_terminal_helper_does_not_confuse_retrying_pods_with_final_failure(self):
+        with patch.object(backend, "execute", return_value=self.response({"failed": 2, "active": 1})) as command:
+            self.assertIsNone(self.port._job_terminal_evidence("retrying"))
+        command.assert_called_once()
+        self.port._job_logs.assert_not_called()
+
+    def test_nonpositive_or_unbounded_timeout_is_rejected_without_api_requests(self):
+        with patch.object(backend, "execute") as command:
+            for timeout in (0, -1, float("inf"), float("nan")):
+                with self.assertRaises(ValueError): self.port._wait_job("invalid", timeout)
+        command.assert_not_called()
+
+
+class KubernetesManualPinCleanupTest(unittest.TestCase):
+    def cleaner(self, directory):
+        cleaner=object.__new__(backend.KubernetesE2ECleaner)
+        cleaner._kubeconfig=Path(directory)/"kubeconfig"
+        cleaner._kubeconfig.write_text("unit")
+        cleaner._kubectl="kubectl";cleaner._helm="helm";cleaner._command_timeout=5
+        cleaner._target_namespaces=Mock(return_value=())
+        return cleaner
+
+    def test_lost_state_and_absent_namespaces_still_release_only_owned_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cleaner=self.cleaner(directory)
+            self.assertFalse((Path(directory)/"manual-public.json").exists())
+            owned="ghcr.io/example/custom-payer:dirty"
+            operator="registry.example/operator:pinned"
+            labels={owned:{backend.MANUAL_IMAGE_PIN:"pinned",backend.MANUAL_IMAGE_PIN_OWNER:"true"},
+                    operator:{backend.MANUAL_IMAGE_PIN:"pinned","operator":"true"}}
+            def command(arguments,*args):
+                self.assertEqual(arguments[:7],["sudo","-n","k3s","ctr","-n","k8s.io","images"])
+                if arguments[7]=="list":
+                    self.assertEqual(arguments[8:],["--quiet",'labels."io.agentvault.manual-image-pin"=="true"'])
+                    selected=[ref for ref,meta in labels.items() if meta.get(backend.MANUAL_IMAGE_PIN_OWNER)=="true"]
+                    return subprocess.CompletedProcess(arguments,0,"\n".join(selected))
+                self.assertEqual(arguments[7:],["label",owned,"io.cri-containerd.pinned=","io.agentvault.manual-image-pin="])
+                labels[owned].pop(backend.MANUAL_IMAGE_PIN)
+                labels[owned].pop(backend.MANUAL_IMAGE_PIN_OWNER)
+                return subprocess.CompletedProcess(arguments,0,"")
+            with patch.object(backend.shutil,"which",return_value="k3s"), \
+                 patch.object(backend,"execute",side_effect=command) as commands:
+                result=cleaner.cleanup()
+            self.assertEqual(commands.call_count,2)
+            self.assertNotIn(backend.MANUAL_IMAGE_PIN,labels[owned])
+            self.assertEqual(labels[operator][backend.MANUAL_IMAGE_PIN],"pinned")
+            self.assertIn(owned,result)
+            self.assertTrue(all("--replace-all" not in call.args[0] and "remove" not in call.args[0]
+                                for call in commands.call_args_list))
+
+    def test_cleanup_without_manual_marker_never_changes_operator_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cleaner=self.cleaner(directory)
+            with patch.object(backend.shutil,"which",return_value="k3s"), \
+                 patch.object(backend,"execute",return_value=subprocess.CompletedProcess([],0,"")) as command:
+                cleaner.cleanup()
+            command.assert_called_once()
+            self.assertEqual(command.call_args.args[0][-1],'labels."io.agentvault.manual-image-pin"=="true"')
+
+    def test_non_k3s_cleanup_has_no_local_image_side_effect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cleaner=self.cleaner(directory)
+            with patch.object(backend.shutil,"which",return_value=None), patch.object(backend,"execute") as command:
+                cleaner.cleanup()
+            command.assert_not_called()
 
 
 if __name__ == "__main__":

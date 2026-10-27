@@ -1,3 +1,4 @@
+import { JSONRPCResponseSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { TaskStore, ServerCallContext } from '@a2a-js/sdk/server';
 import { A2APaymentCall } from './a2a.js';
 import type { PayeeOperation, SettledIncomingPayment } from '../model/payee.js';
@@ -231,52 +232,120 @@ export class ExpressPayeeMiddleware {
     call: McpCall,
     receipt: McpMetadata,
   ): () => boolean {
-    const originalJson = response.json.bind(response);
-    let installed = false;
-    response.json = ((body: unknown) => {
-      if (!this.isRecord(body) || body.id !== call.id) {
-        throw new Error('paid MCP response id does not match its request');
+    const originalEnd = response.end.bind(response);
+    const originalWriteHead = response.writeHead.bind(response);
+    const chunks: Buffer[] = [];
+    let size = 0, submitted = false, committing = false, installed = false;
+    let invalid = false;
+    const append = (chunk: unknown, encoding: unknown): void => {
+      if (chunk === undefined || chunk === null) return;
+      if (typeof chunk !== 'string' && !(chunk instanceof Uint8Array)) {
+        invalid = true;
+        return;
       }
-      if (this.hasMerchantEvidenceHeader(this.responseHeaders(response))) {
-        throw new Error('paid MCP handler attempted to supply settlement evidence');
-      }
-      const result = this.isRecord(body.result) ? body.result : undefined;
-      if (body.result !== undefined && result === undefined) {
-        throw new Error('paid MCP handler returned an invalid JSON-RPC result');
-      }
-      const existing = result?._meta ?? {};
-      if (!this.isRecord(existing)) throw new Error('paid MCP result._meta must be an object');
-      const forged = result ? this.core.mcpMerchantEvidence(existing)[1] : undefined;
-      if (forged || (result && receipt.key in existing)) {
-        throw new Error('paid MCP handler attempted to supply settlement metadata');
-      }
-      if (Buffer.byteLength(JSON.stringify(body)) > this.maxBodyBytes) {
-        throw new Error('paid MCP response exceeds configured limit');
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        if (!result && !this.isRecord(body.error)) {
-          throw new Error('paid MCP handler must return a JSON-RPC result or error');
+      const codec = typeof encoding === 'string' ? encoding as BufferEncoding : 'utf8';
+      size += typeof chunk === 'string' ? Buffer.byteLength(chunk, codec) : chunk.byteLength;
+      if (size > this.maxBodyBytes) { invalid = true; chunks.length = 0; }
+      else if (!invalid) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, codec) : Buffer.from(chunk));
+    };
+    const callback = (args: unknown[]): (() => void) | undefined => {
+      const last = args.at(-1);
+      return typeof last === 'function' ? last as () => void : undefined;
+    };
+    response.writeHead = ((...args: Parameters<typeof response.writeHead>) => {
+      if (committing) return originalWriteHead(...args);
+      if (submitted) throw new Error('paid MCP handler attempted a second response');
+      response.statusCode = args[0];
+      const raw = args as unknown[];
+      if (typeof raw[1] === 'string') response.statusMessage = raw[1];
+      const headers = typeof raw[1] === 'object' ? raw[1] : raw[2];
+      if (Array.isArray(headers)) {
+        for (let index = 0; index + 1 < headers.length; index += 2) {
+          response.setHeader(String(headers[index]), headers[index + 1] as string);
         }
-        response.removeHeader('content-length');
-        return originalJson(body);
+      } else if (headers && typeof headers === 'object') {
+        for (const [name, value] of Object.entries(headers)) {
+          if (value !== undefined) response.setHeader(name, value as string | number | string[]);
+        }
       }
-      if (!result) throw new Error('paid MCP handler must return a matching JSON-RPC result');
-      const transformed = {
-        ...body,
-        result: {
-          ...result,
-          _meta: { ...existing, [receipt.key]: receipt.value },
-        },
-      };
-      if (Buffer.byteLength(JSON.stringify(transformed)) > this.maxBodyBytes) {
-        throw new Error('paid MCP response exceeds configured limit');
+      if (String(response.getHeader('content-type') ?? '').toLowerCase().startsWith('text/event-stream')) {
+        invalid = true;
+        response.end();
       }
-      response.removeHeader('content-length');
-      const sent = originalJson(transformed);
-      installed = true;
-      return sent;
-    }) as typeof response.json;
+      return response;
+    }) as typeof response.writeHead;
+    response.write = ((...args: unknown[]) => {
+      if (submitted) throw new Error('paid MCP handler attempted to write after its response');
+      if (String(response.getHeader('content-type') ?? '').toLowerCase().startsWith('text/event-stream')) {
+        invalid = true;
+      } else append(args[0], args[1]);
+      if (invalid) response.end();
+      const done = callback(args);
+      if (done) queueMicrotask(done);
+      return true;
+    }) as typeof response.write;
+    response.end = ((...args: unknown[]) => {
+      if (submitted) return response;
+      submitted = true;
+      append(typeof args[0] === 'function' ? undefined : args[0], args[1]);
+      let bytes: Buffer;
+      try {
+        const type = String(response.getHeader('content-type') ?? '').split(';')[0]?.trim().toLowerCase();
+        if (invalid || type !== 'application/json' || response.hasHeader('content-encoding')) {
+          throw new Error('paid MCP response must be bounded, uncompressed JSON');
+        }
+        bytes = this.mcpResponse(response, call, receipt, Buffer.concat(chunks));
+        installed = response.statusCode >= 200 && response.statusCode < 300;
+      } catch {
+        installed = false;
+        response.statusCode = 502;
+        response.statusMessage = 'Bad Gateway';
+        for (const name of this.core.merchantEvidenceHeaderNames()) response.removeHeader(name);
+        bytes = Buffer.from(JSON.stringify({error:{code:'MCP_RESPONSE_INVALID', message:'paid MCP handler returned an invalid response'}}));
+      }
+      chunks.length = 0;
+      response.removeHeader('transfer-encoding');
+      response.removeHeader('content-encoding');
+      response.removeHeader('etag');
+      response.setHeader('content-type', 'application/json');
+      response.setHeader('content-length', bytes.length);
+      committing = true;
+      originalEnd(bytes, callback(args));
+      return response;
+    }) as typeof response.end;
+    response.flushHeaders = () => {
+      invalid = true;
+      response.end();
+    };
     return () => installed;
+  }
+
+  private mcpResponse(
+    response: import('express').Response,
+    call: McpCall,
+    receipt: McpMetadata,
+    bytes: Buffer,
+  ): Buffer {
+    const body = JSONRPCResponseSchema.parse(JSON.parse(bytes.toString('utf8')));
+    if (body.id !== call.id) {
+      throw new Error('paid MCP response must match its JSON-RPC request');
+    }
+    if (this.hasMerchantEvidenceHeader(this.responseHeaders(response))) {
+      throw new Error('paid MCP handler attempted to supply settlement evidence');
+    }
+    const result = 'result' in body ? body.result : undefined;
+    const existing = result?._meta ?? {};
+    if (!this.isRecord(existing)) throw new Error('paid MCP result._meta must be an object');
+    if (this.core.mcpMerchantEvidence(existing)[1] || receipt.key in existing) {
+      throw new Error('paid MCP handler attempted to supply settlement metadata');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) return bytes;
+    if (!result) throw new Error('paid MCP handler must return a matching JSON-RPC result');
+    const transformed = Buffer.from(JSON.stringify({
+      ...body, result:{...result, _meta:{...existing, [receipt.key]:receipt.value}},
+    }));
+    if (transformed.length > this.maxBodyBytes) throw new Error('paid MCP response exceeds configured limit');
+    return transformed;
   }
 
   private installA2aReceipt(response: import('express').Response, call: A2APaymentCall,

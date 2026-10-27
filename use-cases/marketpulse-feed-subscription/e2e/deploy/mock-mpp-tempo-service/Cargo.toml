@@ -1,0 +1,35 @@
+[package]
+name = "manual-payment-provider"
+version = "0.1.0"
+edition = "2021"
+publish = false
+autotests = false
+
+[dependencies]
+agentvault = { path = "../../../../.." }
+alloy = { version = "2.1.0", default-features = false }
+alloy-eips = "2.1.0"
+alloy-primitives = "1.4"
+alloy-sol-types = "1.4"
+alloy-signer = "2.1.0"
+alloy-signer-local = "2.1.0"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+solana-keypair = "=3.1.2"
+x402-chain-solana = { version = "=1.4.11", features = ["client", "facilitator"] }
+x402-types = "=1.4.11"
+axum = "0.8"
+mpp = { version = "=0.15.1", default-features = false, features = ["server", "tempo"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempo-primitives = { version = "=1.11.0", default-features = false }
+tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

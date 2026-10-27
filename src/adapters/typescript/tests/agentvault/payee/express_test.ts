@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import express from 'express';
-import { Challenge, Mcp } from 'mppx';
+import { Challenge, Credential, Mcp } from 'mppx';
+import { encodePaymentSignatureHeader } from '@x402/core/http';
+import type { PaymentPayload } from '@x402/core/types';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { PayerMiddleware } from '../../../src/agentvault/payer/payer.js';
+import { PayerRequestContext } from '../../../src/agentvault/model/payer.js';
 import type { VaultTransport } from '../../../src/agentvault/transport/transport.js';
 import { PayeeMiddleware } from '../../../src/agentvault/payee/payee.js';
 import {
@@ -302,10 +308,127 @@ test('ExpressPayeeMiddleware preserves a paid MCP business failure for delivery 
   }
 });
 
+
+test('native MCP transport and Express/Node writers deliver receipts to the payer over real HTTP', async () => {
+  const fixture = JSON.parse(readFileSync(new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url), 'utf8'));
+  for (const protocol of ['x402', 'mpp'] as const) for (const writer of ['official', 'send', 'json', 'node']) {
+    const vault = new McpPayeeTransport(protocol, fixture.protocols[protocol]);
+    const app = express();
+    const middleware = new PayeeMiddleware(vault, {protocols:[protocol]}).express([
+      mcpToolRouteWithProtocol('/mcp', 'marketpulse.realtime', 'scenario', 'price',
+        'mcp://marketpulse/realtime', 'https://merchant.test', protocol),
+    ]);
+    let executions = 0, callbacks = 0;
+    app.post('/mcp', ...middleware.handlers(), async (request, response) => {
+      executions++;
+      const result = {content:[{type:'text' as const, text:'paid'}], _meta:{'application.label':'preserved'}};
+      if (writer === 'official') {
+        const server = new McpServer({name:'native-receipt-test', version:'1.0'});
+        server.registerTool('marketpulse.realtime', {}, async () => result);
+        const transport = new StreamableHTTPServerTransport({sessionIdGenerator:undefined, enableJsonResponse:true});
+        response.once('close', () => { void server.close(); });
+        await server.connect(transport);
+        await transport.handleRequest(request, response, JSON.parse(request.body.toString()));
+        return;
+      }
+      const body = JSON.stringify({jsonrpc:'2.0', id:1, result});
+      if (writer === 'json') response.json(JSON.parse(body));
+      else if (writer === 'send') response.type('application/json').send(body);
+      else {
+        response.writeHead(200, {'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(body)});
+        response.write(body.slice(0, 30), () => { callbacks++; });
+        response.end(Buffer.from(body.slice(30)), () => { callbacks++; });
+      }
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    vault.origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const payer = new PayerMiddleware(vault, {scenarioId:'scenario', protocols:[protocol]}).standard();
+      const response = await payer.request(vault.origin + '/mcp', {method:'POST', headers:{
+        authorization:'Bearer application-token', 'x-run-id':'run-1', 'content-type':'application/json', accept:'application/json, text/event-stream',
+      }, body:JSON.stringify({jsonrpc:'2.0', id:1, method:'tools/call', params:{name:'marketpulse.realtime', arguments:{}}})},
+      new PayerRequestContext('run-1'));
+      const bytes = await response.text();
+      assert.equal(response.status, 200, `${protocol}/${writer}: ${bytes}`);
+      const value = JSON.parse(bytes);
+      const key = protocol === 'x402' ? 'x402/payment-response' : Mcp.receiptMetaKey;
+      assert.ok(value.result._meta[key], `${protocol}/${writer} receipt`);
+      assert.equal(value.result._meta['application.label'], 'preserved');
+      assert.equal(response.headers.get('content-length'), String(Buffer.byteLength(bytes)));
+      assert.equal(vault.paths.filter(path => path.endsWith('/outbound-response')).length, 1);
+      assert.equal(executions, 1);
+      if (writer === 'node') assert.equal(callbacks, 2);
+    } finally { await new Promise<void>((resolve,reject) => server.close(error => error ? reject(error) : resolve())); }
+  }
+});
+
+
+test('paid MCP Node capture rejects forged, malformed, oversized and streaming output before commit', async () => {
+  const fixture = JSON.parse(readFileSync(new URL('../../../../tests/payment_protocol_mcp.json', import.meta.url), 'utf8'));
+  for (const protocol of ['x402', 'mpp'] as const) {
+    const contract = fixture.protocols[protocol];
+    const key = protocol === 'x402' ? 'x402/payment-response' : Mcp.receiptMetaKey;
+    const bodies: Record<string, unknown> = {
+      wrongId:{jsonrpc:'2.0', id:2, result:{}},
+      wrongVersion:{jsonrpc:'1.0', id:1, result:{}},
+      primitiveResult:{jsonrpc:'2.0', id:1, result:'wrong'},
+      both:{jsonrpc:'2.0', id:1, result:{}, error:{code:-1, message:'invalid'}},
+      error:{jsonrpc:'2.0', id:1, error:{code:-1, message:'no result'}},
+      malformedError:{jsonrpc:'2.0', id:1, error:{code:'wrong', message:'invalid'}},
+      forgedMeta:{jsonrpc:'2.0', id:1, result:{_meta:{[key]:'forged'}}},
+      forgedRootMeta:{jsonrpc:'2.0', id:1, result:{}, _meta:{[key]:'forged'}},
+      wrongMeta:{jsonrpc:'2.0', id:1, result:{_meta:[]}},
+      oversized:{jsonrpc:'2.0', id:1, result:{content:[{type:'text', text:'x'.repeat(2048)}]}},
+      expandedReceipt:{jsonrpc:'2.0', id:1, result:{content:[{type:'text', text:'x'.repeat(850)}]}},
+    };
+    const app = express();
+    const middleware = new PayeeMiddleware(new McpPayeeTransport(protocol, contract), {protocols:[protocol], maxBodyBytes:1024}).express([
+      mcpToolRouteWithProtocol('/mcp', 'marketpulse.realtime', 'scenario', 'price',
+        'mcp://marketpulse/realtime', 'https://merchant.test', protocol),
+    ]);
+    let endCallbacks = 0;
+    app.post('/mcp', ...middleware.handlers(), (request, response) => {
+      const mode = request.get('x-response-mode')!;
+      if (mode === 'flush') { response.type('text/event-stream'); response.flushHeaders(); return; }
+      if (mode === 'sseWrite') { response.type('text/event-stream'); response.write('data: forbidden'); return; }
+      if (mode === 'overflowWrite') { response.type('application/json'); response.write('x'.repeat(2048)); return; }
+      const type = mode === 'sse' ? 'text/event-stream' : 'application/json';
+      response.writeHead(200, {'Content-Type':type});
+      if (mode === 'sse') return;
+      if (mode === 'forgedHeader') response.setHeader(protocol === 'x402' ? 'payment-response' : 'payment-receipt', 'forged');
+      if (mode === 'encoded') response.setHeader('Content-Encoding', 'gzip');
+      const body = mode === 'invalidJson' ? '{' : JSON.stringify(bodies[mode] ?? {jsonrpc:'2.0', id:1, result:{content:[]}});
+      response.write(body.slice(0, 10));
+      response.end(body.slice(10), () => { endCallbacks++; });
+      if (mode === 'secondEnd') response.end('forged second response', () => { endCallbacks++; });
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    try {
+      const modes = [...Object.keys(bodies), 'forgedHeader', 'encoded', 'invalidJson', 'sse', 'sseWrite', 'overflowWrite', 'flush', 'secondEnd'];
+      for (const mode of modes) {
+        const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`, {method:'POST',
+          headers:{'content-type':'application/json', 'x-run-id':'run-1', 'x-response-mode':mode},
+          body:JSON.stringify({jsonrpc:'2.0', id:1, method:'tools/call',
+            params:{name:'marketpulse.realtime', _meta:contract.credential_meta}})});
+        const bytes = await response.text();
+        assert.equal(response.status, mode === 'secondEnd' ? 200 : 502, `${protocol}/${mode}: ${bytes}`);
+        assert.equal(response.headers.get('content-length'), String(Buffer.byteLength(bytes)));
+        if (mode !== 'secondEnd') assert.equal(JSON.parse(bytes).error.code, 'MCP_RESPONSE_INVALID');
+        assert.equal(response.headers.has('payment-response'), false);
+        assert.equal(response.headers.has('payment-receipt'), false);
+      }
+      assert.equal(endCallbacks, modes.length - 4, `${protocol} each committed end callback runs once`);
+    } finally { await new Promise<void>((resolve,reject) => server.close(error => error ? reject(error) : resolve())); }
+  }
+});
+
 class McpPayeeTransport implements VaultTransport {
   readonly paths: string[] = [];
   readonly requestHashes: string[] = [];
   reject = false;
+  origin = '';
 
   constructor(
     private readonly protocol: 'x402' | 'mpp',
@@ -318,6 +441,16 @@ class McpPayeeTransport implements VaultTransport {
   async request<T>(_method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     this.paths.push(path);
     const wire = body as Record<string, unknown>;
+    if (path === '/api/v1/payments/authorize') {
+      const payload = this.contract.credential_meta[this.protocol === 'x402' ? 'x402/payment' : Mcp.credentialMetaKey];
+      return {authorization:{outcome:'authorized', intent_id:'out-1'}, intent:this.outbound('signed'),
+        credential:{protocol:this.protocol, challenge_hash:'challenge-1', credential_hash:'credential-1', payload,
+          http:{bound_origin:this.origin, header_name:this.protocol === 'x402' ? 'Payment-Signature' : 'Payment-Authorization',
+            header_value:this.protocol === 'x402' ? encodePaymentSignatureHeader(payload as PaymentPayload) : Credential.serialize(payload as Credential.Credential)}}} as T;
+    }
+    if (path === '/api/v1/payments/out-1/outbound-response') {
+      return {intent:this.outbound('pending_settlement'), accepted:true, replayed:false} as T;
+    }
     if (path === '/api/v1/payee/challenges') {
       this.requestHashes.push(wire.request_hash as string);
       return this.challenge() as T;
@@ -352,6 +485,12 @@ class McpPayeeTransport implements VaultTransport {
       } as T;
     }
     throw new Error(`unexpected AgentVault path: ${path}`);
+  }
+
+  private outbound(status:string) {
+    return {...this.intent('request-1', 'pending_settlement', '0'), id:'out-1', direction:'outbound',
+      wallet_id:'wallet', policy_id:'policy', resource:this.origin + '/mcp', status,
+      reservation_status:'reserved', reserved_amount:'1000'};
   }
 
   private challenge() {

@@ -5,7 +5,7 @@ import re
 
 from common.context import VerificationContext
 from common.payer_identity import PAYER_IDENTITIES
-from common.project import E2E_ROOT, REPOSITORY_ROOT
+from common.project import DEPLOY_COMPONENTS, E2E_ROOT, REPOSITORY_ROOT
 from common.resource_import import ConsoleResourceFixture
 
 
@@ -15,6 +15,17 @@ REQUIRED = (
     "deploy/deployer/base.py",
     "deploy/deployer/docker.py",
     "deploy/deployer/kubernetes.py",
+    "deploy/deployer/manual.py",
+    "deploy/deployer/manual_fixture.py",
+    "deploy/deployer/manual_evidence.py",
+    "deploy/deployer/manual_profiles.py",
+    "MANUAL_ACCEPTANCE_CN.md",
+    "deploy/mock-mpp-tempo-service/Cargo.toml",
+    "deploy/mock-mpp-tempo-service/Dockerfile",
+    "deploy/mock-mpp-tempo-service/src/main.rs",
+    "deploy/mock-mpp-tempo-service/src/provider.rs",
+    "deploy/mock-mpp-tempo-service/src/solana.rs",
+    "deploy/mock-mpp-tempo-service/src/fund.rs",
     "common/payer_identity.py",
     "common/resource_import.py",
     "config/agentvault/init.import.yaml",
@@ -33,6 +44,7 @@ REQUIRED = (
     "verifier/payment/s26_x402_solana.py",
     "verifier/payment/s27_a2a.py",
     "verifier/payment/s28_x402_evm.py",
+    "verifier/payment/s29_manual.py",
     "verifier/payment/s30_matrix.py",
     "verifier/web/s40_dashboard.py",
     "verifier/web/wallet_creation.py",
@@ -44,6 +56,8 @@ REQUIRED = (
     "deploy/mock-payee-marketpulse-golang-service/pkg/server.go",
     "deploy/mock-payee-marketpulse-golang-service/pkg/route/feed.go",
     "deploy/mock-payee-marketpulse-golang-service/pkg/handler/feed.go",
+    "deploy/mock-payee-marketpulse-golang-service/pkg/handler/a2a.go",
+    "deploy/mock-payee-marketpulse-golang-service/pkg/storage/a2a.go",
     "deploy/mock-payee-marketpulse-golang-service/pkg/storage/feed.go",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/Application.java",
     "deploy/mock-payee-marketpulse-java-service/src/io/agentvault/e2e/server/MarketPulseServer.java",
@@ -70,6 +84,7 @@ REQUIRED = (
     "deploy/mock-payer-quantstream-service-golang/pkg/route/ingestion.go",
     "deploy/mock-payer-quantstream-service-golang/pkg/handler/ingestion.go",
     "deploy/mock-payer-quantstream-service-golang/pkg/agent/mcp.go",
+    "deploy/mock-payer-quantstream-service-golang/pkg/agent/a2a.go",
     "deploy/mock-payer-quantstream-service-golang/pkg/job/ingestion_job.go",
     "deploy/mock-payer-quantstream-service-rust/src/lib.rs",
     "deploy/mock-payer-quantstream-service-rust/src/route/ingestion.rs",
@@ -94,31 +109,9 @@ REQUIRED = (
     "docker-compose.yaml",
 )
 
-DEPLOY_COMPONENTS = (
-    "anvil",
-    "emqx",
-    "evm",
-    "facilitator",
-    "jaeger",
-    "mock-payee-marketpulse-golang-service",
-    "mock-payee-marketpulse-java-service",
-    "mock-payee-marketpulse-python-service",
-    "mock-payee-marketpulse-rust-service",
-    "mock-payee-marketpulse-typescript-service",
-    "mock-payer-quantstream-service-golang",
-    "mock-payer-quantstream-service-java",
-    "mock-payer-quantstream-service-python",
-    "mock-payer-quantstream-service-rust",
-    "mock-payer-quantstream-service-typescript",
-    "mock-payer-quantstream-ui",
-    "postgres",
-    "solana",
-    "tempo",
-)
-
 E2E_NAMESPACE_GROUPS = {
     "e2e-agentvault-infra-system": ("postgres", "emqx", "jaeger"),
-    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana", "tempo"),
+    "e2e-agentvault-payment-system": ("anvil", "evm", "facilitator", "solana", "tempo", "mock-mpp-tempo-service"),
     "e2e-agentvault-mock-payee": (
         "mock-payee-marketpulse-golang-service",
         "mock-payee-marketpulse-java-service",
@@ -189,7 +182,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "AgentVault.java", "config/Config.java", "model/Approval.java",
         "model/Base.java", "model/Payee.java", "model/Payer.java", "payer/PayerMiddleware.java",
         "payer/SpringRestPayerMiddleware.java", "payer/SpringWebFluxPayerMiddleware.java",
-        "payer/SpringPayerMessages.java", "payer/JdkHttpPayerMiddleware.java",
+        "payer/PayerMessages.java", "payer/JdkHttpPayerMiddleware.java",
         "payee/PayeeMiddleware.java",
         "payee/StandardPayeeMiddleware.java", "payee/SpringInterceptorPayeeMiddleware.java",
         "transport/VaultTransport.java", "transport/AsyncVaultTransport.java",
@@ -274,7 +267,7 @@ ROOT_STORAGE_FILES = frozenset({
 
 INGESTOR_SOURCE_ALLOWLISTS = {
     "deploy/mock-payer-quantstream-service-golang": {
-        "main.go", "pkg/agent/mcp.go", "pkg/handler/ingestion.go",
+        "main.go", "pkg/agent/mcp.go", "pkg/agent/a2a.go", "pkg/handler/ingestion.go",
         "pkg/job/ingestion_job.go", "pkg/route/ingestion.go",
     },
     "deploy/mock-payer-quantstream-service-rust/src": {
@@ -312,10 +305,10 @@ INGESTOR_TEST_ROOTS = {
 
 PAYEE_SOURCE_ALLOWLISTS = {
     "deploy/mock-payee-marketpulse-golang-service": {
-        "main.go", "pkg/server.go", "pkg/handler/feed.go", "pkg/route/feed.go", "pkg/storage/feed.go",
+        "main.go", "pkg/server.go", "pkg/handler/feed.go", "pkg/handler/a2a.go", "pkg/route/feed.go", "pkg/storage/feed.go", "pkg/storage/a2a.go",
     },
     "deploy/mock-payee-marketpulse-rust-service/src": {
-        "lib.rs", "main.rs", "server.rs", "handler/mod.rs", "handler/feed.rs", "route/mod.rs",
+        "lib.rs", "main.rs", "server.rs", "handler/mod.rs", "handler/feed.rs", "handler/a2a.rs", "route/mod.rs",
         "route/feed.rs", "storage/mod.rs", "storage/feed.rs",
     },
     "deploy/mock-payee-marketpulse-python-service/app": {
@@ -764,7 +757,7 @@ def verify(_context: VerificationContext) -> str:
     manifest_count = len(DEPLOY_COMPONENTS) * len(COMPONENT_MANIFESTS)
     return (
         f"validated {len(REQUIRED) + manifest_count} E2E files, "
-        "19 component deployment pairs, the production AgentVault chart, "
+        f"{len(DEPLOY_COMPONENTS)} component deployment pairs, the production AgentVault chart, "
         "five strict SDK matrices, and five aligned payer/payee implementations"
     )
 
@@ -784,7 +777,8 @@ class StructureVerifier:
             raise RuntimeError("E2E common may contain only Python source: " + ", ".join(invalid_common))
 
         deployer_root = E2E_ROOT / "deploy" / "deployer"
-        expected_deployer_files = {"__init__.py", "base.py", "docker.py", "kubernetes.py"}
+        expected_deployer_files = {"__init__.py", "base.py", "docker.py", "kubernetes.py",
+                                   "manual.py", "manual_fixture.py", "manual_profiles.py", "manual_evidence.py"}
         actual_deployer_files = {
             path.name
             for path in deployer_root.iterdir()
@@ -795,6 +789,18 @@ class StructureVerifier:
                 "E2E deployer modules drifted: "
                 f"expected={sorted(expected_deployer_files)}, actual={sorted(actual_deployer_files)}"
             )
+
+        provider_root = E2E_ROOT / "deploy/mock-mpp-tempo-service"
+        expected_provider_sources = {"main.rs", "provider.rs", "solana.rs", "fund.rs"}
+        actual_provider_sources = {path.relative_to(provider_root / "src").as_posix()
+                                   for path in (provider_root / "src").rglob("*.rs")}
+        if actual_provider_sources != expected_provider_sources:
+            raise RuntimeError(f"manual provider sources drifted: {sorted(actual_provider_sources)}")
+        for source in sorted(expected_provider_sources - {"main.rs"}):
+            if not (provider_root / "tests" / f"{source[:-3]}_test.rs").is_file():
+                raise RuntimeError(f"manual provider is missing mirror tests for {source}")
+            if len((provider_root / "src" / source).read_text().splitlines()) > 800:
+                raise RuntimeError(f"manual provider source exceeds 800 lines: {source}")
 
         duplicate_requirements = sorted(path.name for path in E2E_ROOT.glob("requirements-*.txt"))
         if duplicate_requirements:
@@ -1051,9 +1057,15 @@ class StructureVerifier:
                 for line in dockerfile.read_text(encoding="utf-8").splitlines()
                 if line.strip().startswith("FROM ")
             ]
-            if len(stages) != 2 or " AS builder" not in stages[0]:
-                errors.append(f"{component} must have exactly one builder and one runtime stage")
-            elif "_RUNTIME_IMAGE}" not in stages[1] or "_BUILD_IMAGE}" in stages[1]:
+            # Explicit host artifacts are optional; the default must still compile sources.
+            prebuilt = [stage for stage in stages if stage.endswith(" AS prebuilt")]
+            normal = [stage for stage in stages if not stage.endswith(" AS prebuilt")]
+            if prebuilt and (len(prebuilt) != 1 or stages[0] != prebuilt[0]
+                             or "_PREBUILT_RUNTIME_IMAGE}" not in prebuilt[0]):
+                errors.append(f"{component} has an invalid optional prebuilt runtime")
+            if len(normal) != 2 or " AS builder" not in normal[0] or stages[-1] != normal[-1]:
+                errors.append(f"{component} must default to one source builder and one final runtime stage")
+            elif "_RUNTIME_IMAGE}" not in normal[1] or "_BUILD_IMAGE}" in normal[1]:
                 errors.append(f"{component} runtime stage must not reuse its build image")
         if errors:
             raise RuntimeError("; ".join(errors))

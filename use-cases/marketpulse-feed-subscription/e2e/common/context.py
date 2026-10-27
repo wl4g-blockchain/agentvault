@@ -24,6 +24,9 @@ class VerificationContext:
     matrix_workers: int = 2
     worker_slot: int | None = None
     evidence_run_id: str | None = None
+    payment_profile: str = "evm"
+    message_protocol: str = "mcp"
+    fail_after_settlement: bool = False
 
     def environment(self) -> dict[str, str]:
         payer = payer_identity(self.payer_language)

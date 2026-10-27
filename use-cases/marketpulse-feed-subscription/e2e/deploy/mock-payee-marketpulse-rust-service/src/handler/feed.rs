@@ -13,13 +13,13 @@ use crate::storage::feed::{DeliveryState, FeedSqliteRepository, StoredSettlement
 
 #[derive(Clone)]
 pub struct FeedHandler {
-    storage: FeedSqliteRepository,
+    pub(crate) storage: FeedSqliteRepository,
     allow_failure_injection: bool,
 }
 
 impl FeedHandler {
     #[must_use]
-    pub const fn new(storage: FeedSqliteRepository, allow_failure_injection: bool) -> Self {
+    pub fn new(storage: FeedSqliteRepository, allow_failure_injection: bool) -> Self {
         Self {
             storage,
             allow_failure_injection,
@@ -90,7 +90,7 @@ pub async fn mcp(
     }
 }
 
-fn call_tool(
+pub(super) fn call_tool(
     handler: &FeedHandler,
     payment: Option<SettledIncomingPayment>,
     headers: &HeaderMap,
@@ -232,7 +232,7 @@ fn response(status: StatusCode, value: &impl Serialize) -> Response<Body> {
     }
 }
 
-fn json(status: StatusCode, body: String) -> Response<Body> {
+pub(super) fn json(status: StatusCode, body: String) -> Response<Body> {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
     response
@@ -241,7 +241,7 @@ fn json(status: StatusCode, body: String) -> Response<Body> {
     response
 }
 
-fn text(status: StatusCode, body: &str) -> Response<Body> {
+pub(super) fn text(status: StatusCode, body: &str) -> Response<Body> {
     let mut response = Response::new(Body::from(body.to_owned()));
     *response.status_mut() = status;
     response
@@ -253,7 +253,7 @@ fn empty(status: StatusCode) -> Response<Body> {
     response
 }
 
-fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(super) fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 

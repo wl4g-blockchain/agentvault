@@ -11,10 +11,8 @@ from typing import Mapping, TypedDict, cast
 
 from x402.http.utils import (
     decode_payment_response_header,
-    decode_payment_signature_header,
     encode_payment_required_header,
     encode_payment_response_header,
-    encode_payment_signature_header,
 )
 from x402.mcp import MCP_PAYMENT_META_KEY, MCP_PAYMENT_RESPONSE_META_KEY
 from x402.mcp.types import MCPToolResult
@@ -77,9 +75,7 @@ class X402Adapter(PaymentProtocol):
             or delivery.header_name.lower() != "payment-signature"
         ):
             raise ValueError("x402 credential has no PAYMENT-SIGNATURE delivery")
-        payload = self._payment_payload(delivery.header_value, "PAYMENT-SIGNATURE")
-        if encode_payment_signature_header(payload) != delivery.header_value:
-            raise ValueError("PAYMENT-SIGNATURE is not canonical x402 v2")
+        self._payment_payload(delivery.header_value, "PAYMENT-SIGNATURE")
         return delivery
 
     def merchant_evidence(self, headers: Mapping[str, str]) -> MerchantEvidence | None:
@@ -96,8 +92,6 @@ class X402Adapter(PaymentProtocol):
         if len(encoded) > (limit * 4 + 2) // 3 + 4:
             raise ValueError("PAYMENT-SIGNATURE exceeds configured limit")
         payload = self._payment_payload(encoded, "PAYMENT-SIGNATURE")
-        if encode_payment_signature_header(payload) != encoded:
-            raise ValueError("PAYMENT-SIGNATURE is non-canonical or oversized")
         return payload.model_dump(by_alias=True, exclude_none=True)
 
     def challenge(self, challenge: PaymentChallenge) -> HttpResponse:
@@ -230,11 +224,23 @@ class X402Adapter(PaymentProtocol):
 
     def _payment_payload(self, encoded: str, label: str) -> PaymentPayload:
         try:
-            payload = decode_payment_signature_header(encoded)
-        except (TypeError, ValueError) as error:
+            decoded = base64.b64decode(encoded, validate=True)
+            if base64.b64encode(decoded).decode("ascii") != encoded:
+                raise ValueError("non-canonical base64")
+            wire = json.loads(decoded.decode("utf-8"))
+            payload = PaymentPayload.model_validate(wire, strict=True)
+        except (binascii.Error, TypeError, ValueError) as error:
             raise ValueError(f"{label} is not valid x402") from error
-        if not isinstance(payload, PaymentPayload) or payload.x402_version != 2:
+        if wire.get("x402Version") != 2 or payload.x402_version != 2:
             raise ValueError(f"{label} is not PaymentPayload v2")
+        # The wire is an unordered JSON object. Validate field names using the
+        # official models, without reserializing their defaults or field order.
+        for value, model in ((wire, payload), (wire["accepted"], payload.accepted),
+                             (wire.get("resource"), payload.resource)):
+            if model is not None:
+                fields = {field.alias or name for name, field in type(model).model_fields.items()}
+                if not set(value).issubset(fields):
+                    raise ValueError(f"{label} contains unknown x402 fields")
         self._validate_exact_payload(payload, label)
         return payload
 

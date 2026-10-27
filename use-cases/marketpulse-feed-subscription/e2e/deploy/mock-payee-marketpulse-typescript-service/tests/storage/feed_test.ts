@@ -13,3 +13,18 @@ test('FeedSqliteRepository initializes exactly one hundred rows', () => {
   storage.close();
   rmSync(directory, { recursive: true });
 });
+
+test('native A2A Task payment scope survives a repository reopen', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'marketpulse-ts-a2a-'));
+  const path = join(directory, 'marketpulse.sqlite3');
+  let storage = new FeedSqliteRepository(path);
+  await storage.save({kind:'task', id:'task-1', contextId:'context-1', status:{state:'submitted'},
+    metadata:{'agentvault.payment.run_id':'run-1'}});
+  storage.close();
+  storage = new FeedSqliteRepository(path);
+  try {
+    const task = await storage.load('task-1');
+    assert.equal(task?.contextId, 'context-1');
+    assert.equal(task?.metadata?.['agentvault.payment.run_id'], 'run-1');
+  } finally {storage.close(); rmSync(directory, {recursive:true});}
+});

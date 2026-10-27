@@ -1,6 +1,14 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_JAVA_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17
 ARG E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+ARG E2E_QUANTSTREAM_JAVA_PREBUILT_RUNTIME_IMAGE=localhost/quantstream-ingestor-java-e2e:local
+
+# Explicit target for a verified host artifact; inherit the existing JRE17,
+# nonroot identity, data directory, and entrypoint. The default final stage
+# below continues to build all application sources inside the builder.
+FROM ${E2E_QUANTSTREAM_JAVA_PREBUILT_RUNTIME_IMAGE} AS prebuilt
+COPY --chown=65532:65532 use-cases/marketpulse-feed-subscription/e2e/reports/.runtime/agentvault-sdk-java.jar /app/lib/agentvault-sdk-0.1.0.jar
+
 FROM ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE} AS builder
 WORKDIR /build
 RUN "${JAVA_HOME}/bin/jlink" \

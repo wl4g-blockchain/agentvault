@@ -55,6 +55,23 @@ impl IEventRepository for EventSqliteRepository {
             )
             .await
     }
+
+    async fn find_latest_for_intent_type(
+        &self,
+        intent_id: &str,
+        event_type: PaymentEventType,
+    ) -> Result<Option<PaymentEvent>> {
+        self.base
+            .select_one(
+                crate::storage::EntityQuery::new()
+                    .eq("intent_id", intent_id)
+                    .eq("event_type", event_type.as_str())
+                    .order("attempt_no", true)
+                    .order("created_at", true)
+                    .limit(1, 0),
+            )
+            .await
+    }
 }
 
 impl EventSqliteRepository {

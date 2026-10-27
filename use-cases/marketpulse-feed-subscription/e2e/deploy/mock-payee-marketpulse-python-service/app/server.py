@@ -32,7 +32,8 @@ class MarketPulseServer:
         vault = _payee_vault()
         payee = vault.payee()
         storage = FeedSqliteRepository(_required("MARKETPULSE_DATABASE"))
-        handler = FeedHandler(storage, os.environ.get("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION") == "true")
+        task_store = storage
+        handler = FeedHandler(storage, os.environ.get("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION") == "true", task_store)
 
         @asynccontextmanager
         async def lifespan(_application: FastAPI):
@@ -45,16 +46,24 @@ class MarketPulseServer:
         application = FastAPI(title="MarketPulse Python Payee", version="0.1.0", lifespan=lifespan)
         FeedRouter(handler).register(application)
         application.add_api_route("/mcp", handler.mcp, methods=["POST"], response_class=Response)
+        application.add_api_route("/a2a", handler.a2a, methods=["POST"], response_class=Response)
         application.add_middleware(
             FastPayeeMiddleware,
             middleware=payee,
-            routes=[FastPayeeRoute.mcp_tool(
+            routes=[FastPayeeRoute.mcp_tool_with_protocol(
                 "/mcp",
                 "marketpulse.realtime_news",
                 _required("MARKETPULSE_SCENARIO_ID"),
                 _required("MARKETPULSE_PRICE_ID"),
                 _required("MARKETPULSE_RESOURCE_URL"),
                 _required("MARKETPULSE_ORIGIN"),
+                os.environ.get("MARKETPULSE_PAYMENT_PROTOCOL", "x402"),
+            ), FastPayeeRoute(
+                "POST", "/a2a", _required("MARKETPULSE_SCENARIO_ID"),
+                os.environ.get("MARKETPULSE_A2A_PRICE_ID", _required("MARKETPULSE_PRICE_ID")),
+                os.environ.get("MARKETPULSE_A2A_RESOURCE_URL", _required("MARKETPULSE_RESOURCE_URL").removesuffix("/mcp") + "/a2a"),
+                _required("MARKETPULSE_ORIGIN"), os.environ.get("MARKETPULSE_PAYMENT_PROTOCOL", "x402"),
+                a2a_task_store=task_store,
             )],
         )
 

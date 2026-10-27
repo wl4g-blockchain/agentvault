@@ -85,10 +85,19 @@ impl VaultTransport for Vault {
         let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
         let value = match request.path.as_str() {
             "/api/v1/payee/challenges" => {
-                self.hashes
-                    .lock()
-                    .unwrap()
-                    .push(body["request_hash"].as_str().unwrap().into());
+                let next = body["request_hash"].as_str().unwrap();
+                let mut hashes = self.hashes.lock().unwrap();
+                if hashes.first().is_some_and(|first| first != next) {
+                    return Ok(TransportResponse {
+                        status: 409,
+                        headers: std::collections::BTreeMap::default(),
+                        body: json!({"error":{"code":"REQUEST_CONFLICT", "message":"payment run request changed"}})
+                            .to_string()
+                            .into_bytes(),
+                    });
+                }
+                hashes.push(next.into());
+                drop(hashes);
                 self.challenge()
             }
             "/api/v1/payee/verify" => {
@@ -204,5 +213,80 @@ async fn run_a2a_cases(message_level: bool) {
             assert_eq!(hashes[0], hashes[1]);
             server.abort();
         }
+    }
+}
+
+#[tokio::test]
+async fn new_task_challenge_and_paid_retry_keep_one_request_binding() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../tests/payment_protocol_mcp.json")).unwrap();
+    for protocol in ["x402", "mpp"] {
+        let vault = Vault {
+            protocol: protocol.into(),
+            contract: fixture["protocols"][protocol].clone(),
+            origin: Arc::default(),
+            hashes: Arc::default(),
+            reports: Arc::default(),
+        };
+        let tasks = Arc::new(Tasks::default());
+        let route = AxumPayeeRoute {
+            method: Method::POST,
+            path: "/a2a".into(),
+            scenario_id: "scenario".into(),
+            price_id: "price".into(),
+            resource: "a2a://feed".into(),
+            origin: "https://merchant.test".into(),
+            protocol: protocol.into(),
+            mcp_tool: None,
+        };
+        let layer = PayeeMiddleware::new(vault.clone(), PayeeConfig::default())
+            .unwrap()
+            .axum(vec![route])
+            .with_a2a_task_store("/a2a", tasks.clone());
+        let app = Router::new()
+            .route(
+                "/a2a",
+                post(|Json(request): Json<Value>| async move {
+                    let message = &request["params"]["message"];
+                    Json(
+                        json!({"jsonrpc":"2.0", "id":request["id"], "result":{"kind":"task", "id":message["taskId"],
+                "contextId":message["contextId"], "status":{"state":"completed"}}}),
+                    )
+                }),
+            )
+            .layer(layer);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        *vault.origin.lock().unwrap() = origin.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let payer = PayerMiddleware::new(vault.clone(), PayerConfig::new("scenario").unwrap())
+            .unwrap()
+            .standard()
+            .client()
+            .unwrap();
+        // No pre-existing Task/Context/metadata: the server creates and binds them.
+        let original=br#"{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","messageId":"request-1","role":"user","parts":[{"kind":"text","text":"news"}]}}}"#;
+        let response = payer
+            .post(format!("{origin}/a2a"))
+            .header("content-type", "application/json")
+            .body(original.as_slice())
+            .with_payment(PayerRequestContext::new("run-1").unwrap())
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.text().await.unwrap();
+        assert_eq!(status, 200, "{body}");
+        let value: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["result"]["status"]["state"], "completed", "{body}");
+        let task = tasks.get("run-1").await.unwrap().unwrap();
+        assert_eq!(value["result"]["id"], task.id);
+        assert_eq!(value["result"]["contextId"], task.context_id);
+        let hashes = vault.hashes.lock().unwrap();
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(hashes[0], hashes[1]);
+        assert_eq!(vault.reports.load(Ordering::Relaxed), 1);
+        server.abort();
     }
 }

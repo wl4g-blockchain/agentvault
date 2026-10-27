@@ -38,6 +38,9 @@ config:
 persistence:
   enabled: true
   mountPath: "/tmp/solana-ledger"
+  existingClaim: ""
 resources:
   requests: { cpu: 100m, memory: 512Mi }
-  limits: { cpu: 750m, memory: 2Gi }
+  # The v3.1 scheduler polls while leader; too little CPU stalls the chain clock.
+  # Keep quota above the observed ~1.3-core baseline; never change slot semantics.
+  limits: { cpu: 1500m, memory: 2Gi }

@@ -3,6 +3,9 @@ package io.agentvault.e2e.handler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.a2a.server.tasks.TaskStore;
+import io.a2a.spec.Task;
+import io.agentvault.sdk.model.A2a;
 import io.agentvault.e2e.storage.FeedSqliteRepository;
 import io.agentvault.sdk.model.Payee.SettledIncomingPayment;
 import io.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
@@ -18,12 +21,14 @@ import org.springframework.stereotype.Service;
 
 @Service
 public final class FeedHandler {
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
     private final FeedSqliteRepository storage;
+    private final TaskStore taskStore;
     private final boolean allowFailureInjection;
 
-    public FeedHandler(FeedSqliteRepository storage) {
+    public FeedHandler(FeedSqliteRepository storage, TaskStore taskStore) {
         this.storage = storage;
+        this.taskStore = taskStore;
         this.allowFailureInjection = "true".equals(System.getenv("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION"));
     }
 
@@ -59,6 +64,29 @@ public final class FeedHandler {
             case "tools/call" -> callTool(servletRequest, body, id, request.path("params"));
             default -> response(404, rpcError(id, -32601, "method not found"));
         };
+    }
+
+    public ResponseEntity<byte[]> a2a(HttpServletRequest request, byte[] body) {
+        try {
+            var call = A2a.parse(body, 1024 * 1024);
+            if (call == null) return response(400, rpcError(null, -32601, "message/send is required"));
+            var task = taskStore.get(call.params().message().getTaskId());
+            if (task == null) return response(409, rpcError(call.id(), -32009, "payment Task is missing"));
+            var operation = JSON.valueToTree(Map.of("name", "marketpulse.realtime_news", "arguments", Map.of()));
+            byte[] canonical = JSON.writeValueAsBytes(Map.of("jsonrpc", "2.0", "id", request.getHeader("x-run-id"),
+                    "method", "tools/call", "params", operation));
+            var result = callTool(request, canonical, call.id(), operation);
+            JsonNode business = JSON.readTree(result.getBody());
+            if (business.has("error")) return result;
+            ObjectNode updated = JSON.valueToTree(task);
+            updated.set("status", JSON.valueToTree(Map.of("state", "completed")));
+            updated.set("artifacts", JSON.valueToTree(List.of(Map.of("artifactId", "realtime-news", "parts",
+                    List.of(Map.of("kind", "data", "data", business.path("result").path("structuredContent")))))));
+            taskStore.save(JSON.treeToValue(updated, Task.class));
+            return response(200, rpcResult(call.id(), updated));
+        } catch (Exception failure) {
+            return response(400, rpcError(null, -32602, "invalid A2A delivery: " + failure.getMessage()));
+        }
     }
 
     private ResponseEntity<byte[]> callTool(HttpServletRequest request, byte[] body, JsonNode id, JsonNode params) {

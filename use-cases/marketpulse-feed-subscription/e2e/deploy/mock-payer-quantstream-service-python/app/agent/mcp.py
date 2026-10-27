@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from a2a.types import Task
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -110,6 +111,8 @@ class MCPHelper:
         return await self._call(REALTIME_TOOL, run_id, fail_after_settlement)
 
     async def _call(self, tool: str, run_id: str, fail_after_settlement: bool) -> ToolResult:
+        if tool == REALTIME_TOOL and os.environ.get("MARKETPULSE_MESSAGE_PROTOCOL", "mcp") == "a2a":
+            return await self._a2a(run_id, fail_after_settlement)
         if tool not in self.tools:
             raise RuntimeError(f"MarketPulse MCP tool {tool!r} is not registered")
         metadata = {
@@ -125,6 +128,28 @@ class MCPHelper:
         if tool == REALTIME_TOOL and not intent_id:
             raise RuntimeError("paid MCP result omitted AgentVault payment metadata")
         return ToolResult(body, intent_id)
+
+    async def _a2a(self, run_id: str, fail_after_settlement: bool) -> ToolResult:
+        url = os.environ.get("MARKETPULSE_A2A_URL", _required("MARKETPULSE_URL").removesuffix("/mcp") + "/a2a")
+        headers = {"content-type": "application/json"}
+        if fail_after_settlement:
+            headers["x-e2e-fail-after-settlement"] = "once"
+        response = await self._payer_transport._payer.post(url,
+            operation=PayerRequestContext(run_id), headers=headers,
+            json={"jsonrpc": "2.0", "id": run_id, "method": "message/send", "params": {
+                "message": {"kind": "message", "messageId": run_id, "role": "user",
+                            "parts": [{"kind": "text", "text": REALTIME_TOOL}]}}})
+        response.raise_for_status()
+        task = Task.model_validate(response.json()["result"])
+        if task.status.state.value != "completed" or not task.artifacts:
+            raise RuntimeError("A2A business Task did not complete")
+        payment = response.extensions.get("agentvault.payment")
+        if payment is None:
+            raise RuntimeError("paid A2A result omitted AgentVault payment metadata")
+        LOG.info("manual.payer.completed run_id=%s task_id=%s message_protocol=a2a payment_protocol=%s intent_id=%s receipt_verified=true",
+                 run_id, task.id, payment.intent.protocol, payment.intent.id)
+        data = task.artifacts[0].parts[0].root.data
+        return ToolResult(json.dumps(data, separators=(",", ":")).encode(), payment.intent.id)
 
 
 class _PayerMCPTransport(httpx.AsyncBaseTransport):

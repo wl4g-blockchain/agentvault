@@ -1,3 +1,4 @@
+import type {Task} from '@a2a-js/sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
@@ -30,6 +31,7 @@ export class MCPHelper {
     private readonly vault: AgentVault,
     private readonly payments: Map<string, string>,
     tools: Iterable<string>,
+    private readonly payer: FetchPayerMiddleware,
   ) {
     this.tools = new Set(tools);
   }
@@ -75,7 +77,7 @@ export class MCPHelper {
       for (const requiredTool of [YESTERDAY_TOOL, REALTIME_TOOL]) {
         if (!tools.includes(requiredTool)) throw new Error(`MarketPulse MCP server did not expose ${requiredTool}`);
       }
-      return new MCPHelper(client, vault, payments, tools);
+      return new MCPHelper(client, vault, payments, tools, payer);
     } catch (error: unknown) {
       await client.close().catch(() => undefined);
       await vault.close();
@@ -101,6 +103,7 @@ export class MCPHelper {
     runId: string,
     failAfterSettlement: boolean,
   ): Promise<ToolResult> {
+    if (tool === REALTIME_TOOL && process.env.MARKETPULSE_MESSAGE_PROTOCOL === 'a2a') return this.a2a(runId, failAfterSettlement);
     if (!this.tools.has(tool)) throw new Error(`MarketPulse MCP tool ${JSON.stringify(tool)} is not registered`);
     const metadata: PaymentMetadata = { runId, paid: tool === REALTIME_TOOL, failAfterSettlement };
     const result = await this.client.callTool({
@@ -117,6 +120,24 @@ export class MCPHelper {
     }
     return paymentIntentId ? { body, paymentIntentId } : { body };
   }
+  private async a2a(runId:string, failAfterSettlement:boolean):Promise<ToolResult> {
+    const url = process.env.MARKETPULSE_A2A_URL ?? required('MARKETPULSE_URL').replace(/\/mcp$/, '/a2a');
+    const headers:Record<string,string> = {'content-type':'application/json'};
+    if (failAfterSettlement) headers['x-e2e-fail-after-settlement'] = 'once';
+    const response = await this.payer.request(url, {method:'POST', headers, body:JSON.stringify({
+      jsonrpc:'2.0', id:runId, method:'message/send', params:{message:{kind:'message', messageId:runId,
+        role:'user', parts:[{kind:'text', text:REALTIME_TOOL}]}}})}, new PayerRequestContext(runId));
+    const value = await response.json() as {result?:Task};
+    const task = value.result;
+    if (!response.ok || task?.status.state !== 'completed') throw new Error('A2A business Task did not complete');
+    const part = task.artifacts?.[0]?.parts[0];
+    const payment = this.payer.payment(response);
+    if (part?.kind !== 'data' || !payment) throw new Error('paid A2A result omitted news or payment evidence');
+    console.info(JSON.stringify({event:'manual.payer.completed', run_id:runId, task_id:task.id,
+      message_protocol:'a2a', payment_protocol:payment.intent.protocol, intent_id:payment.intent.id, receipt_verified:true}));
+    return {body:new TextEncoder().encode(JSON.stringify(part.data)), paymentIntentId:payment.intent.id};
+  }
+
 }
 
 function mcpFetch(payer: FetchPayerMiddleware, payments: Map<string, string>): typeof globalThis.fetch {

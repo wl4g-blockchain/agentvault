@@ -1,5 +1,7 @@
 package io.agentvault.e2e.storage;
 
+import io.a2a.server.tasks.TaskStore;
+import io.a2a.spec.Task;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Connection;
@@ -9,8 +11,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class FeedSqliteRepository implements AutoCloseable {
-    private static final ObjectMapper JSON = new ObjectMapper();
+public final class FeedSqliteRepository implements AutoCloseable, TaskStore {
+    private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
     private static final String[][] ACTORS = {
         {"Donald Trump", "United States president"}, {"Marco Rubio", "United States secretary of state"},
         {"Ursula von der Leyen", "European Commission president"}, {"Keir Starmer", "United Kingdom prime minister"},
@@ -47,6 +49,7 @@ public final class FeedSqliteRepository implements AutoCloseable {
             try (var statement = connection.createStatement()) {
                 statement.execute("PRAGMA journal_mode=DELETE");
                 statement.execute("PRAGMA synchronous=FULL");
+                statement.executeUpdate("CREATE TABLE IF NOT EXISTS a2a_task(id TEXT PRIMARY KEY,task_json TEXT NOT NULL)");
                 statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS feed_item(
                       id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,topic TEXT NOT NULL,
@@ -62,6 +65,23 @@ public final class FeedSqliteRepository implements AutoCloseable {
         } catch (SQLException error) {
             throw new IllegalStateException("initialize MarketPulse database", error);
         }
+    }
+
+    @Override public synchronized Task get(String id) {
+        try (var query=connection.prepareStatement("SELECT task_json FROM a2a_task WHERE id=?")) {
+            query.setString(1,id);
+            try(var row=query.executeQuery()) { return row.next()?JSON.readValue(row.getString(1),Task.class):null; }
+        } catch(Exception error) { throw new IllegalStateException("load A2A Task",error); }
+    }
+    @Override public synchronized void save(Task task) {
+        try(var query=connection.prepareStatement("INSERT INTO a2a_task VALUES(?,?) ON CONFLICT(id) DO UPDATE SET task_json=excluded.task_json")) {
+            query.setString(1,task.getId()); query.setString(2,JSON.writeValueAsString(task)); query.executeUpdate();
+        } catch(Exception error) { throw new IllegalStateException("save A2A Task",error); }
+    }
+    @Override public synchronized void delete(String id) {
+        try(var query=connection.prepareStatement("DELETE FROM a2a_task WHERE id=?")) {
+            query.setString(1,id); query.executeUpdate();
+        } catch(SQLException error) { throw new IllegalStateException("delete A2A Task",error); }
     }
 
     private void seed() throws SQLException {

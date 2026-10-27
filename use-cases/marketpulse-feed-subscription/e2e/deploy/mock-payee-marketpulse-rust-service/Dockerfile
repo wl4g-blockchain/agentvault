@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_MARKETPULSE_RUST_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-rust-builder:1.94-bookworm
 ARG E2E_MARKETPULSE_RUST_RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+ARG E2E_MARKETPULSE_RUST_PREBUILT_RUNTIME_IMAGE=docker.io/library/python:3.11-slim
+
+# Local manual acceptance can package a separately verified host binary.
+# The default final stage continues to compile the complete source below.
+FROM ${E2E_MARKETPULSE_RUST_PREBUILT_RUNTIME_IMAGE} AS prebuilt
+COPY --chown=65532:65532 use-cases/marketpulse-feed-subscription/e2e/reports/.runtime/mock-payee-marketpulse-rust-service /usr/local/bin/mock-payee-marketpulse-rust-service
+RUN install -d -m 0700 -o 65532 -g 65532 /var/lib/marketpulse
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/mock-payee-marketpulse-rust-service"]
+
 FROM ${E2E_MARKETPULSE_RUST_BUILD_IMAGE} AS builder
 WORKDIR /build
 COPY src/adapters/rust /build/src/adapters/rust

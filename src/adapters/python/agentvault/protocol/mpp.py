@@ -37,17 +37,27 @@ _MCP_PAYMENT_REQUIRED_META_KEY = "org.paymentauth/payment-required"
 
 @dataclass(frozen=True)
 class _McpChallengeProjection:
-    """Composes pympp's MCP challenge with its missing optional header field."""
+    """Composes native MCP fields with the header and exact opaque wire binding."""
 
     native: MCPChallenge
     header: str | None = None
+    opaque_raw: str | None = None
 
     @classmethod
     def parse(cls, value: object) -> "_McpChallengeProjection":
         if not isinstance(value, dict):
             raise ValueError("MPP MCP challenge must be an object")
+        if not isinstance(value.get("request"), dict):
+            raise ValueError("MPP MCP request must be an expanded object")
+        opaque = value.get("opaque")
+        native_value = dict(value)
+        if opaque is not None:
+            decoded = cls.decode_object(opaque, "opaque")
+            if not all(isinstance(item, str) for item in decoded.values()):
+                raise ValueError("MPP opaque must encode string metadata")
+            native_value["opaque"] = decoded
         try:
-            native = MCPChallenge.from_dict(value)
+            native = MCPChallenge.from_dict(native_value)
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("MPP MCP challenge is invalid") from error
         header = value.get("header")
@@ -55,16 +65,38 @@ class _McpChallengeProjection:
             not isinstance(header, str) or header.lower() != "payment-authorization"
         ):
             raise ValueError("MPP MCP challenge selected an unsupported credential header")
-        return cls(native, "Payment-Authorization" if header is not None else None)
+        return cls(native, header, opaque)
 
     def wire(self) -> dict[str, object]:
         value: dict[str, object] = self.native.to_dict()
+        if self.opaque_raw is not None:
+            value["opaque"] = self.opaque_raw
         if self.header is not None:
             value["header"] = self.header
         return value
 
     def core(self) -> Challenge:
         return replace(self.native.to_core(), header=self.header)
+
+    def www_authenticate(self) -> str:
+        core = replace(self.core(), opaque=None)
+        header = core.to_www_authenticate(core.realm)
+        if self.opaque_raw is not None:
+            header += f', opaque="{self.opaque_raw}"'
+        return header
+
+    @staticmethod
+    def decode_object(value: object, field: str) -> dict:
+        if not isinstance(value, str):
+            raise ValueError(f"MPP {field} must be a base64url string")
+        try:
+            raw = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+            decoded = json.loads(raw)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError(f"MPP {field} is not base64url JSON") from error
+        if not isinstance(decoded, dict):
+            raise ValueError(f"MPP {field} must encode a JSON object")
+        return decoded
 
 
 class MppAdapter(PaymentProtocol):
@@ -130,7 +162,7 @@ class MppAdapter(PaymentProtocol):
             raise ValueError("MPP challenge has no valid WWW-Authenticate value") from error
         self._require_tempo_charge(parsed.method, parsed.intent)
         return HttpResponse(
-            {"WWW-Authenticate": parsed.to_www_authenticate(parsed.realm)},
+            {"WWW-Authenticate": value},
             "application/json",
             b'{"error":{"code":"PAYMENT_REQUIRED"}}',
         )
@@ -175,9 +207,8 @@ class MppAdapter(PaymentProtocol):
         if error_data is not None and result_data is not None and error_data != result_data:
             raise ValueError("MPP MCP error challenge conflicts with result metadata")
         projection = self._select_mcp_challenge(error_data or result_data)
-        core = projection.core()
         return HttpResponse(
-            {"www-authenticate": core.to_www_authenticate(core.realm)},
+            {"www-authenticate": projection.www_authenticate()},
             "application/json",
             b'{"error":{"code":"PAYMENT_REQUIRED"}}',
         )
@@ -185,9 +216,15 @@ class MppAdapter(PaymentProtocol):
     def mcp_credential(self, credential: PaymentCredential) -> McpMetadata:
         delivery = self.credential(credential)
         value = self._authorization_value(delivery.header_value)
-        parsed = MCPCredential.from_dict(value)
-        self._require_tempo_charge(parsed.challenge.method, parsed.challenge.intent)
-        return McpMetadata(META_CREDENTIAL, value)
+        challenge = dict(value["challenge"])
+        request_b64 = challenge.get("request")
+        challenge["request"] = _McpChallengeProjection.decode_object(request_b64, "request")
+        projection = _McpChallengeProjection.parse(challenge)
+        if projection.core().request_b64 != request_b64:
+            raise ValueError("MPP HTTP request is not canonical for MCP projection")
+        native = MCPCredential.from_dict({**value, "challenge": projection.native.to_dict()})
+        self._require_tempo_charge(native.challenge.method, native.challenge.intent)
+        return McpMetadata(META_CREDENTIAL, {**native.to_dict(), "challenge": projection.wire()})
 
     def presented_mcp_credential(self, meta: object, limit: int) -> object | None:
         if not isinstance(meta, dict):
@@ -198,15 +235,19 @@ class MppAdapter(PaymentProtocol):
         self._bounded_json(value, limit, "MPP MCP credential")
         if not isinstance(value, dict):
             raise ValueError("MPP MCP credential must be an object")
+        projection = _McpChallengeProjection.parse(value.get("challenge"))
         try:
-            parsed = MCPCredential.from_dict(value)
+            native = MCPCredential.from_dict({**value, "challenge": projection.native.to_dict()})
+            core = native.to_core()
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("MPP MCP credential is invalid") from error
-        self._require_tempo_charge(parsed.challenge.method, parsed.challenge.intent)
-        authorization = self._authorization_from_value(value)
-        credential = self._credential(authorization, "MPP MCP credential")
-        self._require_tempo_charge(credential.challenge.method, credential.challenge.intent)
-        return {"authorization": credential.to_authorization()}
+        self._require_tempo_charge(core.challenge.method, core.challenge.intent)
+        # pympp's MCP helper omits header and re-encodes opaque. Compose only
+        # those missing fields onto its official HTTP echo; request uses JCS.
+        core = replace(core, challenge=replace(
+            core.challenge, header=projection.header, opaque=projection.opaque_raw,
+        ))
+        return {"authorization": core.to_authorization()}
 
     def mcp_payment_required(self, challenge: PaymentChallenge) -> McpPaymentRequired:
         projection = self._stored_mcp_challenge(challenge)
@@ -328,12 +369,6 @@ class MppAdapter(PaymentProtocol):
         if not isinstance(raw, dict):
             raise ValueError("MPP credential is not an object")
         return raw
-
-    @staticmethod
-    def _authorization_from_value(value: dict[str, object]) -> str:
-        encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-        token = base64.urlsafe_b64encode(encoded).rstrip(b"=").decode()
-        return f"Payment {token}"
 
     @staticmethod
     def _payment_authorization(value: str) -> str:

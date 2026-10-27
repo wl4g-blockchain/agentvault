@@ -172,7 +172,7 @@ impl SettlementCoordinator {
     ) -> Result<(String, crate::protocol::ProtocolSettlement)> {
         let event = self
             .events
-            .find_for_intent_type(&intent.id, PaymentEventType::CredentialVerified, 0)
+            .find_latest_for_intent_type(&intent.id, PaymentEventType::CredentialVerified)
             .await?
             .ok_or_else(|| Error::Storage("credential verification event is missing".to_owned()))?;
         let verification_ref = event

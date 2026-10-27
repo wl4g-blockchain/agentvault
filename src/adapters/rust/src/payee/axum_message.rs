@@ -117,6 +117,7 @@ impl McpCall {
                 .remove("_meta");
         }
         Self::sort_object_keys(&mut message);
+        message.sort_all_objects();
         let canonical_body = serde_json::to_vec(&message).map_err(|error| OperationError {
             status: StatusCode::BAD_REQUEST,
             code: "MCP_REQUEST_INVALID",

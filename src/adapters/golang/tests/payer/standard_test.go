@@ -15,6 +15,7 @@ import (
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/config"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 	. "github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/payer"
+	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/protocol"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/transport"
 )
 
@@ -159,7 +160,11 @@ func TestStandardPayerMiddlewareCompletesOfficialMCPFlows(t *testing.T) {
 			headerValue := base64.StdEncoding.EncodeToString(credentialJSON)
 			if protocolName == "mpp" {
 				headerName = "payment-authorization"
-				headerValue = "Payment " + base64.RawURLEncoding.EncodeToString(credentialJSON)
+				native, err := (&protocol.MppAdapter{}).PresentedMCPCredential(credentialMeta, 64*1024)
+				if err != nil {
+					t.Fatal(err)
+				}
+				headerValue = native.(map[string]any)["authorization"].(string)
 			}
 			var reported bool
 			core, coreErr := NewPayerMiddleware(payerTransport(func(_ context.Context, request transport.TransportRequest) (transport.TransportResponse, error) {
