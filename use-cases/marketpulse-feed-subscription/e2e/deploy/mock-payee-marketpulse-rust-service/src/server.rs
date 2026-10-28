@@ -1,10 +1,10 @@
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use agentvault_sdk::{
     AgentVault, AxumPayeeMiddleware, AxumPayeeRoute, ConfiguredVaultTransport, GrpcConfig, MqttConfig, PayeeConfig,
     VaultTransportConfig,
 };
-use axum::{routing::post, Router};
+use axum::{http::Method, routing::post, Router};
 
 use crate::{
     handler::feed::{mcp, FeedHandler},
@@ -30,19 +30,40 @@ impl MarketPulseServer {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let bind = parse_bind(&required_env("MARKETPULSE_BIND")?)?;
         let vault = AgentVault::from_config(payee_transport_config()?)?;
-        let payee: AxumPayeeMiddleware<_> = vault.payee(PayeeConfig::default())?.axum(vec![AxumPayeeRoute::mcp_tool(
-            "/mcp",
-            "marketpulse.realtime_news",
-            required_env("MARKETPULSE_SCENARIO_ID")?,
-            required_env("MARKETPULSE_PRICE_ID")?,
-            required_env("MARKETPULSE_RESOURCE_URL")?,
-            required_env("MARKETPULSE_ORIGIN")?,
-        )]);
         let storage = FeedSqliteRepository::open(&required_env("MARKETPULSE_DATABASE")?)?;
         let allow_failure = env::var("MARKETPULSE_E2E_ALLOW_FAILURE_INJECTION").is_ok_and(|value| value == "true");
         let handler = FeedHandler::new(storage, allow_failure);
+        let protocol = env::var("MARKETPULSE_PAYMENT_PROTOCOL").unwrap_or_else(|_| "x402".into());
+        let resource = required_env("MARKETPULSE_RESOURCE_URL")?;
+        let a2a = AxumPayeeRoute {
+            method: Method::POST,
+            path: "/a2a".into(),
+            mcp_tool: None,
+            scenario_id: required_env("MARKETPULSE_SCENARIO_ID")?,
+            price_id: env::var("MARKETPULSE_A2A_PRICE_ID").unwrap_or(required_env("MARKETPULSE_PRICE_ID")?),
+            resource: env::var("MARKETPULSE_A2A_RESOURCE_URL")
+                .unwrap_or_else(|_| format!("{}/a2a", resource.trim_end_matches("/mcp"))),
+            origin: required_env("MARKETPULSE_ORIGIN")?,
+            protocol: protocol.clone(),
+        };
+        let payee: AxumPayeeMiddleware<_> = vault
+            .payee(PayeeConfig::default())?
+            .axum(vec![
+                AxumPayeeRoute::mcp_tool_with_protocol(
+                    "/mcp",
+                    "marketpulse.realtime_news",
+                    required_env("MARKETPULSE_SCENARIO_ID")?,
+                    required_env("MARKETPULSE_PRICE_ID")?,
+                    resource,
+                    required_env("MARKETPULSE_ORIGIN")?,
+                    protocol,
+                ),
+                a2a,
+            ])
+            .with_a2a_task_store("/a2a", Arc::new(handler.storage.clone()));
         let mcp = Router::new()
             .route("/mcp", post(mcp))
+            .route("/a2a", post(FeedHandler::a2a))
             .with_state(handler.clone())
             .layer(payee);
         Ok(Self {

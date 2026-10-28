@@ -67,7 +67,7 @@ fn durable_receipt_falls_back_to_reconciliation_event() {
         id: "event-1".to_owned(),
         intent_id: receipt.intent_id.clone(),
         event_type: PaymentEventType::Reconciled,
-        attempt_no: 0,
+        attempt_no: 1,
         signature_ref: None,
         tx_hash: receipt.tx_hash.clone(),
         payload: json!({"receipt": receipt}),

@@ -216,10 +216,9 @@ services:
     # unconfined seccomp profile. It holds no production credentials.
     security_opt:
       - seccomp=unconfined
-    # Agave's proof-of-history loop otherwise consumes an entire host core
-    # while this E2E is validating the EVM/x402 path. Keep the real node
-    # available without starving AgentVault, EMQX, or language builds.
-    cpus: "0.45"
+    # Agave's transaction scheduler polls even on an idle local chain. Bound
+    # CPU without changing slot duration or signed transaction expiry rules.
+    cpus: "${E2E_SOLANA_CPUS:-1.50}"
     healthcheck:
       test: ["CMD", "solana", "cluster-version", "--url", "http://127.0.0.1:8899"]
       interval: 10s

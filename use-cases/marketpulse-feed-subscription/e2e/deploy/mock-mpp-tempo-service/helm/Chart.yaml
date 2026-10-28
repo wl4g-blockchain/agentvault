@@ -1,0 +1,8 @@
+apiVersion: v2
+name: manual-payment-provider
+description: Local E2E Tempo and Solana payment provider
+type: application
+version: 0.1.0
+appVersion: "e2e"
+annotations:
+  agentvault.io/e2e-namespace: e2e-agentvault-payment-system

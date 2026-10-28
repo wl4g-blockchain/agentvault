@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stripe.mpp.Challenge;
+import com.stripe.mpp.ChallengeId;
 import com.stripe.mpp.Credential;
 import com.stripe.mpp.Json;
 import com.stripe.mpp.Receipt;
@@ -290,14 +291,7 @@ public final class MppAdapter implements PaymentProtocol {
                     "MPP challenge selected an unsupported credential header");
         }
         Map<String, Object> requestMap = JSON.convertValue(request, Map.class);
-        Map<String, Object> opaque = null;
-        if (value.has("opaque") && !value.get("opaque").isNull()) {
-            if (!value.get("opaque").isObject()) {
-                throw new IllegalArgumentException(
-                        "MPP MCP challenge opaque value must be an object");
-            }
-            opaque = JSON.convertValue(value.get("opaque"), Map.class);
-        }
+        String opaque = optionalText(value, "opaque");
         Challenge challenge =
                 new Challenge(
                         text(value, "id"),
@@ -312,7 +306,26 @@ public final class MppAdapter implements PaymentProtocol {
                         optionalText(value, "digest"),
                         optionalText(value, "expires"),
                         optionalText(value, "description"),
-                        opaque);
+                        null);
+        if (opaque != null) {
+            try {
+                if (ChallengeId.b64urlDecodeToMap(opaque) == null) {
+                    throw new IllegalArgumentException("opaque must encode a JSON object");
+                }
+                // The native Map is only a decoded view. Parse the original wire value
+                // so opaqueRaw and the credential echo keep the challenge-ID binding.
+                challenge =
+                        supportedChallenge(
+                                parseChallenges(
+                                        challenge.toWwwAuthenticate()
+                                                + ", opaque=\""
+                                                + opaque
+                                                + "\"",
+                                        "MPP MCP challenge"));
+            } catch (RuntimeException error) {
+                throw new IllegalArgumentException("MPP MCP challenge opaque is invalid", error);
+            }
+        }
         requireTempoCharge(challenge.method(), challenge.intent());
         ObjectNode wire = value.deepCopy();
         if (header != null) wire.put("header", "Payment-Authorization");

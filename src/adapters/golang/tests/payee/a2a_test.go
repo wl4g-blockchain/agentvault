@@ -23,6 +23,7 @@ import (
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/model"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/payee"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/payer"
+	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/protocol"
 	"github.com/wl4g-blockchain/agentvault/src/adapters/golang/pkg/transport"
 )
 
@@ -146,7 +147,11 @@ func a2aPayerCore(t *testing.T, name string, entry map[string]any, origin string
 	raw, _ := json.Marshal(entry["credential_meta"].(map[string]any)[key])
 	headerValue := base64.StdEncoding.EncodeToString(raw)
 	if name == "mpp" {
-		headerValue = "Payment " + base64.RawURLEncoding.EncodeToString(raw)
+		native, err := (&protocol.MppAdapter{}).PresentedMCPCredential(entry["credential_meta"], 64*1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		headerValue = native.(map[string]any)["authorization"].(string)
 	}
 	core, err := payer.NewPayerMiddleware(payeeTransport(func(_ context.Context, request transport.TransportRequest) (transport.TransportResponse, error) {
 		if strings.HasSuffix(request.Path, "/outbound-response") {

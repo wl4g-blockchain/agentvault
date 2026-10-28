@@ -9,6 +9,7 @@
     "test": "find tests -type f -name '*_test.ts' -print0 | sort -z | xargs -0 node --import tsx --test"
   },
   "dependencies": {
+    "@a2a-js/sdk": "0.3.14",
     "@agentvault/sdk": "file:../../../../../src/adapters/typescript",
     "@modelcontextprotocol/sdk": "1.32.1",
     "express": "5.1.0",

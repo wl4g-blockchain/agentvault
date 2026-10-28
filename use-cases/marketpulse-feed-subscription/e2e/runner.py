@@ -126,6 +126,10 @@ SCENARIOS = (
     Scenario("x402-solana", "verifier.payment.s26_x402_solana", "payment", "s26_x402_solana.md", "run x402 v2 exact on a real local Solana validator"),
     Scenario("a2a", "verifier.payment.s27_a2a", "payment", "s27_a2a.md", "run five native A2A SDK boundary suites with controlled Vault ports"),
     Scenario("x402-evm", "verifier.payment.s28_x402_evm", "payment", "s28_x402_evm.md", "run complete x402 v2 EIP-3009 payments on local Anvil"),
+    Scenario("manual", "verifier.payment.s29_manual", "payment", "s29_manual.md", "redeploy and retain all five-language manual acceptance profiles"),
+    Scenario("manual-services", "verifier.payment.s29_manual", "payment", "s29_manual_services.md", "resume retained manual services without resetting chains or Vault"),
+    Scenario("manual-payment", "verifier.payment.s29_manual", "payment", "s29_manual_payment.md", "execute one retained-stack SDK payment Job"),
+    Scenario("manual-matrix", "verifier.payment.s29_manual", "payment", "s29_manual_matrix.md", "execute 25 cross-language payments without resetting the stack"),
     Scenario("matrix", "verifier.payment.s30_matrix", "payment", "s30_matrix.md", "run the selected SDK matrix scope"),
     Scenario("web", "verifier.web.s40_dashboard", "web", "s40_dashboard.md", "render Matrix evidence through real Chromium Dashboard journeys"),
 )
@@ -252,6 +256,10 @@ def parser() -> argparse.ArgumentParser:
     languages = ("rust", "go", "python", "typescript", "java")
     result.add_argument("--payer-language", choices=languages, default="rust")
     result.add_argument("--payee-language", choices=languages, default="rust")
+    result.add_argument("--payment-profile", choices=("evm", "solana", "tempo"), default="evm")
+    result.add_argument("--message-protocol", choices=("mcp", "a2a"), default="mcp")
+    result.add_argument("--fail-after-settlement", action="store_true",
+                        help="manual payments: inject one application failure after settlement, then retry delivery")
     result.add_argument(
         "--transport",
         choices=("mqtt", "grpc"),
@@ -357,6 +365,9 @@ def main() -> None:
                             e2e_sdk_scope=args.e2e_sdk_scope,
                             matrix_workers=args.matrix_workers,
                             evidence_run_id=args.matrix_evidence_run,
+                            payment_profile=args.payment_profile,
+                            message_protocol=args.message_protocol,
+                            fail_after_settlement=args.fail_after_settlement,
                         )
                         with progress.step(
                             "scenario",

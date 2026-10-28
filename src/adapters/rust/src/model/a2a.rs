@@ -56,7 +56,9 @@ impl A2aCall {
         Ok(())
     }
     pub fn body(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(&self.wire).map_err(|e| Self::invalid(&e.to_string()))
+        let mut wire = self.wire.clone();
+        wire.sort_all_objects();
+        serde_json::to_vec(&wire).map_err(|e| Self::invalid(&e.to_string()))
     }
     pub fn task(message: &Value) -> Result<Task> {
         let task: Task = serde_json::from_value(message["result"].clone())

@@ -32,10 +32,13 @@ type ToolResult struct {
 // MCPHelper owns one real mark3labs MCP client and injects the two remote
 // MarketPulse tools discovered during initialization.
 type MCPHelper struct {
-	client         *client.Client
-	payments       *paymentRoundTripper
-	tools          map[string]struct{}
-	closeTransport func() error
+	messageProtocol string
+	a2aURL          string
+	httpClient      *http.Client
+	client          *client.Client
+	payments        *paymentRoundTripper
+	tools           map[string]struct{}
+	closeTransport  func() error
 }
 
 func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
@@ -133,9 +136,20 @@ func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 			return nil, fmt.Errorf("MarketPulse MCP server did not expose %s", required)
 		}
 	}
+	messageProtocol := strings.ToLower(strings.TrimSpace(os.Getenv("MARKETPULSE_MESSAGE_PROTOCOL")))
+	if messageProtocol == "" {
+		messageProtocol = "mcp"
+	}
+	if messageProtocol != "mcp" && messageProtocol != "a2a" {
+		return nil, errors.New("MARKETPULSE_MESSAGE_PROTOCOL must be mcp or a2a")
+	}
+	a2aURL := os.Getenv("MARKETPULSE_A2A_URL")
+	if a2aURL == "" {
+		a2aURL = strings.Replace(marketPulseURL, "/mcp", "/a2a", 1)
+	}
 	initialized = true
 	completed = true
-	return &MCPHelper{client: mcpClient, payments: capture, tools: tools, closeTransport: vault.Close}, nil
+	return &MCPHelper{messageProtocol: messageProtocol, a2aURL: a2aURL, httpClient: httpClient, client: mcpClient, payments: capture, tools: tools, closeTransport: vault.Close}, nil
 }
 
 func (helper *MCPHelper) Close() error {
@@ -153,6 +167,9 @@ func (helper *MCPHelper) YesterdayNews(ctx context.Context, runID string) (ToolR
 }
 
 func (helper *MCPHelper) RealtimeNews(ctx context.Context, runID string, failAfterSettlement bool) (ToolResult, error) {
+	if helper.messageProtocol == "a2a" {
+		return helper.callA2A(ctx, runID, failAfterSettlement)
+	}
 	return helper.call(ctx, realtimeTool, runID, failAfterSettlement)
 }
 

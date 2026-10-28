@@ -1,6 +1,9 @@
 import asyncio
+import copy
 import json
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -95,7 +98,115 @@ class _McpTransport:
         }
 
 
+class _SocketTransport(_McpTransport):
+    def __init__(self, protocol, fixture, origin, carrier):
+        super().__init__(protocol, fixture)
+        self.origin, self.carrier = origin, carrier
+
+    def request(self, method, path, body=None):
+        value = super().request(method, path, body)
+        if path == "/api/v1/payments/authorize":
+            value["credential"]["http"]["bound_origin"] = self.origin
+        return value
+
+    def _intent(self, status):
+        value = super()._intent(status)
+        value["resource"] = self.origin + "/" + self.carrier
+        return value
+
+
+class _FramedMerchant(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args):
+        pass
+
+    def do_POST(self):
+        self.connection.settimeout(2)
+        try:
+            if self.headers.get("transfer-encoding", "").lower() == "chunked":
+                chunks = []
+                while (size := int(self.rfile.readline().strip(), 16)):
+                    chunks.append(self.rfile.read(size))
+                    self.rfile.read(2)
+                self.rfile.read(2)
+                body = b"".join(chunks)
+            else:
+                body = self.rfile.read(int(self.headers.get("content-length", "0")))
+            self.server.observed.append({"body": body, "message": json.loads(body),
+                                         "headers": dict(self.headers)})
+            index = len(self.server.observed)
+            status = 503 if index == 2 else 200
+            result = self.server.challenge if index == 1 else self.server.settled
+            encoded = json.dumps(result).encode() if status == 200 else b'{"error":"delivery failed once"}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("X-A2A-Extensions", self.server.extension)
+            self.end_headers()
+            self.wfile.write(encoded)
+        except Exception as error:
+            self.server.errors.append(type(error).__name__)
+            self.close_connection = True
+
+
 class StandardPayerMiddlewareTest(unittest.TestCase):
+    def test_real_http_reframes_paid_mcp_a2a_and_delivery_retry_for_both_protocols(self):
+        root = Path(__file__).resolve().parents[4] / "tests"
+        mcp = json.loads((root / "payment_protocol_mcp.json").read_text())
+        a2a = json.loads((root / "payment_protocol_a2a.json").read_text())
+        for carrier in ("mcp", "a2a"):
+            for protocol in ("x402", "mpp"):
+                for framing in ("cOnTeNt-LeNgTh", "tRaNsFeR-EnCoDiNg"):
+                    with self.subTest(carrier=carrier, protocol=protocol, framing=framing):
+                        server = ThreadingHTTPServer(("127.0.0.1", 0), _FramedMerchant)
+                        contract = mcp["protocols"][protocol]
+                        server.observed, server.errors = [], []
+                        server.extension = a2a["x402_extension"]
+                        server.challenge = copy.deepcopy((mcp if carrier == "mcp" else a2a)["protocols"][protocol]["challenge_response"])
+                        server.settled = {"jsonrpc": "2.0", "id": 1, "result": {
+                            "content": [{"type": "text", "text": "paid"}], "_meta": contract["receipt_meta"],
+                        }} if carrier == "mcp" else copy.deepcopy(a2a["protocols"][protocol]["settled_response"])
+                        thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+                        thread.start()
+                        origin = f"http://127.0.0.1:{server.server_port}"
+                        transport = _SocketTransport(protocol, contract, origin, carrier)
+                        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                            "name": "marketpulse.realtime", "arguments": {},
+                        }} if carrier == "mcp" else copy.deepcopy(a2a["request"])
+                        original = json.dumps(message, separators=(",", ":")).encode()
+                        headers = {"Authorization": "Bearer application-token", "Content-Type": "application/json",
+                                   framing: str(len(original)) if framing.lower() == "content-length" else "chunked"}
+
+                        async def execute():
+                            core = PayerMiddleware(transport, PayerConfig("scenario", delivery_retries=1, protocols=(protocol,)))
+                            async with core.standard(timeout=3) as client:
+                                response = await client.post(origin + "/" + carrier,
+                                    operation=PayerRequestContext("run-1"), headers=headers, content=original)
+                            self.assertEqual(response.status_code, 200)
+                            self.assertIn("agentvault.payment", response.extensions)
+
+                        try:
+                            asyncio.run(execute())
+                            self.assertEqual(server.errors, [])
+                            self.assertEqual(len(server.observed), 3)
+                            self.assertEqual(server.observed[0]["body"], original)
+                            self.assertGreater(len(server.observed[1]["body"]), len(original))
+                            self.assertEqual(server.observed[1]["body"], server.observed[2]["body"])
+                            for request in server.observed:
+                                wire_headers = {name.lower(): value for name, value in request["headers"].items()}
+                                self.assertEqual(int(wire_headers["content-length"]), len(request["body"]))
+                                self.assertNotIn("transfer-encoding", wire_headers)
+                                self.assertEqual(wire_headers["authorization"], "Bearer application-token")
+                            self.assertEqual(len(transport.calls), 2)
+                            self.assertEqual(transport.calls[-1][2]["protocol"], protocol)
+                            self.assertEqual(transport.calls[-1][2]["evidence"]["header_name"],
+                                             "payment-response" if protocol == "x402" else "payment-receipt")
+                        finally:
+                            server.shutdown()
+                            server.server_close()
+                            thread.join(timeout=2)
+
     def test_run_id_is_stable(self):
         self.assertEqual(
             PayerRequestContext("run-1"),

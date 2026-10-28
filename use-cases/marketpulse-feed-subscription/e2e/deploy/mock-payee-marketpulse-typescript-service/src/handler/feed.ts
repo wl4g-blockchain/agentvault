@@ -1,3 +1,5 @@
+import type {TaskStore} from '@a2a-js/sdk/server';
+import type {MessageSendParams} from '@a2a-js/sdk';
 import { createHash } from 'node:crypto';
 import type { SettledIncomingPayment } from '@agentvault/sdk';
 import type { Request, RequestHandler, Response } from 'express';
@@ -14,6 +16,7 @@ export class FeedHandler {
   constructor(
     private readonly storage: FeedSqliteRepository,
     private readonly allowFailureInjection: boolean,
+    private readonly taskStore?: TaskStore,
   ) {}
 
   readonly health: RequestHandler = (_request, response) => {
@@ -75,44 +78,53 @@ export class FeedHandler {
       response.status(404).json(this.error(id, -32602, 'unknown tool'));
       return;
     }
+    const delivery = this.paidNews(request, id, request.body as Buffer, response.locals.agentvaultPayment);
+    response.status(delivery.status).type('application/json').send(delivery.body);
+  }
+
+  readonly a2a: RequestHandler = async (request, response) => {
+    const rpc = JSON.parse((request.body as Buffer).toString('utf8')) as RpcRequest;
+    const params = rpc.params as unknown as MessageSendParams;
+    const task = params?.message.taskId ? await this.taskStore?.load(params.message.taskId) : undefined;
+    if (rpc.method !== 'message/send' || !task) {
+      response.status(409).json(this.error(rpc.id, -32009, 'payment Task is missing'));
+      return;
+    }
+    const canonical = Buffer.from(JSON.stringify({jsonrpc:'2.0', id:request.get('x-run-id'),
+      method:'tools/call', params:{name:'marketpulse.realtime_news', arguments:{}}}));
+    const delivery = this.paidNews(request, rpc.id, canonical, response.locals.agentvaultPayment);
+    const value = JSON.parse(delivery.body) as {error?:unknown; result?:{structuredContent:Record<string,unknown>}};
+    if (value.error || !value.result) {
+      response.status(delivery.status).type('application/json').send(delivery.body);
+      return;
+    }
+    task.status = {state:'completed'};
+    task.artifacts = [{artifactId:'realtime-news', parts:[{kind:'data', data:value.result.structuredContent}]}];
+    await this.taskStore!.save(task);
+    response.json(this.result(rpc.id, task));
+  };
+
+  private paidNews(request: Request, id: unknown, body: Buffer, payment?: SettledIncomingPayment): {status:number; body:string} {
+    const failure = (status:number, code:number, message:string) => ({status, body:JSON.stringify(this.error(id, code, message))});
     const runId = request.get('x-run-id')?.trim();
-    if (!runId) {
-      response.status(400).json(this.error(id, -32602, 'x-run-id is required'));
-      return;
-    }
-    const requestHash = createHash('sha256')
-      .update('marketpulse.mcp.request.v1\0')
-      .update(request.body as Buffer)
-      .digest('hex');
+    if (!runId) return failure(400, -32602, 'x-run-id is required');
+    const requestHash = createHash('sha256').update('marketpulse.mcp.request.v1\0').update(body).digest('hex');
     let delivery;
-    try {
-      delivery = this.storage.delivery(runId, requestHash);
-    } catch (failure) {
-      response.status(409).json(this.error(id, -32009, String(failure)));
-      return;
-    }
-    if (delivery.response) {
-      response.type('application/json').send(delivery.response);
-      return;
-    }
+    try { delivery = this.storage.delivery(runId, requestHash); }
+    catch (error) { return failure(409, -32009, String(error)); }
+    if (delivery.response) return {status:200, body:delivery.response};
     let intentId = delivery.intentId;
     if (!intentId) {
-      const payment = response.locals.agentvaultPayment as SettledIncomingPayment | undefined;
-      if (!payment) {
-        response.status(402).json(this.error(id, -32005, 'settled payment is required'));
-        return;
-      }
+      if (!payment) return failure(402, -32005, 'settled payment is required');
       this.storage.recordSettled(runId, requestHash, payment);
       intentId = payment.intent.id;
     }
-    if (this.allowFailureInjection && request.get('x-e2e-fail-after-settlement') === 'once' &&
-        this.storage.recordFailure(runId, requestHash)) {
-      response.status(503).json(this.error(id, -32004, 'injected delivery failure after settlement'));
-      return;
+    if (this.allowFailureInjection && request.get('x-e2e-fail-after-settlement') === 'once' && this.storage.recordFailure(runId, requestHash)) {
+      return failure(503, -32004, 'injected delivery failure after settlement');
     }
     const encoded = JSON.stringify(this.toolResult(id, this.storage.news('realtime', 20), true, intentId));
     this.storage.recordDelivered(runId, requestHash, encoded);
-    response.type('application/json').send(encoded);
+    return {status:200, body:encoded};
   }
 
   private tools(): unknown[] {

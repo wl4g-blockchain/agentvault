@@ -37,6 +37,7 @@ config:
     
 persistence:
   enabled: false
+  existingClaim: ""
   mountPath: "/var/lib/component"
 resources:
   requests: { cpu: 20m, memory: 32Mi }

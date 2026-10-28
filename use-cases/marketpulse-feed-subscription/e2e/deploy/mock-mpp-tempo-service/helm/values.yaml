@@ -1,0 +1,42 @@
+workload:
+  kind: Deployment
+  replicas: 1
+  backoffLimit: 0
+  restartPolicy: Always
+image:
+  repository: localhost/manual-payment-provider
+  tag: local
+  pullPolicy: Never
+command: []
+args: []
+env:
+  SOLANA_RPC_URL: http://solana-validator:8899
+  EVM_FACILITATOR_URL: http://x402-facilitator:8085
+  TEMPO_RPC_URL: http://tempo:8545
+  TEMPO_RECIPIENT: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
+  TOKIO_WORKER_THREADS: "2"
+secret:
+  name: manual-provider-secrets
+  env: {}
+ports:
+  - { name: http, containerPort: 8087, servicePort: 8087 }
+service:
+  enabled: true
+probe:
+  enabled: true
+  type: http
+  path: /healthz
+  port: 8087
+  initialDelaySeconds: 3
+  periodSeconds: 5
+config:
+  enabled: false
+  key: config
+  mountPath: /etc/component/config
+  content: ""
+persistence:
+  enabled: false
+  mountPath: /data
+resources:
+  requests: { cpu: 20m, memory: 64Mi }
+  limits: { cpu: 500m, memory: 512Mi }

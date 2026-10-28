@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from a2a.server.tasks import TaskStore
+from a2a.types import Task
 import json
 import sqlite3
 import threading
@@ -34,7 +36,7 @@ class DeliveryState:
     response: str = ""
 
 
-class FeedSqliteRepository:
+class FeedSqliteRepository(TaskStore):
     def __init__(self, path: str) -> None:
         if not path or path == ":memory:":
             raise ValueError("MARKETPULSE_DATABASE must be persistent")
@@ -42,6 +44,7 @@ class FeedSqliteRepository:
         self._connection = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._connection.executescript("""
             PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+            CREATE TABLE IF NOT EXISTS a2a_task(id TEXT PRIMARY KEY, task_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS feed_item(
               id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,topic TEXT NOT NULL,
               symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,sentiment_bps INTEGER NOT NULL,
@@ -52,6 +55,20 @@ class FeedSqliteRepository:
               failure_injections INTEGER NOT NULL DEFAULT 0 CHECK(failure_injections IN (0,1)),updated_at INTEGER NOT NULL);
         """)
         self._seed()
+
+    async def get(self, task_id: str, context=None) -> Task | None:
+        with self._lock:
+            row = self._connection.execute("SELECT task_json FROM a2a_task WHERE id=?", (task_id,)).fetchone()
+        return Task.model_validate_json(row[0]) if row else None
+
+    async def save(self, task: Task, context=None) -> None:
+        with self._lock:
+            self._connection.execute("INSERT INTO a2a_task VALUES(?,?) ON CONFLICT(id) DO UPDATE SET task_json=excluded.task_json",
+                (task.id, task.model_dump_json(by_alias=True, exclude_none=True)))
+
+    async def delete(self, task_id: str, context=None) -> None:
+        with self._lock:
+            self._connection.execute("DELETE FROM a2a_task WHERE id=?", (task_id,))
 
     def close(self) -> None:
         self._connection.close()

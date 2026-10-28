@@ -73,6 +73,7 @@ func (storage *FeedSqliteRepository) Close() error { return storage.database.Clo
 
 func (storage *FeedSqliteRepository) initialize() error {
 	_, err := storage.database.Exec(`
+CREATE TABLE IF NOT EXISTS a2a_task(id TEXT PRIMARY KEY,version INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS feed_item(
  id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,topic TEXT NOT NULL,
  symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,sentiment_bps INTEGER NOT NULL,

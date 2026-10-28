@@ -200,6 +200,10 @@ class HttpxPayerMiddleware:
     async def _send(self, method: str, url: str, headers: Mapping[str, str],
                     content: bytes | str | None, *, stream: bool = False,
                     **kwargs: Any) -> httpx.Response:
+        # This adapter owns the replayable body. HTTPX must frame its current
+        # bytes, including after MCP/A2A metadata grows it and on every retry.
+        headers = {name: value for name, value in headers.items()
+                   if name.lower() not in {"content-length", "transfer-encoding"}}
         request = self._client.build_request(method, url, headers=headers, content=content, **kwargs)
         return await self._client.send(request, follow_redirects=False, stream=stream)
 

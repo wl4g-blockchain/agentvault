@@ -192,7 +192,7 @@ func TestX402MCPDoesNotMisclassifyUnrelatedToolErrors(t *testing.T) {
 	}
 }
 
-func TestMPPMCPRejectsUnsupportedSessionAndPreservesRawCredential(t *testing.T) {
+func TestMPPMCPRejectsUnsupportedSessionAndPreservesDeliveryHeader(t *testing.T) {
 	fixture := readMCPFixture(t)
 	entry := fixture["protocols"].(map[string]any)["mpp"].(map[string]any)
 	response := entry["challenge_response"].(map[string]any)
@@ -204,12 +204,11 @@ func TestMPPMCPRejectsUnsupportedSessionAndPreservesRawCredential(t *testing.T) 
 	}
 
 	credentialMeta := entry["credential_meta"].(map[string]any)
-	credential := credentialMeta["org.paymentauth/credential"]
-	body, err := json.Marshal(credential)
+	presented, err := adapter.PresentedMCPCredential(credentialMeta, 64*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorization := "Payment " + base64.RawURLEncoding.EncodeToString(body)
+	authorization := presented.(map[string]any)["authorization"].(string)
 	delivery, err := adapter.MCPCredential(model.PaymentCredential{
 		Protocol: "mpp",
 		HTTP: &model.HTTPCredential{

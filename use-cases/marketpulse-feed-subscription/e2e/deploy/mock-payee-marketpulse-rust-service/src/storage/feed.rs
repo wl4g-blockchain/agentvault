@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use agentvault_sdk::{PaymentReceipt, SettledIncomingPayment};
+use a2a_types::Task;
+use agentvault_sdk::{A2aTaskStore, PaymentReceipt, SettledIncomingPayment};
+use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -72,6 +74,36 @@ pub enum DeliveryState {
     Delivered { response: String },
 }
 
+#[async_trait]
+impl A2aTaskStore for FeedSqliteRepository {
+    async fn get(&self, id: &str) -> agentvault_sdk::Result<Option<Task>> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| agentvault_sdk::Error::Transport("Task store poisoned".into()))?;
+        let json: Option<String> = connection
+            .query_row("SELECT task_json FROM a2a_task WHERE id=?1", [id], |row| row.get(0))
+            .optional()
+            .map_err(|error| agentvault_sdk::Error::Transport(error.to_string()))?;
+        json.map(|json| serde_json::from_str(&json).map_err(|error| agentvault_sdk::Error::Decode(error.to_string())))
+            .transpose()
+    }
+    async fn save(&self, task: &Task) -> agentvault_sdk::Result<()> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| agentvault_sdk::Error::Transport("Task store poisoned".into()))?;
+        let encoded = serde_json::to_string(task).map_err(|error| agentvault_sdk::Error::Encode(error.to_string()))?;
+        connection
+            .execute(
+                "INSERT INTO a2a_task VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET task_json=excluded.task_json",
+                params![task.id, encoded],
+            )
+            .map_err(|error| agentvault_sdk::Error::Transport(error.to_string()))?;
+        Ok(())
+    }
+}
+
 impl StoredSettlement {
     /// Projects a verified settlement into the durable delivery record.
     ///
@@ -107,6 +139,7 @@ impl FeedSqliteRepository {
                 "PRAGMA foreign_keys=ON;
                  PRAGMA journal_mode=DELETE;
                  PRAGMA synchronous=FULL;
+                 CREATE TABLE IF NOT EXISTS a2a_task(id TEXT PRIMARY KEY,task_json TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS feed_item(
                    id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,author TEXT NOT NULL,role TEXT NOT NULL,
                    topic TEXT NOT NULL,symbols_json TEXT NOT NULL,headline TEXT NOT NULL,source TEXT NOT NULL,

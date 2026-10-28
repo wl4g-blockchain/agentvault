@@ -1,5 +1,6 @@
 package io.agentvault.e2e.server;
 
+import io.a2a.server.tasks.TaskStore;
 import io.agentvault.e2e.handler.FeedHandler;
 import io.agentvault.e2e.storage.FeedSqliteRepository;
 import io.agentvault.sdk.AgentVault;
@@ -33,18 +34,22 @@ public class MarketPulseServer {
     }
 
     @Bean
-    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(AgentVault vault) {
+    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(AgentVault vault, FeedSqliteRepository taskStore) {
         var payee = vault.payee();
-        var route = SpringInterceptorPayeeMiddleware.Route.mcpTool(
+        var route = SpringInterceptorPayeeMiddleware.Route.mcpToolWithProtocol(
                 "/mcp",
                 "marketpulse.realtime_news",
                 required("MARKETPULSE_SCENARIO_ID"),
                 required("MARKETPULSE_PRICE_ID"),
                 required("MARKETPULSE_RESOURCE_URL"),
-                required("MARKETPULSE_ORIGIN"));
-        var registration = new FilterRegistrationBean<>(payee.spring(List.of(route)));
+                required("MARKETPULSE_ORIGIN"), System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402"));
+        var a2a = SpringInterceptorPayeeMiddleware.Route.a2a("/a2a", required("MARKETPULSE_SCENARIO_ID"),
+                System.getenv().getOrDefault("MARKETPULSE_A2A_PRICE_ID", required("MARKETPULSE_PRICE_ID")),
+                System.getenv().getOrDefault("MARKETPULSE_A2A_RESOURCE_URL", required("MARKETPULSE_RESOURCE_URL").replaceFirst("/mcp$", "/a2a")),
+                required("MARKETPULSE_ORIGIN"), System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402"), taskStore);
+        var registration = new FilterRegistrationBean<>(payee.spring(List.of(route, a2a)));
         registration.setOrder(-100);
-        registration.addUrlPatterns("/mcp");
+        registration.addUrlPatterns("/mcp", "/a2a");
         return registration;
     }
 
@@ -114,6 +119,11 @@ public class MarketPulseServer {
 
         public McpEndpoint(FeedHandler handler) {
             this.handler = handler;
+        }
+
+        @PostMapping("/a2a")
+        public ResponseEntity<byte[]> a2a(HttpServletRequest request, @RequestBody byte[] body) {
+            return handler.a2a(request, body);
         }
 
         @PostMapping("/mcp")

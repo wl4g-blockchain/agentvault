@@ -1,6 +1,6 @@
 package io.agentvault.sdk.payer;
 
-import static io.agentvault.sdk.payer.SpringPayerMessages.JSON;
+import static io.agentvault.sdk.payer.PayerMessages.JSON;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -8,7 +8,7 @@ import io.agentvault.sdk.model.A2a;
 import io.agentvault.sdk.model.Payer.PayerHttpRequest;
 import io.agentvault.sdk.model.Payer.PayerHttpResponse;
 import io.agentvault.sdk.model.Payer.PayerRequestContext;
-import io.agentvault.sdk.payer.SpringPayerMessages.Call;
+import io.agentvault.sdk.payer.PayerMessages.Call;
 
 import org.reactivestreams.Publisher;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -37,11 +37,11 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Replayable Spring WebFlux request/response adaptation over PayerMiddleware. */
 final class SpringWebFluxPayerMiddleware {
     private final PayerMiddleware core;
-    private final SpringPayerMessages messages;
+    private final PayerMessages messages;
 
     SpringWebFluxPayerMiddleware(PayerMiddleware core) {
         this.core = java.util.Objects.requireNonNull(core, "core");
-        this.messages = new SpringPayerMessages(core);
+        this.messages = new PayerMessages(core);
     }
 
     ExchangeFilterFunction filter() {
@@ -94,7 +94,7 @@ final class SpringWebFluxPayerMiddleware {
                                         requestBody,
                                         first);
                             }
-                            SpringPayerMessages.event(
+                            PayerMessages.event(
                                     "agentvault.sdk.payer.payment_required",
                                     context.orElseThrow().runId(),
                                     null,
@@ -103,7 +103,7 @@ final class SpringWebFluxPayerMiddleware {
                                     .flatMap(
                                             initial -> {
                                                 byte[] challenge = initial.body();
-                                                SpringPayerMessages.event(
+                                                PayerMessages.event(
                                                         "agentvault.sdk.payer.signing_requested",
                                                         context.orElseThrow().runId(),
                                                         null,
@@ -138,7 +138,7 @@ final class SpringWebFluxPayerMiddleware {
                                                         .subscribeOn(Schedulers.boundedElastic())
                                                         .flatMap(
                                                                 authorized -> {
-                                                                    SpringPayerMessages.event(
+                                                                    PayerMessages.event(
                                                                             "agentvault.sdk.payer.signed",
                                                                             context.orElseThrow()
                                                                                     .runId(),
@@ -255,7 +255,7 @@ final class SpringWebFluxPayerMiddleware {
             byte[] requestBody,
             ClientResponse first) {
         if (call == null
-                || !SpringPayerMessages.isJson(
+                || !PayerMessages.isJson(
                         first.headers().asHttpHeaders().getFirst("content-type"))) {
             return Mono.just(first);
         }
@@ -273,32 +273,37 @@ final class SpringWebFluxPayerMiddleware {
                             }
                             return Mono.fromCallable(
                                             () ->
-                                                    core.authorizeMessage(
-                                                            new PayerHttpRequest(
-                                                                    request.method().name(),
-                                                                    target.toString(),
-                                                                    PayerMiddleware.origin(target),
+                                                    Optional.ofNullable(
+                                                            core.authorizeMessage(
+                                                                    new PayerHttpRequest(
+                                                                            request.method().name(),
+                                                                            target.toString(),
+                                                                            PayerMiddleware.origin(
+                                                                                    target),
+                                                                            PayerMiddleware
+                                                                                    .copyHeaders(
+                                                                                            request
+                                                                                                    .headers()),
+                                                                            requestBody,
+                                                                            false),
+                                                                    message,
+                                                                    context,
                                                                     PayerMiddleware.copyHeaders(
-                                                                            request.headers()),
-                                                                    requestBody,
-                                                                    false),
-                                                            message,
-                                                            context,
-                                                            PayerMiddleware.copyHeaders(
-                                                                    initial.response()
-                                                                            .headers()
-                                                                            .asHttpHeaders())))
+                                                                            initial.response()
+                                                                                    .headers()
+                                                                                    .asHttpHeaders()))))
                                     .subscribeOn(Schedulers.boundedElastic())
                                     .flatMap(
-                                            authorized -> {
-                                                if (authorized == null)
+                                            payment -> {
+                                                if (payment.isEmpty())
                                                     return Mono.just(rebuild(initial));
-                                                SpringPayerMessages.event(
+                                                var authorized = payment.orElseThrow();
+                                                PayerMessages.event(
                                                         "agentvault.sdk.payer.payment_required",
                                                         context.runId(),
                                                         null,
                                                         null);
-                                                SpringPayerMessages.event(
+                                                PayerMessages.event(
                                                         "agentvault.sdk.payer.signed",
                                                         context.runId(),
                                                         authorized.intent().id(),
@@ -524,7 +529,7 @@ final class SpringWebFluxPayerMiddleware {
         ClientResponse original = response.response();
         ClientResponse.Builder builder =
                 ClientResponse.create(original.statusCode(), original.strategies())
-                        .headers(headers -> headers.putAll(original.headers().asHttpHeaders()))
+                        .headers(headers -> headers.addAll(original.headers().asHttpHeaders()))
                         .cookies(cookies -> cookies.putAll(original.cookies()))
                         .request(original.request())
                         .body(
