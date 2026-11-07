@@ -59,7 +59,12 @@ make test
 make build
 ```
 
-Makefile 会在每次 Rust 构建前检查 `target/`，超过 10 GiB 时执行 `cargo clean`。
+`make build` 会构建 release 服务端二进制及全部客户端 SDK：Rust、Go、Python
+（wheel）、TypeScript（JavaScript 和类型声明）以及 Java（JAR）。如只需 SDK，使用
+`make build-adapters`；也可执行单个目标，例如 `make build-sdk-typescript`。
+
+Makefile 会在每次 Rust 构建前检查两个 `target/` 目录，任一目录超过 10 GiB 时执行
+`cargo clean`。
 
 多语言 SDK：
 

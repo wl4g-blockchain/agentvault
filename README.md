@@ -61,7 +61,13 @@ make test
 make build
 ```
 
-The Makefile checks `target/` before every build and runs `cargo clean` if it exceeds 10 GiB.
+`make build` builds the release binary and every supported client SDK: Rust,
+Go, Python (wheel), TypeScript (JavaScript and declarations), and Java (JAR).
+Use `make build-adapters` to omit the server binary, or invoke an individual
+SDK target such as `make build-sdk-typescript`.
+
+The Makefile checks both Rust `target/` directories before every build and runs
+`cargo clean` if either exceeds 10 GiB.
 
 SDK checks:
 
