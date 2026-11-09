@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::{ready, Future},
     sync::{Arc, Mutex},
 };
 
@@ -11,13 +12,16 @@ use super::*;
 struct CaptureTransport(Arc<Mutex<Option<TransportRequest>>>);
 
 impl VaultTransport for CaptureTransport {
-    async fn send(&self, request: TransportRequest) -> std::result::Result<TransportResponse, TransportError> {
+    fn send(
+        &self,
+        request: TransportRequest,
+    ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send {
         *self.0.lock().expect("capture") = Some(request);
-        Ok(TransportResponse {
+        ready(Ok(TransportResponse {
             status: 409,
             headers: BTreeMap::new(),
             body: br#"{"error":{"code":"PAYMENT_CONFLICT","message":"different request hash"}}"#.to_vec(),
-        })
+        }))
     }
 }
 
@@ -25,7 +29,10 @@ impl VaultTransport for CaptureTransport {
 struct ReportCaptureTransport(Arc<Mutex<Option<TransportRequest>>>);
 
 impl VaultTransport for ReportCaptureTransport {
-    async fn send(&self, request: TransportRequest) -> std::result::Result<TransportResponse, TransportError> {
+    fn send(
+        &self,
+        request: TransportRequest,
+    ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send {
         *self.0.lock().expect("capture") = Some(request);
         let intent = serde_json::json!({
             "id": "intent", "scenario_id": "scenario-1", "run_id": "run-1",
@@ -39,14 +46,14 @@ impl VaultTransport for ReportCaptureTransport {
             "reservation_status": "reserved", "reserved_amount": "1000",
             "created_at": 1, "updated_at": 1
         });
-        Ok(TransportResponse {
+        ready(Ok(TransportResponse {
             status: 200,
             headers: BTreeMap::new(),
             body: serde_json::to_vec(&serde_json::json!({
                 "intent": intent, "accepted": true, "replayed": false
             }))
             .expect("response JSON"),
-        })
+        }))
     }
 }
 

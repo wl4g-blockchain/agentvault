@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::{poll_fn, ready, Future},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -14,12 +15,15 @@ use agentvault_sdk::{
 struct NoopTransport;
 
 impl VaultTransport for NoopTransport {
-    async fn send(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
-        Ok(TransportResponse {
+    fn send(
+        &self,
+        _request: TransportRequest,
+    ) -> impl Future<Output = Result<TransportResponse, TransportError>> + Send {
+        ready(Ok(TransportResponse {
             status: 200,
             headers: BTreeMap::new(),
             body: b"{}".to_vec(),
-        })
+        }))
     }
 }
 
@@ -35,13 +39,16 @@ fn facade_builds_both_role_middlewares() {
 struct BorrowedTransport(Arc<AtomicUsize>);
 
 impl VaultTransport for BorrowedTransport {
-    async fn send(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
-        unreachable!("the ownership test does not send requests")
+    fn send(
+        &self,
+        _request: TransportRequest,
+    ) -> impl Future<Output = Result<TransportResponse, TransportError>> + Send {
+        poll_fn(|_| unreachable!("the ownership test does not send requests"))
     }
 
-    async fn close(&self) -> Result<(), TransportError> {
+    fn close(&self) -> impl Future<Output = Result<(), TransportError>> + Send {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        ready(Ok(()))
     }
 }
 

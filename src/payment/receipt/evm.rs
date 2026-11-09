@@ -526,7 +526,7 @@ impl EvmRpcReceiptSource {
         if !EvmRpcReceiptSource::valid_address(address) {
             return Err(Error::Settlement("EVM address topic is invalid".to_owned()));
         }
-        Ok(format!("0x{}{}", "0".repeat(24), &address[2..].to_ascii_lowercase()))
+        Ok(format!("0x{}{}", "0".repeat(24), address[2..].to_ascii_lowercase()))
     }
 
     pub(super) fn validate_network(network: &str) -> std::result::Result<u128, String> {

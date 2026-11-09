@@ -1,3 +1,5 @@
+use std::future::{ready, Future};
+
 use axum::{
     body::{to_bytes, Body},
     http::{header, Response, StatusCode},
@@ -14,8 +16,11 @@ use super::*;
 struct UnusedTransport;
 
 impl VaultTransport for UnusedTransport {
-    async fn send(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
-        Err(TransportError::new("unexpected Vault call"))
+    fn send(
+        &self,
+        _request: TransportRequest,
+    ) -> impl Future<Output = Result<TransportResponse, TransportError>> + Send {
+        ready(Err(TransportError::new("unexpected Vault call")))
     }
 }
 

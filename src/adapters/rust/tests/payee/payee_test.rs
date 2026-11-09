@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    future::{ready, Future},
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     Error, PayeeConfig, PayeeMiddleware, PayeeOperation, TransportError, TransportRequest, TransportResponse,
@@ -9,7 +12,10 @@ use crate::{
 struct RejectingTransport(Arc<Mutex<Vec<String>>>);
 
 impl VaultTransport for RejectingTransport {
-    async fn send(&self, request: TransportRequest) -> std::result::Result<TransportResponse, TransportError> {
+    fn send(
+        &self,
+        request: TransportRequest,
+    ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send {
         self.0.lock().expect("paths").push(request.path.clone());
         let body = match request.path.as_str() {
             "/api/v1/payee/challenges" => {
@@ -18,13 +24,13 @@ impl VaultTransport for RejectingTransport {
             "/api/v1/payee/verify" => {
                 br#"{"intent":{"id":"intent","scenario_id":"scenario","run_id":"run","price_id":"price","direction":"inbound","protocol":"x402","asset":{"network":"eip155:31337","asset":"USDC","decimals":6},"recipient":"0x1","amount":"1000","settled_amount":"0","resource":"mcp://marketpulse/realtime","challenge_hash":"challenge","request_hash":"request-hash","status":"pending_settlement","reservation_status":"reserved","reserved_amount":"1000","created_at":1,"updated_at":1},"valid":false}"#.to_vec()
             }
-            other => return Err(TransportError::new(format!("unexpected Vault call: {other}"))),
+            other => return ready(Err(TransportError::new(format!("unexpected Vault call: {other}")))),
         };
-        Ok(TransportResponse {
+        ready(Ok(TransportResponse {
             status: 200,
             headers: std::collections::BTreeMap::new(),
             body,
-        })
+        }))
     }
 }
 

@@ -14,7 +14,7 @@
 # Run:
 #   docker run -p 8545:8545 foundry_anvil:1.7.1
 
-FROM docker.io/library/debian:bookworm-slim
+FROM debian:trixie-slim
 
 COPY foundry.tar.gz /tmp/foundry.tar.gz
 RUN mkdir -p /opt/foundry \

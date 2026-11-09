@@ -115,7 +115,7 @@ async fn import_session_decrypts_once_and_never_persists_transport_plaintext() {
     let cached_json = String::from_utf8(cached.clone()).expect("cached session UTF-8 JSON");
     let cached: CachedWalletImportSession = serde_json::from_slice(&cached).expect("cached session JSON");
     assert_eq!(cached.version, SESSION_VERSION);
-    assert!(!cached.sealed_server_private_key.ciphertext.is_empty());
+    assert_ne!(cached.sealed_server_private_key.ciphertext, "");
     assert_ne!(cached.sealed_server_private_key.ciphertext, session.server_public_key);
     let plaintext = protector
         .open(

@@ -13,7 +13,7 @@
 # Run:
 #   docker run -p 8899:8899 anza_solana:3.1.14
 
-FROM docker.io/library/debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bzip2 && rm -rf /var/lib/apt/lists/*

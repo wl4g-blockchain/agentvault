@@ -208,7 +208,7 @@ impl IIntentRepository for MockRepository {
         assert_eq!(write.events.len(), 1);
         match write.intent.status {
             PaymentStatus::PendingSettlement => {
-                assert!(write.outbox.is_empty());
+                assert_eq!(write.outbox, []);
                 assert_eq!(write.intent.reservation_status, ReservationStatus::Reserved);
             }
             PaymentStatus::Expired => {
@@ -469,7 +469,7 @@ async fn trusted_chain_evidence_recovers_after_local_commit_failure_and_restart(
     );
 
     assert!(matches!(first_process.run_once().await, Err(Error::Storage(_))));
-    assert!(storage.state.lock().unwrap().ledger.is_empty());
+    assert_eq!(storage.state.lock().unwrap().ledger, Vec::<PaymentLedgerEntry>::new());
 
     // A restarted worker reclaims the expired DB lease and consumes the
     // same independently verified on-chain effect exactly once.
@@ -535,7 +535,7 @@ async fn submitted_verify_recovery_advances_to_pending_settlement() {
     assert_eq!(state.events.len(), 1);
     assert_eq!(state.events[0].event_type, PaymentEventType::CredentialVerified);
     assert_eq!(state.events[0].attempt_no, 1);
-    assert!(state.ledger.is_empty());
+    assert_eq!(state.ledger, Vec::<PaymentLedgerEntry>::new());
 }
 
 #[tokio::test]
@@ -561,7 +561,7 @@ async fn expired_inbound_challenge_releases_reserved_capacity() {
     assert_eq!(expired.reservation_status, ReservationStatus::Released);
     assert_eq!(state.events[0].event_type, PaymentEventType::Failed);
     assert_eq!(state.events[0].attempt_no, 1);
-    assert!(state.ledger.is_empty());
+    assert_eq!(state.ledger, Vec::<PaymentLedgerEntry>::new());
 }
 
 #[tokio::test]
@@ -589,7 +589,7 @@ async fn proven_expired_inbound_authorization_releases_reserved_capacity() {
     assert_eq!(state.events[0].event_type, PaymentEventType::Failed);
     assert_eq!(state.events[0].attempt_no, 1);
     assert_eq!(state.events[0].payload["stage"], "settlement_authorization_expiry");
-    assert!(state.ledger.is_empty());
+    assert_eq!(state.ledger, Vec::<PaymentLedgerEntry>::new());
 }
 
 #[tokio::test]

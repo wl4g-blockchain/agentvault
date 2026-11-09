@@ -1,10 +1,15 @@
+use std::future::{poll_fn, Future};
+
 use crate::*;
 use serde_json::Value;
 #[derive(Clone)]
 struct Unused;
 impl VaultTransport for Unused {
-    async fn send(&self, _: TransportRequest) -> std::result::Result<TransportResponse, TransportError> {
-        panic!("Vault must not be called")
+    fn send(
+        &self,
+        _: TransportRequest,
+    ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send {
+        poll_fn(|_| panic!("Vault must not be called"))
     }
 }
 #[tokio::test]

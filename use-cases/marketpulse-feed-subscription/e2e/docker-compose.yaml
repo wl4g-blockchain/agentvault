@@ -454,7 +454,7 @@ services:
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_JAVA_BUILD_IMAGE: ${E2E_MARKETPULSE_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-debian:bookworm-slim}
+        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-debian:trixie-slim}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -602,7 +602,7 @@ services:
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-debian:bookworm-slim}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-debian:trixie-slim}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment

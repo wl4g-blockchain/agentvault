@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    future::{ready, Future},
     net::IpAddr,
     str::FromStr as _,
     sync::{
@@ -432,14 +433,12 @@ impl VaultTransport for MqttVaultTransport {
         self.execute(&request).await
     }
 
-    async fn close(&self) -> Result<(), TransportError> {
+    fn close(&self) -> impl Future<Output = Result<(), TransportError>> + Send {
         self.closed.store(true, Ordering::Release);
         if let Some(runtime) = self.runtime.get() {
             runtime.close();
-            Ok(())
-        } else {
-            Ok(())
         }
+        ready(Ok(()))
     }
 }
 

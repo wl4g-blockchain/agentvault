@@ -118,10 +118,9 @@ fn authorization_event_uniquely_locates_the_settlement_transaction() {
 
     let mut wrong_nonce = authorization;
     wrong_nonce.nonce = format!("0x{}", "77".repeat(32));
-    assert!(
-        EvmRpcReceiptSource::authorization_transactions(&receipt.logs, &wrong_nonce)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        EvmRpcReceiptSource::authorization_transactions(&receipt.logs, &wrong_nonce).unwrap(),
+        Vec::<String>::new()
     );
 }
 

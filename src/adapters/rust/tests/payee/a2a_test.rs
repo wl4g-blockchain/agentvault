@@ -8,9 +8,12 @@ use axum::{
     Json, Router,
 };
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+use std::{
+    future::{ready, Future},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 #[derive(Default)]
@@ -81,20 +84,23 @@ impl Vault {
     }
 }
 impl VaultTransport for Vault {
-    async fn send(&self, request: TransportRequest) -> std::result::Result<TransportResponse, TransportError> {
+    fn send(
+        &self,
+        request: TransportRequest,
+    ) -> impl Future<Output = std::result::Result<TransportResponse, TransportError>> + Send {
         let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
         let value = match request.path.as_str() {
             "/api/v1/payee/challenges" => {
                 let next = body["request_hash"].as_str().unwrap();
                 let mut hashes = self.hashes.lock().unwrap();
                 if hashes.first().is_some_and(|first| first != next) {
-                    return Ok(TransportResponse {
+                    return ready(Ok(TransportResponse {
                         status: 409,
                         headers: std::collections::BTreeMap::default(),
                         body: json!({"error":{"code":"REQUEST_CONFLICT", "message":"payment run request changed"}})
                             .to_string()
                             .into_bytes(),
-                    });
+                    }));
                 }
                 hashes.push(next.into());
                 drop(hashes);
@@ -113,11 +119,11 @@ impl VaultTransport for Vault {
             }
             path => panic!("unexpected Vault path {path}"),
         };
-        Ok(TransportResponse {
+        ready(Ok(TransportResponse {
             headers: std::collections::BTreeMap::default(),
             status: 200,
             body: serde_json::to_vec(&value).unwrap(),
-        })
+        }))
     }
 }
 #[tokio::test]
