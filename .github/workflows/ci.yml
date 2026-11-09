@@ -80,7 +80,7 @@ jobs:
           platforms: linux/amd64
           build-args: |
             RUST_BUILDER_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
-            RUNTIME_IMAGE=debian:bookworm-slim
+            RUNTIME_IMAGE=debian:trixie-slim
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
             org.opencontainers.image.version=${{ steps.dirty-tag.outputs.value }}

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG RUST_BUILDER_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG RUNTIME_IMAGE=debian:trixie-slim
 FROM ${RUST_BUILDER_IMAGE} AS builder
 WORKDIR /build
 COPY . .
@@ -15,7 +15,7 @@ RUN --mount=type=cache,id=manual-provider-registry,target=/usr/local/cargo/regis
 # Build context for this target is e2e/reports/.runtime, containing the tested binary.
 FROM ${RUNTIME_IMAGE} AS runtime-base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3t64 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system nonroot \
     && useradd --system --gid nonroot --no-create-home nonroot

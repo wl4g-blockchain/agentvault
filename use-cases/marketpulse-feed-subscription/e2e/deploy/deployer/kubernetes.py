@@ -76,7 +76,7 @@ FINALIZER_PATCH = '{"metadata":{"finalizers":[]}}'
 DEFAULT_KUBECONFIG = Path("/etc/rancher/k3s/k3s.yaml")
 RESOURCE_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9_.-]+$")
 
-KUBERNETES_AGENTVAULT_RUNTIME_IMAGE = "debian:bookworm-slim"
+KUBERNETES_AGENTVAULT_RUNTIME_IMAGE = "debian:trixie-slim"
 
 INFRA_NAMESPACE = "e2e-agentvault-infra-system"
 PAYMENT_NAMESPACE = "e2e-agentvault-payment-system"

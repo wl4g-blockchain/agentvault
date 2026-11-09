@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_RUST_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
-ARG E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE=debian:bookworm-slim
+ARG E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE=debian:trixie-slim
 
 # Local manual acceptance can package a separately verified host binary.
 # The default final stage continues to compile the complete source below.
 FROM ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE} AS runtime-base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3t64 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system nonroot \
     && useradd --system --gid nonroot --no-create-home nonroot
