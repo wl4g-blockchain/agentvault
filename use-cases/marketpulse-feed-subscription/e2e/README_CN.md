@@ -192,9 +192,9 @@ Kubernetes backend 卸载当前 E2E Helm release，并删除声明的 E2E namesp
 用于人工验收的 Kubernetes 环境不会被 Docker backend 的运行后清理触碰。
 
 十个五语言 payer/payee 服务镜像均隔离 builder 与 runtime 阶段：Rust/Java 只把发布
-二进制或裁剪后的 JRE 及应用复制到 non-root distroless，Python 只把安装后的依赖复制到
-non-root distroless Python 3.11 runtime，TypeScript 只把裁剪后的生产依赖复制到 non-root
-Node 22 distroless 且不再产生重复 chown 层，Go 继续使用静态二进制加 Alpine runtime。
+二进制或裁剪后的 JRE 及应用复制到 non-root Debian runtime，Python 只把安装后的依赖复制到
+Python 3.11 runtime，TypeScript 只把裁剪后的生产依赖复制到 Node 22 runtime，Go 继续使用
+静态二进制加 Alpine runtime。
 
 ## Kubernetes Namespace 契约
 

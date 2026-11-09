@@ -1058,14 +1058,19 @@ class StructureVerifier:
                 if line.strip().startswith("FROM ")
             ]
             # Explicit host artifacts are optional; the default must still compile sources.
+            runtime_base = [stage for stage in stages if stage.endswith(" AS runtime-base")]
+            if runtime_base and (len(runtime_base) != 1 or stages[0] != runtime_base[0]):
+                errors.append(f"{component} must declare at most one leading runtime base stage")
             prebuilt = [stage for stage in stages if stage.endswith(" AS prebuilt")]
-            normal = [stage for stage in stages if not stage.endswith(" AS prebuilt")]
-            if prebuilt and (len(prebuilt) != 1 or stages[0] != prebuilt[0]
-                             or "_PREBUILT_RUNTIME_IMAGE}" not in prebuilt[0]):
+            normal = [stage for stage in stages if not stage.endswith((" AS prebuilt", " AS runtime-base"))]
+            prebuilt_index = 1 if runtime_base else 0
+            if prebuilt and (len(prebuilt) != 1 or stages[prebuilt_index] != prebuilt[0]
+                             or (not runtime_base and "_PREBUILT_RUNTIME_IMAGE}" not in prebuilt[0])):
                 errors.append(f"{component} has an invalid optional prebuilt runtime")
             if len(normal) != 2 or " AS builder" not in normal[0] or stages[-1] != normal[-1]:
                 errors.append(f"{component} must default to one source builder and one final runtime stage")
-            elif "_RUNTIME_IMAGE}" not in normal[1] or "_BUILD_IMAGE}" in normal[1]:
+            elif ((not runtime_base and "_RUNTIME_IMAGE}" not in normal[1])
+                  or "_BUILD_IMAGE}" in normal[1]):
                 errors.append(f"{component} runtime stage must not reuse its build image")
         if errors:
             raise RuntimeError("; ".join(errors))

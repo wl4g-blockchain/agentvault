@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
-ARG BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
-FROM ${BUILDER_IMAGE} AS builder
+ARG RUST_BUILDER_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+FROM ${RUST_BUILDER_IMAGE} AS builder
 WORKDIR /build
 COPY . .
 RUN --mount=type=cache,id=manual-provider-registry,target=/usr/local/cargo/registry \
@@ -13,14 +13,21 @@ RUN --mount=type=cache,id=manual-provider-registry,target=/usr/local/cargo/regis
 
 # Host builds can reuse the existing Cargo cache without recompiling in a container.
 # Build context for this target is e2e/reports/.runtime, containing the tested binary.
-FROM ${RUNTIME_IMAGE} AS prebuilt
+FROM ${RUNTIME_IMAGE} AS runtime-base
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system nonroot \
+    && useradd --system --gid nonroot --no-create-home nonroot
+
+FROM runtime-base AS prebuilt
 COPY --chown=65532:65532 manual-payment-provider /usr/local/bin/manual-payment-provider
 ENV TOKIO_WORKER_THREADS=2
-USER 65532:65532
+USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/manual-payment-provider"]
 
-FROM ${RUNTIME_IMAGE} AS runtime
-COPY --from=builder --chown=65532:65532 /manual-payment-provider /usr/local/bin/manual-payment-provider
+FROM runtime-base AS runtime
+COPY --from=builder --chown=nonroot:nonroot /manual-payment-provider /usr/local/bin/manual-payment-provider
 ENV TOKIO_WORKER_THREADS=2
-USER 65532:65532
+USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/manual-payment-provider"]

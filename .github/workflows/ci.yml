@@ -75,12 +75,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: deploy/docker/Dockerfile
           push: true
           platforms: linux/amd64
           build-args: |
-            BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
-            RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+            RUST_BUILDER_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
+            RUNTIME_IMAGE=debian:bookworm-slim
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
             org.opencontainers.image.version=${{ steps.dirty-tag.outputs.value }}
@@ -96,7 +96,7 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            NODE_IMAGE=docker.io/library/node:22-alpine
+            NODE_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
             WEB_IMAGE=docker.io/nginxinc/nginx-unprivileged:1.27-alpine
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
@@ -331,9 +331,6 @@ jobs:
         run: docker pull "${E2E_AGENTVAULT_IMAGE}"
 
       - name: Run default Rust and Go SDK E2E matrix
-        env:
-          # Compose 2.38.2 does not forward network.host to Buildx Bake 0.38.
-          COMPOSE_BAKE: "false"
         run: |
           set -o pipefail
           mkdir -p use-cases/marketpulse-feed-subscription/e2e/reports
@@ -385,7 +382,7 @@ jobs:
       E2E_MARKETPULSE_GOLANG_IMAGE: localhost/marketpulse-golang-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_QUANTSTREAM_RUST_IMAGE: localhost/quantstream-ingestor-rust-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_QUANTSTREAM_GOLANG_IMAGE: localhost/quantstream-ingestor-golang-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
-      E2E_AUDITOR_IMAGE: docker.io/library/python:3.12-slim
+      E2E_AUDITOR_IMAGE: registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim
     steps:
       - name: Reclaim ephemeral runner disk
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -447,9 +444,6 @@ jobs:
           sudo k3s kubectl --namespace kube-system rollout status deployment/local-path-provisioner --timeout=120s
 
       - name: Run the Rust and Go SDK matrix on Kubernetes
-        env:
-          # Compose 2.38.2 does not forward network.host to Buildx Bake 0.38.
-          COMPOSE_BAKE: "false"
         run: |
           set -o pipefail
           mkdir -p use-cases/marketpulse-feed-subscription/e2e/reports

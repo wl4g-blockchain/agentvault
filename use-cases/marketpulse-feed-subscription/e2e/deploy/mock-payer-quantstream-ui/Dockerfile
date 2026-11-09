@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_UI_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
-ARG E2E_QUANTSTREAM_UI_RUNTIME_IMAGE=gcr.io/distroless/nodejs22-debian12:nonroot
+ARG E2E_QUANTSTREAM_UI_RUNTIME_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
 FROM ${E2E_QUANTSTREAM_UI_BUILD_IMAGE} AS builder
 WORKDIR /build
 COPY use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ui/package.json ./package.json
@@ -16,4 +16,4 @@ COPY --from=builder --chown=65532:65532 /build/node_modules ./node_modules
 COPY --from=builder --chown=65532:65532 /build/public ./public
 COPY --from=builder --chown=65532:65532 /build/src ./src
 USER 65532:65532
-ENTRYPOINT ["/nodejs/bin/node", "src/server.mjs"]
+ENTRYPOINT ["node", "src/server.mjs"]

@@ -162,11 +162,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: deploy/docker/Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
-            BUILDER_IMAGE=docker.io/library/rust:1.95.0-bookworm
-            RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+            RUST_BUILDER_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim
+            RUNTIME_IMAGE=debian:bookworm-slim
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
@@ -231,7 +231,7 @@ jobs:
           file: web/Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
-            NODE_IMAGE=docker.io/library/node:22-alpine
+            NODE_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
             WEB_IMAGE=docker.io/nginxinc/nginx-unprivileged:1.27-alpine
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}

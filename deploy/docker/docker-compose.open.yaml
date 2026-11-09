@@ -2,13 +2,13 @@ x-agentvault: &agentvault
   image: ${HELPER_INTERNAL_AGENTVAULT_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_IMAGE in .env}
   build:
     context: ../..
-    dockerfile: Dockerfile
+    dockerfile: deploy/docker/Dockerfile
   command: [--config, /etc/agentvault/agentvault.yaml, serve]
   env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
   environment:
     AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
   volumes:
-    - ./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro
+    - "./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro"
   restart: unless-stopped
 
 services:
@@ -18,7 +18,7 @@ services:
       POSTGRESQL_USERNAME: agentvault
       POSTGRESQL_PASSWORD: ${HELPER_SECRET_POSTGRES_PASSWORD:?set HELPER_SECRET_POSTGRES_PASSWORD in .env}
       POSTGRESQL_DATABASE: agentvault
-    volumes: [agentvault-postgres-data:/bitnami/postgresql]
+    volumes: ["agentvault-postgres-data:/bitnami/postgresql"]
     healthcheck:
       test: [CMD-SHELL, pg_isready -U agentvault -d agentvault]
       interval: 5s
@@ -45,7 +45,7 @@ services:
       agentvault-redis: { condition: service_healthy }
     expose: [8080, 9091, 50051]
     ports:
-      - 127.0.0.1:9091:9091
+      - "127.0.0.1:9091:9091"
 
   agentvault-web:
     image: ${HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE in .env}
@@ -56,8 +56,8 @@ services:
   envoy:
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
     command: [-c, /etc/envoy/envoy.yaml, --log-level, info]
-    volumes: [./config/envoy-open.yaml:/etc/envoy/envoy.yaml:ro]
-    ports: [8080:8080]
+    volumes: ["./config/envoy-open.yaml:/etc/envoy/envoy.yaml:ro"]
+    ports: ["8080:8080"]
     depends_on:
       agentvault: { condition: service_started }
       agentvault-web: { condition: service_started }

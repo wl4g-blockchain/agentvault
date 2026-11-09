@@ -4,7 +4,6 @@ services:
     build:
       context: ${E2E_MARKETPULSE_REPOSITORY_ROOT:-../../../../..}
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-golang-service/Dockerfile
-      network: host
       args:
         HTTPS_PROXY: ${E2E_MARKETPULSE_BUILD_HTTPS_PROXY:-}
         HTTP_PROXY: ${E2E_MARKETPULSE_BUILD_HTTP_PROXY:-}

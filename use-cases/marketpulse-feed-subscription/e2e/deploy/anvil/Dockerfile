@@ -14,7 +14,7 @@
 # Run:
 #   docker run -p 8545:8545 foundry_anvil:1.7.1
 
-FROM registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.93-slim
+FROM docker.io/library/debian:bookworm-slim
 
 COPY foundry.tar.gz /tmp/foundry.tar.gz
 RUN mkdir -p /opt/foundry \

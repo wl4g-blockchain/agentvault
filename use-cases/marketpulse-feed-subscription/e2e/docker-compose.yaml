@@ -76,12 +76,11 @@ x-quantstream-ui-build-proxy-args: &quantstream-ui-build-proxy-args
 
 x-agentvault-build: &agentvault-build
   context: ../../..
-  dockerfile: Dockerfile
-  network: host
+  dockerfile: deploy/docker/Dockerfile
   args:
     <<: *agentvault-build-proxy-args
-    BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
-    RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
+    RUST_BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim}
+    RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:-debian:bookworm-slim}
 
 services:
   # Network namespace anchor and EVM node. Host bindings for colocated E2E
@@ -356,11 +355,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-rust-service/Dockerfile
-      network: host
       args:
         <<: *marketpulse-build-proxy-args
-        E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
-        E2E_MARKETPULSE_RUST_RUNTIME_IMAGE: ${E2E_MARKETPULSE_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
+        E2E_MARKETPULSE_RUST_BUILD_IMAGE: ${E2E_MARKETPULSE_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim}
+        E2E_MARKETPULSE_RUST_RUNTIME_IMAGE: ${E2E_MARKETPULSE_RUST_RUNTIME_IMAGE:-debian:bookworm-slim}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -381,7 +379,6 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-golang-service/Dockerfile
-      network: host
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_GOLANG_BUILD_IMAGE: ${E2E_MARKETPULSE_GOLANG_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/golang:1.26-alpine}
@@ -406,11 +403,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-python-service/Dockerfile
-      network: host
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_PYTHON_BUILD_IMAGE: ${E2E_MARKETPULSE_PYTHON_BUILD_IMAGE:-docker.io/library/python:3.11-slim}
-        E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE: ${E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE:-gcr.io/distroless/python3-debian12:nonroot}
+        E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE: ${E2E_MARKETPULSE_PYTHON_RUNTIME_IMAGE:-docker.io/library/python:3.11-slim}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -431,11 +427,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-typescript-service/Dockerfile
-      network: host
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
-        E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE:-gcr.io/distroless/nodejs22-debian12:nonroot}
+        E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_MARKETPULSE_TYPESCRIPT_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -456,11 +451,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payee-marketpulse-java-service/Dockerfile
-      network: host
       args:
         <<: *marketpulse-build-proxy-args
         E2E_MARKETPULSE_JAVA_BUILD_IMAGE: ${E2E_MARKETPULSE_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
+        E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE: ${E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE:-debian:bookworm-slim}
     network_mode: service:anvil
     environment: *marketpulse-environment
     volumes:
@@ -481,7 +475,6 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ui/Dockerfile
-      network: host
       args:
         <<: *quantstream-ui-build-proxy-args
         E2E_QUANTSTREAM_UI_BUILD_IMAGE: ${E2E_QUANTSTREAM_UI_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
@@ -504,7 +497,7 @@ services:
     healthcheck:
       test:
         - CMD
-        - /nodejs/bin/node
+        - node
         - -e
         - fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 10s
@@ -518,11 +511,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-rust/Dockerfile
-      network: host
       args:
         <<: *quantstream-build-proxy-args
-        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-docker.io/library/rust:1.95.0-bookworm}
-        E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
+        E2E_QUANTSTREAM_RUST_BUILD_IMAGE: ${E2E_QUANTSTREAM_RUST_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.99.1-slim}
+        E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_RUST_RUNTIME_IMAGE:-debian:bookworm-slim}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -541,7 +533,6 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-golang/Dockerfile
-      network: host
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_GOLANG_BUILD_IMAGE: ${E2E_QUANTSTREAM_GOLANG_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/golang:1.26-alpine}
@@ -564,11 +555,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-python/Dockerfile
-      network: host
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE: ${E2E_QUANTSTREAM_PYTHON_BUILD_IMAGE:-docker.io/library/python:3.11-slim}
-        E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE:-gcr.io/distroless/python3-debian12:nonroot}
+        E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_PYTHON_RUNTIME_IMAGE:-docker.io/library/python:3.11-slim}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -587,11 +577,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-typescript/Dockerfile
-      network: host
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
-        E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE:-gcr.io/distroless/nodejs22-debian12:nonroot}
+        E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment
@@ -610,11 +599,10 @@ services:
     build:
       context: ../../..
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-java/Dockerfile
-      network: host
       args:
         <<: *quantstream-build-proxy-args
         E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:-registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17}
-        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-gcr.io/distroless/cc-debian12:nonroot}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:-debian:bookworm-slim}
     network_mode: service:anvil
     environment:
       <<: *quantstream-environment

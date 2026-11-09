@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_MARKETPULSE_JAVA_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/maven:3.9.9-eclipse-temurin-17
-ARG E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+ARG E2E_MARKETPULSE_JAVA_RUNTIME_IMAGE=debian:bookworm-slim
 ARG E2E_MARKETPULSE_JAVA_PREBUILT_RUNTIME_IMAGE=localhost/marketpulse-java-e2e:local
 
 # Explicit target for a verified host artifact; inherit the existing JRE17,

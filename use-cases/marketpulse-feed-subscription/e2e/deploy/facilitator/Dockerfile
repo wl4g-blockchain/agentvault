@@ -16,7 +16,7 @@
 #   docker run -p 8085:8080 -v $(pwd)/deploy/docker/facilitator/config.json:/app/config.json:ro \
 #     registry.cn-shenzhen.aliyuncs.com/wl4g/x402_facilitator:1.4.9
 
-FROM registry.cn-shenzhen.aliyuncs.com/wl4g/rust:1.93-slim
+FROM docker.io/library/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*

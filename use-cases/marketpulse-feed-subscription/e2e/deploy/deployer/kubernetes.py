@@ -76,7 +76,7 @@ FINALIZER_PATCH = '{"metadata":{"finalizers":[]}}'
 DEFAULT_KUBECONFIG = Path("/etc/rancher/k3s/k3s.yaml")
 RESOURCE_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9_.-]+$")
 
-KUBERNETES_AGENTVAULT_RUNTIME_IMAGE = "gcr.io/distroless/cc-debian12:nonroot"
+KUBERNETES_AGENTVAULT_RUNTIME_IMAGE = "debian:bookworm-slim"
 
 INFRA_NAMESPACE = "e2e-agentvault-infra-system"
 PAYMENT_NAMESPACE = "e2e-agentvault-payment-system"
@@ -1359,7 +1359,7 @@ class KubernetesE2EDeployer(DockerE2EDeployer):
                 "metadata": {"labels": labels}, "spec": {
                     "restartPolicy": "Never", "automountServiceAccountToken": False,
                     "securityContext": {"runAsNonRoot": True, "runAsUser": 65532, "fsGroup": 65532},
-                    "containers": [{"name": "snapshot", "image": self.environment.get("E2E_AUDITOR_IMAGE", "docker.io/library/python:3.12-slim"),
+                    "containers": [{"name": "snapshot", "image": self.environment.get("E2E_AUDITOR_IMAGE", "registry.cn-shenzhen.aliyuncs.com/wl4g/python:3.12-slim"),
                         "command": ["python3", "-c", script, f"/data/{filename}", "/tmp/snapshot.sqlite3"],
                         "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}},
                         "resources": {"requests": {"cpu": "20m", "memory": "32Mi"}, "limits": {"cpu": "500m", "memory": "128Mi"}},

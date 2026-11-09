@@ -218,11 +218,10 @@ and PVCs in the declared E2E namespaces. Both preserve locally built images. Doc
 post-run cleanup never touches a separately deployed Kubernetes review environment.
 
 All ten language service images use separate builder and runtime stages. Rust
-and Java copy only their release/runtime artifacts into a non-root distroless
-base, Python copies only installed packages into a non-root distroless Python
-3.11 runtime, TypeScript copies pruned production dependencies into a non-root
-Node 22 distroless runtime without a duplicate ownership layer, and Go retains
-its static binary plus Alpine runtime.
+and Java copy only their release/runtime artifacts into a non-root Debian
+runtime, Python copies only installed packages into its Python 3.11 runtime,
+TypeScript copies pruned production dependencies into its Node 22 runtime, and
+Go retains its static binary plus Alpine runtime.
 
 ## Kubernetes namespace contract
 

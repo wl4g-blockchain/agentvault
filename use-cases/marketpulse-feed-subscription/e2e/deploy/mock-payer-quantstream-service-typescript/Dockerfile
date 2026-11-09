@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
-ARG E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE=gcr.io/distroless/nodejs22-debian12:nonroot
+ARG E2E_QUANTSTREAM_TYPESCRIPT_RUNTIME_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
 FROM ${E2E_QUANTSTREAM_TYPESCRIPT_BUILD_IMAGE} AS builder
 WORKDIR /build
 COPY src/adapters/typescript /build/src/adapters/typescript
@@ -25,4 +25,4 @@ COPY --from=builder --chown=65532:65532 /build/use-cases/marketpulse-feed-subscr
 COPY --from=builder --chown=65532:65532 /build/use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-service-typescript/package.json ./package.json
 COPY --from=builder --chown=65532:65532 /runtime/var/lib/quantstream /var/lib/quantstream
 USER 65532:65532
-ENTRYPOINT ["/nodejs/bin/node", "dist/main.js"]
+ENTRYPOINT ["node", "dist/main.js"]

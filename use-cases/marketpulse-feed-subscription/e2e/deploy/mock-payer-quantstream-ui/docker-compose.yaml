@@ -4,7 +4,6 @@ services:
     build:
       context: ${E2E_QUANTSTREAM_UI_REPOSITORY_ROOT:-../../../../..}
       dockerfile: use-cases/marketpulse-feed-subscription/e2e/deploy/mock-payer-quantstream-ui/Dockerfile
-      network: host
       args:
         HTTPS_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTPS_PROXY:-}
         HTTP_PROXY: ${E2E_QUANTSTREAM_UI_BUILD_HTTP_PROXY:-}
@@ -24,7 +23,7 @@ services:
       AGENTVAULT_URL: ${E2E_QUANTSTREAM_UI_AGENTVAULT_URL:-http://agentvault:8080/api/v1}
     ports: ["127.0.0.1:${E2E_QUANTSTREAM_UI_PORT:-38083}:8086"]
     healthcheck:
-      test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8086/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 3s
       timeout: 3s
       retries: 30

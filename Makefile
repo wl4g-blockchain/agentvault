@@ -13,6 +13,9 @@ MAVEN ?= mvn
 NPM ?= npm
 PYTHON ?= python3
 CARGO_BUILD_JOBS ?= 4
+RUST_VERSION ?= 1.99.1
+RUST_BUILDER_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/rust:$(RUST_VERSION)-slim
+RUNTIME_IMAGE ?= debian:bookworm-slim
 E2E_LEVEL ?= full
 E2E_PAYER_LANGUAGE ?= rust
 E2E_PAYEE_LANGUAGE ?= rust
@@ -58,17 +61,11 @@ $(error AGENTVAULT_E2E_IMAGE_SOURCE must be aliyun or global)
 endif
 export AGENTVAULT_E2E_IMAGE_SOURCE
 
-ifeq ($(IMAGE_SOURCE),aliyun)
-BUILDER_IMAGE ?= docker.io/library/rust:1.95.0-bookworm
-RUNTIME_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-runtime:nonroot
-else
-BUILDER_IMAGE ?= docker.io/library/rust:1.95.0-bookworm
-RUNTIME_IMAGE ?= gcr.io/distroless/cc-debian12:nonroot
-endif
+BUILDER_IMAGE ?= $(RUST_BUILDER_IMAGE)
 
 BUILD_PROXY := $(or $(HTTPS_PROXY),$(https_proxy),$(HTTP_PROXY),$(http_proxy))
 ifneq ($(strip $(BUILD_PROXY)),)
-DOCKER_BUILD_ARGS += --network=host --build-arg HTTPS_PROXY=$(BUILD_PROXY) --build-arg HTTP_PROXY=$(BUILD_PROXY)
+DOCKER_BUILD_ARGS += --build-arg HTTPS_PROXY=$(BUILD_PROXY) --build-arg HTTP_PROXY=$(BUILD_PROXY)
 endif
 
 help:
@@ -93,6 +90,7 @@ image-source:
 	@echo "IN_CN_GFW=$(IN_CN_GFW)"
 	@echo "IMAGE_SOURCE=$(IMAGE_SOURCE)"
 	@echo "AGENTVAULT_E2E_IMAGE_SOURCE=$(AGENTVAULT_E2E_IMAGE_SOURCE)"
+	@echo "RUST_VERSION=$(RUST_VERSION)"
 	@echo "BUILDER_IMAGE=$(BUILDER_IMAGE)"
 	@echo "RUNTIME_IMAGE=$(RUNTIME_IMAGE)"
 
@@ -181,8 +179,8 @@ image: guard-target-size
 	$(DOCKER) buildx build --load \
 		--platform '$(PLATFORM)' \
 		--tag '$(IMAGE)' \
-		--file Dockerfile \
-		--build-arg BUILDER_IMAGE='$(BUILDER_IMAGE)' \
+		--file deploy/docker/Dockerfile \
+		--build-arg RUST_BUILDER_IMAGE='$(BUILDER_IMAGE)' \
 		--build-arg RUNTIME_IMAGE='$(RUNTIME_IMAGE)' \
 		$(DOCKER_BUILD_ARGS) .
 
