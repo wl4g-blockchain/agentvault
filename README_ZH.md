@@ -41,7 +41,7 @@ Client 1 ── N Scenario 1 ── N Policy 1 ── N Wallet
 src/          Rust 服务：apm、cache、cmd、config、controller、handler、
               model、protocol、storage、utils
 migrations/   PostgreSQL/SQLite 对齐的 001_init DDL/DML
-src/adapters/ Rust、Go、Python、TypeScript、Java SDK 与共享传输 Proto
+src/sdk/ Rust、Go、Python、TypeScript、Java SDK 与共享传输 Proto
 web/          AgentVault 运维 Dashboard
 deploy/       Grafana、Docker、Helm 部署资源
 use-cases/    MarketPulse/QuantStream 真实多进程支付 E2E
@@ -61,7 +61,7 @@ make build
 
 `make build` 会构建 release 服务端二进制及全部客户端 SDK：Rust、Go、Python
 （wheel）、TypeScript（JavaScript 和类型声明）以及 Java（JAR）。如只需 SDK，使用
-`make build-adapters`；也可执行单个目标，例如 `make build-sdk-typescript`。
+`make build-sdks`；也可执行单个目标，例如 `make build-sdk-typescript`。
 
 Makefile 会在每次 Rust 构建前检查两个 `target/` 目录，任一目录超过 10 GiB 时执行
 `cargo clean`。
@@ -69,18 +69,18 @@ Makefile 会在每次 Rust 构建前检查两个 `target/` 目录，任一目录
 多语言 SDK：
 
 ```bash
-(cd src/adapters/rust && cargo test --locked)
-(cd src/adapters/golang && go test ./...)
-(cd src/adapters/python && PYTHONPATH=. python3 -m unittest -v $(find tests -type f -name '*_test.py' | sort | sed 's#/#.#g;s#\.py$##'))
-(cd src/adapters/typescript && npm ci && npm test && npm run build)
-(cd src/adapters/java && mvn test)
+(cd src/sdk/rust && cargo test --locked)
+(cd src/sdk/golang && go test ./...)
+(cd src/sdk/python && PYTHONPATH=. python3 -m unittest -v $(find tests -type f -name '*_test.py' | sort | sed 's#/#.#g;s#\.py$##'))
+(cd src/sdk/typescript && npm ci && npm test && npm run build)
+(cd src/sdk/java && mvn test)
 ```
 
 Dashboard：
 
 ```bash
 (cd web && npm ci && npm test && npm run build)
-(cd use-cases/marketpulse-feed-subscription/e2e && \
+(cd use-cases/marketpulse-feed-subscription && \
   python3 runner.py -s web --e2e-sdk-scope full \
   --matrix-evidence-run <已完成的Matrix运行目录>)
 ```
@@ -102,7 +102,7 @@ docker compose --env-file deploy/docker/.env \
 
 ## 真实 E2E
 
-`use-cases/marketpulse-feed-subscription/e2e/` 从零构建两个业务系统：
+`use-cases/marketpulse-feed-subscription/` 从零构建两个业务系统：
 
 - MarketPulse Payee：免费昨日新闻 MCP Tool 与付费实时新闻 Tool。
 - QuantStream Payer：逻辑等价的 Rust、Go、Python、TypeScript、Java 采集服务和管理员审批 UI。
@@ -112,16 +112,16 @@ x402 SDK 矩阵使用 PostgreSQL、带认证/ACL 的 EMQX、官方 x402 Facilita
 五种 SDK 的协议 Provider 均以 x402 v2 处理 HTTP（`PAYMENT-REQUIRED`，兼容 JSON body 且冲突即拒绝）和 MCP JSON-RPC（`structuredContent`/文本 Challenge 及协议自有 `_meta` 凭据/回执）。MPP 同样通过官方 paymentauth wire 类型覆盖 HTTP 与 MCP；付款认证头不得覆盖无关的业务 Bearer。进入受保护业务 Handler 前会移除协议自有付款凭据元数据。
 
 ```bash
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s structure
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s infrastructure
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payer
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payee
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s full \
+python3 use-cases/marketpulse-feed-subscription/runner.py -s structure
+python3 use-cases/marketpulse-feed-subscription/runner.py -s infrastructure
+python3 use-cases/marketpulse-feed-subscription/runner.py -s payer
+python3 use-cases/marketpulse-feed-subscription/runner.py -s payee
+python3 use-cases/marketpulse-feed-subscription/runner.py -s full \
   --payer-language rust --payee-language rust
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s mpp-tempo
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s x402-solana
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix # simple：8 组
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix \
+python3 use-cases/marketpulse-feed-subscription/runner.py -s mpp-tempo
+python3 use-cases/marketpulse-feed-subscription/runner.py -s x402-solana
+python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix # simple：8 组
+python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix \
   --e2e-sdk-scope full # full：50 组
 ```
 

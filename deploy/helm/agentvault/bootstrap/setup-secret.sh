@@ -5,7 +5,7 @@
 set -Eeuo pipefail
 
 readonly BOOTSTRAP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly SECRET_TEMPLATE="${BOOTSTRAP_DIR}/agentvault-secrets.env.example"
+readonly SECRET_TEMPLATE="${BOOTSTRAP_DIR}/agentvault-secret.env.example"
 
 AGENTVAULT_RELEASE="${AGENTVAULT_RELEASE:-agentvault}"
 AGENTVAULT_NAMESPACE="${AGENTVAULT_NAMESPACE:-agentvault}"

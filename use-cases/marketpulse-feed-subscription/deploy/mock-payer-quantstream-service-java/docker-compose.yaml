@@ -1,0 +1,34 @@
+services:
+  quantstream-java:
+    image: ${E2E_QUANTSTREAM_JAVA_IMAGE:?required}
+    platform: ${E2E_IMAGE_PLATFORM:?required}
+    build:
+      context: ${E2E_QUANTSTREAM_REPOSITORY_ROOT:-../../../..}
+      dockerfile: use-cases/marketpulse-feed-subscription/deploy/mock-payer-quantstream-service-java/Dockerfile
+      args:
+        BUILDKIT_SYNTAX: ${BUILDKIT_SYNTAX:?required}
+        E2E_QUANTSTREAM_JAVA_PREBUILT_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_PREBUILT_RUNTIME_IMAGE:?required}
+        HTTPS_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTPS_PROXY:-}
+        HTTP_PROXY: ${E2E_QUANTSTREAM_BUILD_HTTP_PROXY:-}
+        NO_PROXY: ${E2E_QUANTSTREAM_BUILD_NO_PROXY:-127.0.0.1,localhost}
+        E2E_QUANTSTREAM_JAVA_BUILD_IMAGE: ${E2E_QUANTSTREAM_JAVA_BUILD_IMAGE:?required}
+        E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE: ${E2E_QUANTSTREAM_JAVA_RUNTIME_IMAGE:?required}
+    command: ["--once"]
+    environment:
+      MARKETPULSE_URL: ${E2E_QUANTSTREAM_MARKETPULSE_URL:-http://marketpulse:8081/mcp}
+      QUANTSTREAM_CLIENT_ID: ${E2E_QUANTSTREAM_JAVA_CLIENT_ID:-client-quantstream-java}
+      QUANTSTREAM_SCENARIO_ID: ${E2E_QUANTSTREAM_JAVA_SCENARIO_ID:-scenario-quantstream-java-market-ingestion}
+      QUANTSTREAM_DATABASE: ${E2E_QUANTSTREAM_DATABASE:-/var/lib/quantstream/ingestion.sqlite3}
+      QUANTSTREAM_YESTERDAY_CRON: "${E2E_QUANTSTREAM_YESTERDAY_CRON:-0 0 2 * * *}"
+      QUANTSTREAM_REALTIME_CRON: "${E2E_QUANTSTREAM_REALTIME_CRON:-0 */1 * * * *}"
+      AGENTVAULT_APPROVAL_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_APPROVAL_TIMEOUT_SECONDS:-45}"
+      AGENTVAULT_MQTT_HOST: ${E2E_QUANTSTREAM_MQTT_HOST:-emqx}
+      AGENTVAULT_MQTT_PORT: "${E2E_QUANTSTREAM_MQTT_PORT:-1883}"
+      AGENTVAULT_MQTT_TLS: "${E2E_QUANTSTREAM_MQTT_TLS:-false}"
+      AGENTVAULT_MQTT_USERNAME: ${E2E_QUANTSTREAM_JAVA_MQTT_USERNAME:-quantstream-java-workload}
+      AGENTVAULT_MQTT_PASSWORD: ${E2E_QUANTSTREAM_MQTT_PASSWORD:-agentvault-e2e-workload}
+      AGENTVAULT_MQTT_TIMEOUT_SECONDS: "${E2E_QUANTSTREAM_MQTT_TIMEOUT_SECONDS:-15}"
+    volumes: ["quantstream-java-data:/var/lib/quantstream"]
+    restart: "no"
+volumes:
+  quantstream-java-data: {}

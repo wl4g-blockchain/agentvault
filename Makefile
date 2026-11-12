@@ -1,5 +1,5 @@
 .PHONY: help image-source guard-target-size guard-sdk-rust-target-size lock clean \
-	build build-root build-adapters build-sdk-rust build-sdk-go build-sdk-python \
+	build build-root build-sdks build-sdk-rust build-sdk-go build-sdk-python \
 	build-sdk-typescript build-sdk-java test e2e check fmt fmt-check lint verify \
 	image image-push image-remove
 
@@ -24,11 +24,11 @@ VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
 IMAGE ?= ghcr.io/wl4g-blockchain/agentvault:$(VERSION)
 PLATFORM ?= linux/amd64
 DOCKER_BUILD_ARGS ?=
-SDK_RUST_DIR := src/adapters/rust
-SDK_GO_DIR := src/adapters/golang
-SDK_PYTHON_DIR := src/adapters/python
-SDK_TYPESCRIPT_DIR := src/adapters/typescript
-SDK_JAVA_DIR := src/adapters/java
+SDK_RUST_DIR := src/sdk/rust
+SDK_GO_DIR := src/sdk/golang
+SDK_PYTHON_DIR := src/sdk/python
+SDK_TYPESCRIPT_DIR := src/sdk/typescript
+SDK_JAVA_DIR := src/sdk/java
 
 # Registry reachability is probed only for targets that consume container
 # images. Local formatting, compilation, and unit tests never make this
@@ -73,7 +73,7 @@ help:
 		'AgentVault — enterprise AI-agent payment infrastructure' \
 		'' \
 		'  make build       Build the release binary and every client SDK' \
-		'  make build-adapters Build every client SDK without the binary' \
+		'  make build-sdks Build every client SDK without the binary' \
 		'  make test        Run unit and binary tests' \
 		'  make e2e         Run the real Docker payment E2E (default: full rust)' \
 		'  make check       Check every Rust target' \
@@ -97,8 +97,8 @@ image-source:
 # Protect shared development hosts from unbounded incremental artifacts.
 guard-target-size:
 	@size_kb=$$(du -sk target 2>/dev/null | cut -f1); \
-	  if [ "$${size_kb:-0}" -gt 10485760 ]; then \
-	    echo 'target/ exceeds 10 GiB; cleaning before Rust build'; \
+	  if [ "$${size_kb:-0}" -gt 20971520 ]; then \
+	    echo 'target/ exceeds 20 GiB; cleaning before Rust build'; \
 	    $(CARGO) clean; \
 	  fi
 
@@ -106,8 +106,8 @@ guard-target-size:
 # directory that needs the same shared-host safeguard as the root crate.
 guard-sdk-rust-target-size:
 	@size_kb=$$(du -sk '$(SDK_RUST_DIR)/target' 2>/dev/null | cut -f1); \
-	  if [ "$${size_kb:-0}" -gt 10485760 ]; then \
-	    echo '$(SDK_RUST_DIR)/target exceeds 10 GiB; cleaning before Rust SDK build'; \
+	  if [ "$${size_kb:-0}" -gt 20971520 ]; then \
+	    echo '$(SDK_RUST_DIR)/target exceeds 20 GiB; cleaning before Rust SDK build'; \
 	    cd '$(SDK_RUST_DIR)' && $(CARGO) clean; \
 	  fi
 
@@ -119,7 +119,7 @@ clean:
 
 build:
 	$(MAKE) build-root
-	$(MAKE) build-adapters
+	$(MAKE) build-sdks
 
 build-root: guard-target-size
 	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) build --release --locked
@@ -127,7 +127,7 @@ build-root: guard-target-size
 # Keep each SDK independently invocable while the aggregate target remains
 # intentionally sequential: cross-language dependency resolution is memory- and
 # network-intensive on shared development hosts.
-build-adapters:
+build-sdks:
 	$(MAKE) build-sdk-rust
 	$(MAKE) build-sdk-go
 	$(MAKE) build-sdk-python
@@ -155,7 +155,7 @@ test: guard-target-size
 
 e2e: guard-target-size
 	timeout --signal=TERM --kill-after=2m $(E2E_TIMEOUT) \
-		python3 use-cases/marketpulse-feed-subscription/e2e/runner.py \
+		python3 use-cases/marketpulse-feed-subscription/runner.py \
 		--scenario $(E2E_LEVEL) \
 		--payer-language $(E2E_PAYER_LANGUAGE) \
 		--payee-language $(E2E_PAYEE_LANGUAGE) \

@@ -5,10 +5,10 @@
 target
 web
 use-cases
-src/adapters/golang
-src/adapters/java
-src/adapters/python
-src/adapters/rust
-src/adapters/tests
-src/adapters/typescript
-src/adapters/README.md
+src/sdk/golang
+src/sdk/java
+src/sdk/python
+src/sdk/rust
+src/sdk/tests
+src/sdk/typescript
+src/sdk/README.md

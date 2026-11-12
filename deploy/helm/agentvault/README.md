@@ -103,7 +103,7 @@ wallet KEK, recovery-envelope key, and approval JWT key are independent
 unpadded base64url encodings of 32 random bytes.
 
 ```bash
-cp deploy/helm/agentvault/bootstrap/agentvault-secrets.env.example agentvault-secrets.env
+cp deploy/helm/agentvault/bootstrap/agentvault-secret.env.example agentvault-secrets.env
 ${EDITOR:-vi} agentvault-secrets.env
 ```
 

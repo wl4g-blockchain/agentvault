@@ -41,7 +41,7 @@ cargo test --locked --lib handler::wallet_handler::tests::browser_public_key_enc
 
 The existing MarketPulse runner also exercises Wallet creation in real Chromium,
 including independent RSA decryption and failure paths, using a controlled API
-fixture. From `use-cases/marketpulse-feed-subscription/e2e`:
+fixture. From `use-cases/marketpulse-feed-subscription`:
 
 ```bash
 python3 -m pip install -r requirements.txt

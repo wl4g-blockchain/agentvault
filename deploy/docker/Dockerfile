@@ -16,8 +16,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && install -m 0755 target/release/agentvault /agentvault
 
 FROM ${RUNTIME_IMAGE} AS runtime-base
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3t64 \
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates libssl3t64 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system nonroot \
     && useradd --system --gid nonroot --no-create-home nonroot

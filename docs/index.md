@@ -106,7 +106,7 @@ SDK 控制面只允许 gRPC 与 MQTT，两者同 HTTP Admin 入口复用同一�
 
 ```text
 src/
-├── adapters/     # Rust/Go/Python/TypeScript/Java SDK 与共享 gRPC Proto
+├── sdk/     # Rust/Go/Python/TypeScript/Java SDK 与共享 gRPC Proto
 ├── apm/          # OTLP、Prometheus、运行时诊断、pprof 摘要
 ├── cache/        # 非资金权威 Memory/Redis
 ├── cmd/          # CLI、服务组合根、生命周期
@@ -225,7 +225,7 @@ Rust、Go、Python、TypeScript 的 x402 Provider 直接组合各自官方 v2 SD
 
 Facilitator/Provider 始终是进程外依赖。HTTP adapter 固定 Base URL 和相对路径、禁止跨 Authority Redirect、限制响应体与超时，并校验返回的资产和结算证据。Provider 跟随所属 Payee 协议配置；共享 `chains` 注册表由运营方固定链类型与 RPC，Challenge 不能选择 Provider 或 RPC。
 
-五 SDK 的 HTTP/MCP 编排也用于 A2A 0.3 非流式 `message/send`：x402 v2 使用官方 A2A extension 的 Task/Message metadata，MPP 使用原生 JSON-RPC 根 `_meta` 与支付错误码。调用方显式启用付款；收款方组合应用已有 TaskStore 并绑定 task/context/run/scenario/price，不维护另一份任务数据库。AgentCard 声明与请求/响应扩展协商、稳定请求摘要、Bearer 保留和结算后业务失败回执均有五语言验收。接入方法及明确的 Unsupported 边界见 [SDK 文档](../src/adapters/README.md#a2a-automatic-payments)。`runner.py -s a2a` 产出 SDK 边界报告，受控 Vault 测试不能替代 `full` / `mpp-tempo` / `x402-solana` 的实链会计证据。
+五 SDK 的 HTTP/MCP 编排也用于 A2A 0.3 非流式 `message/send`：x402 v2 使用官方 A2A extension 的 Task/Message metadata，MPP 使用原生 JSON-RPC 根 `_meta` 与支付错误码。调用方显式启用付款；收款方组合应用已有 TaskStore 并绑定 task/context/run/scenario/price，不维护另一份任务数据库。AgentCard 声明与请求/响应扩展协商、稳定请求摘要、Bearer 保留和结算后业务失败回执均有五语言验收。接入方法及明确的 Unsupported 边界见 [SDK 文档](../src/sdk/README.md#a2a-automatic-payments)。`runner.py -s a2a` 产出 SDK 边界报告，受控 Vault 测试不能替代 `full` / `mpp-tempo` / `x402-solana` 的实链会计证据。
 
 ## 9. Cache、密钥与可观测性
 
@@ -255,7 +255,7 @@ Management 健康端点区分存活与就绪：`/healthz` 只证明进程事件�
 
 ## 10. SDK 与 Dashboard
 
-`src/adapters/{rust,golang,python,typescript,java}` 使用一致的功能模块：
+`src/sdk/{rust,golang,python,typescript,java}` 使用一致的功能模块：
 
 ```text
 model/        wire/domain DTO
@@ -282,7 +282,7 @@ SDK 源码中的强类型 DTO 和契约测试是调用边界，不维护额外�
 
 - `deploy/docker/`：默认 AuthGuard + Envoy + AgentVault + Dashboard；另有明确命名的开放拓扑。MQTT 默认关闭，必须显式接入认证和 ACL 完整的 Broker。
 - `deploy/helm/agentvault/`：AuthGuard 为默认启用的 umbrella dependency，受保护 HTTPRoute 使用 `authguard.io/protected=true`；禁用后不创建受保护 Route，运营方必须明确暴露开放 Service。
-- `use-cases/marketpulse-feed-subscription/e2e/`：从零构建、部署和分层验证的真实案例。
+- `use-cases/marketpulse-feed-subscription/`：从零构建、部署和分层验证的真实案例。
 
 E2E 中 MarketPulse 暴露两个 MCP Tool：昨日新闻免费，实时新闻按次收费。QuantStream 使用 Rust、Go、Python、TypeScript、Java 五种等价后端定时采集；五种 Payer 只知道各自独立的 Client transport identity 与 Scenario，不配置 Wallet、私钥、链 RPC 或支付投影。`console import` 为五个 Payer 分别导入 Client/Scenario/Policy/MQTT 身份和两个独立充值 EOA，共十个 Wallet；每个 Case 的两次真实付款必须只落到当前语言的两个 Wallet，其余八个余额不得变化。数据库 membership/Intent、AgentVault 签名日志、十个链上余额及 SQL 快照共同作为证据。付费 Tool 分别经 MQTT 与 gRPC 请求 AgentVault 签名，随后由五种 Payee Middleware 调官方 Facilitator Verify/Settle，只在结算成功后释放数据。唯一外层入口 `runner.py` 默认以 `--e2e-sdk-scope simple` 执行 Rust/Go 2×2×2=8 个快速隔离 x402 Case；发布验收显式使用 `--e2e-sdk-scope full` 执行 5×5×2=50 个 Case。`s21` 至 `s24` 按所选 scope 验证 SDK 步骤日志、签名钱包、Payee 结算、3 分钟余额同步、Ledger/Receipt/交易绑定、Token 守恒与 Facilitator Gas。独立 `x402-solana` 场景在固定版本的真实本地 Validator 上创建 SPL Mint/ATA，由上游 x402 v2 client/facilitator 完成 verify 与唯一一次 settle，并核对 SPL 余额、交易手续费和 Lamport 守恒。独立 `mpp-tempo` 场景在固定摘要的官方 Tempo localnet 上，以官方 `mpp` Rust SDK 驱动的本地 HTTP 结算服务完成非变更 verify、type-0x76 广播、丢响应恢复和包含 pathUSD Gas 的守恒；Tempo `charge` 直接使用链 RPC，不伪造 x402 式 Facilitator，也不额外部署同义清算合约。五 SDK 的双协议/双 Transport/双角色一致性由共享契约夹具门禁。Web 场景校验同 scope 的不可变报告，再以报告派生的 API fixture 驱动真实 Chromium，截图验证每页最多 10 条的 Payer/Payee 列表、全部 Ledger 守恒、Client→Scenario 可信归属，以及 12 个候选 Wallet 的单列滚动多选下拉与双 Wallet 原子创建；它不会伪称隔离数据库是一个生产库。三条链路分别输出不可变报告，不能互相替代。
 

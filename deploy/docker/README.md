@@ -37,7 +37,7 @@ examples and must be replaced for a real network. `config/agentvault.yaml` is a
 symlink to that file; deployment-specific scalar and secret values belong in
 `.env`, not in a copied YAML document. Chain nodes
 and the official x402 Facilitator are deliberately not embedded here; the full
-disposable stack lives under `use-cases/marketpulse-feed-subscription/e2e`.
+disposable stack lives under `use-cases/marketpulse-feed-subscription`.
 
 MQTT is disabled in this general-purpose stack. Enable it only after pointing
 AgentVault at a broker with password/TLS authentication and per-client topic
