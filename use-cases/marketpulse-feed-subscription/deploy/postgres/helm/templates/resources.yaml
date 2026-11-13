@@ -62,6 +62,10 @@ spec:
 {{- end }}
 {{- end }}
 {{- if .Values.probe.enabled }}
+          startupProbe:
+            tcpSocket: { port: {{ .Values.probe.port }} }
+            failureThreshold: {{ .Values.probe.startupFailureThreshold }}
+            periodSeconds: {{ .Values.probe.periodSeconds }}
           readinessProbe:
 {{- if eq .Values.probe.type "http" }}
             httpGet: { path: {{ .Values.probe.path | quote }}, port: {{ .Values.probe.port }} }

@@ -25,6 +25,8 @@ probe:
   type: tcp
   path: "/"
   port: 5432
+  # Allow a cold initdb to finish before liveness can restart PostgreSQL.
+  startupFailureThreshold: 60
   initialDelaySeconds: 5
   periodSeconds: 5
 config:

@@ -144,23 +144,9 @@ DEFAULTS = {
     },
 }
 
-HOST_PORT_NAMES = (
-    "E2E_POSTGRES_PORT",
-    "E2E_EMQX_MQTT_PORT",
-    "E2E_EMQX_DASHBOARD_PORT",
-    "E2E_JAEGER_UI_PORT",
-    "E2E_JAEGER_OTLP_GRPC_PORT",
-    "E2E_JAEGER_OTLP_HTTP_PORT",
-    "E2E_ANVIL_PORT",
-    "E2E_TEMPO_RPC_PORT",
-    "E2E_SOLANA_RPC_PORT",
-    "E2E_SOLANA_FAUCET_PORT",
-    "E2E_FACILITATOR_PORT",
-    "E2E_AGENTVAULT_PORT",
-    "E2E_AGENTVAULT_MGMT_PORT",
-    "E2E_MARKETPULSE_PORT",
-    "E2E_QUANTSTREAM_UI_PORT",
-)
+# Every declared host binding must move with its matrix worker.
+HOST_PORT_NAMES = tuple(name for name in DEFAULTS if name.endswith("_PORT"))
+
 
 BUILD_PROXY_PREFIXES = (
     "E2E_AGENTVAULT_BUILD",

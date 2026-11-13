@@ -296,3 +296,27 @@ class LifecycleTest(unittest.TestCase):
         self.assertNotIn(Purchase.DockerRuntime, Purchase.KubernetesRuntime.__mro__)
         for cls in (Purchase.DockerRuntime, Purchase.KubernetesRuntime):
             self.assertTrue(callable(cls._facilitator_capabilities))
+
+    def test_docker_workers_isolate_every_host_port_including_grpc(self):
+        from verifier.infra.s00_infrastructure import DEFAULTS
+        from verifier.purchase.s20_purchase import E2ES20PurchaseVerifier
+
+        ports = [name for name in DEFAULTS if name.endswith("_PORT")]
+        for overrides in ({}, {"E2E_AGENTVAULT_GRPC_PORT": "46000"}):
+            with (
+                self.subTest(overrides=overrides),
+                patch.dict("os.environ", overrides, clear=True),
+                patch("util.docker.E2EDockerDeployer.detect", return_value=["docker"]),
+                patch(
+                    "util.docker.E2EDockerDeployer.compose_command",
+                    return_value=["docker", "compose"],
+                ),
+            ):
+                allocated = set()
+                for slot in (None, 0, 1):
+                    context = SimpleNamespace(worker_slot=slot, environment=lambda: {})
+                    runtime = E2ES20PurchaseVerifier.DockerRuntime(context)
+                    bindings = {int(runtime.environment[name]) for name in ports}
+                    self.assertEqual(len(bindings), len(ports))
+                    self.assertFalse(allocated & bindings, allocated & bindings)
+                    allocated.update(bindings)
