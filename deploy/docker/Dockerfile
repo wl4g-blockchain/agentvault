@@ -9,10 +9,11 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
 RUN cargo --version
 COPY src ./src
 COPY migrations ./migrations
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/workspace/target \
-    cargo build --release --locked --bin agentvault \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
+    --mount=type=cache,sharing=locked,target=/workspace/target \
+    if [ "$(du -sk /workspace/target | cut -f1)" -gt 20971520 ]; then cargo clean --target-dir /workspace/target; fi \
+    && CARGO_BUILD_JOBS=2 cargo build --release --locked --bin agentvault \
     && install -m 0755 target/release/agentvault /agentvault
 
 FROM ${RUNTIME_IMAGE} AS runtime-base

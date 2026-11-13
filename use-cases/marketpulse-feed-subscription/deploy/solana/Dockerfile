@@ -35,8 +35,8 @@ RUN test "$(git rev-parse HEAD)" = "${AGAVE_REVISION}" \
     && git diff --quiet && git diff --cached --quiet \
     && sed -i 's/^warnings = "deny"/warnings = "warn"/' Cargo.toml \
     && mkdir -p /runtime/bin
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,id=solana-source-${TARGETARCH}-target,sharing=locked,target=/build/target \
     check_target() { if [ "$(du -sk /build/target | cut -f1)" -gt 20971520 ]; then cargo clean; fi; }; \
     check_target \

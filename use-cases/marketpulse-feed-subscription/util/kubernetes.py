@@ -1278,11 +1278,17 @@ class E2EKubernetesDeployer:
             if cluster_id == image_id:
                 return
             archive.seek(0)
+            # Saving repository@digest produces an anonymous OCI descriptor.
+            # Preserve its real repository/digest name for CRI lookup; importing
+            # only tag names can succeed while inspecti(repository@digest) misses it.
             importer = subprocess.run(
                 [
                     *self._image_loader.ctr,
                     "images",
                     "import",
+                    "--digests",
+                    "--base-name",
+                    E2EImagesDefinitions.repository(reference),
                     "--platform",
                     fields[1],
                     "-",

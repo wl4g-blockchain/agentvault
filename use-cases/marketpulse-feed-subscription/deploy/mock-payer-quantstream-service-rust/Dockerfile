@@ -22,10 +22,11 @@ COPY src/sdk/rust /build/src/sdk/rust
 COPY src/sdk/proto /build/src/sdk/proto
 COPY use-cases/marketpulse-feed-subscription/deploy/mock-payer-quantstream-service-rust/source /build/use-cases/marketpulse-feed-subscription/deploy/mock-payer-quantstream-service-rust/source
 WORKDIR /build/use-cases/marketpulse-feed-subscription/deploy/mock-payer-quantstream-service-rust/source
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,id=quantstream-rust-target,sharing=locked,target=/build/target \
-    CARGO_BUILD_JOBS=2 cargo build --release --locked --target-dir /build/target \
+    if [ "$(du -sk /build/target | cut -f1)" -gt 20971520 ]; then cargo clean --target-dir /build/target; fi \
+    && CARGO_BUILD_JOBS=2 cargo build --release --locked --target-dir /build/target \
     && install -m 0755 /build/target/release/quantstream-ingestor-rust /quantstream-ingestor-rust \
     && install -d -m 0700 /runtime/var/lib/quantstream
 

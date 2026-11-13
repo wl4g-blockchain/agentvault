@@ -22,8 +22,8 @@ COPY src/sdk/rust /build/src/sdk/rust
 COPY src/sdk/proto /build/src/sdk/proto
 COPY use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-rust-service/source /build/use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-rust-service/source
 WORKDIR /build/use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-rust-service/source
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,id=marketpulse-rust-target,sharing=locked,target=/build/target \
     if [ "$(du -sk /build/target | cut -f1)" -gt 20971520 ]; then cargo clean --target-dir /build/target; fi \
     && CARGO_BUILD_JOBS=1 cargo build --release --locked --target-dir /build/target \

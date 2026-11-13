@@ -3,8 +3,8 @@ ARG RUNTIME_IMAGE
 FROM ${RUST_BUILDER_IMAGE} AS builder
 WORKDIR /build
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=manual-provider-target,target=/build/target \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=manual-provider-target,sharing=locked,target=/build/target \
     if [ "$(du -sk /build/target | cut -f1)" -gt 20971520 ]; then cargo clean --target-dir /build/target; fi \
     && CARGO_BUILD_JOBS=1 cargo build --release --locked \
       --manifest-path use-cases/marketpulse-feed-subscription/deploy/mock-mpp-tempo-service/source/Cargo.toml \
