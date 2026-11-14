@@ -167,3 +167,20 @@ class LayoutImagesTest(unittest.TestCase):
             self.assertEqual(
                 command[command.index("-f") + 1], str(dockerfile.resolve())
             )
+
+    def test_anvil_launches_the_binary_in_both_compose_layouts_and_helm(self):
+        import yaml
+
+        for path in (
+            Project.E2E_ROOT / "docker-compose.yaml",
+            Project.DEPLOY_ROOT / "anvil/docker-compose.yaml",
+        ):
+            with self.subTest(path=path):
+                service = yaml.safe_load(path.read_text())["services"]["anvil"]
+                self.assertEqual(service.get("entrypoint"), ["anvil"])
+                self.assertIn("--chain-id=31337", service["command"])
+        values = yaml.safe_load(
+            (Project.DEPLOY_ROOT / "anvil/helm/values.yaml").read_text()
+        )
+        self.assertEqual(values["command"], ["anvil"])
+        self.assertIn("--chain-id=31337", values["args"])

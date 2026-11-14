@@ -2,6 +2,7 @@ services:
   anvil:
     image: ${E2E_ANVIL_IMAGE:?required}
     platform: ${E2E_IMAGE_PLATFORM:?required}
+    entrypoint: ["anvil"]
     command: ["--host=0.0.0.0", "--port=8545", "--accounts=10", "--balance=10000", "--chain-id=31337"]
     ports: ["127.0.0.1:${E2E_ANVIL_PORT:-28545}:8545"]
     healthcheck:

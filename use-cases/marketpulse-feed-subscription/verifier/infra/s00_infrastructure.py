@@ -2357,6 +2357,28 @@ class E2ES00InfrastructureVerifier:
                         json.dumps(pod.get("status", {}), indent=2) + "\n",
                         encoding="utf-8",
                     )
+                    if any(
+                        item.get("name") == "postgres"
+                        for item in pod.get("status", {}).get("containerStatuses", [])
+                    ):
+                        self._diagnostic_output(
+                            namespace,
+                            f"{name}-processes.txt",
+                            [
+                                "exec",
+                                "--namespace",
+                                namespace,
+                                name,
+                                "--container=postgres",
+                                "--",
+                                "sh",
+                                "-c",
+                                "grep -HE '^Name:|^State:|^PPid:|^Uid:|^Gid:' /proc/[0-9]*/status; "
+                                "grep -H . /proc/[0-9]*/wchan; "
+                                "readlink /proc/1/exe; "
+                                "ls -ld /var/lib/postgresql/data /var/run/postgresql",
+                            ],
+                        )
                     for previous in (False, True):
                         arguments = [
                             "logs",

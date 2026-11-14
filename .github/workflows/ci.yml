@@ -280,7 +280,7 @@ jobs:
   e2e-docker:
     name: Docker MarketPulse SDK Matrix E2E
     needs: build-and-test
-    runs-on: ${{ vars.AGENTVAULT_E2E_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.AGENTVAULT_E2E_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -370,7 +370,10 @@ jobs:
   e2e-kubernetes:
     name: Kubernetes MarketPulse SDK Matrix E2E
     needs: build-and-test
-    runs-on: ubuntu-latest
+    # Pin the host OS: Ubuntu 26 changes sudo and AppArmor behavior for K3s.
+    # https://github.com/k3s-io/k3s/issues/14915
+    # https://github.com/containerd/containerd/issues/14485
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       contents: read
@@ -474,6 +477,8 @@ jobs:
           sudo journalctl --unit=k3s --no-pager --lines=200 \
             | grep --invert-match --ignore-case --extended-regexp 'token|password|secret|authorization|bearer' \
             > "${diagnostics}/service.log" || true
+          sudo timeout 20s dmesg --ctime \
+            | tail -n 500 > "${diagnostics}/kernel.log" || true
 
       - name: Capture E2E summary
         id: summary

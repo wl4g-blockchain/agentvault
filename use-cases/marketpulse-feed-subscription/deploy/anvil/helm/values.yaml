@@ -7,7 +7,7 @@ image:
   repository: ""
   tag: ""
   pullPolicy: IfNotPresent
-command: []
+command: ["anvil"]
 args:
   - "--host=0.0.0.0"
   - "--port=8545"
