@@ -2,7 +2,7 @@
 
 ## 功能与运行
 
-验证 QuantStream 通过 AgentVault 购买 MarketPulse 新闻：覆盖 Rust、Go、Python、TypeScript、Java 五语言 SDK，MQTT/gRPC 控制面，Anvil 上的 x402/EVM、Solana SPL 实付、MPP/Tempo charge 与交付恢复、A2A 边界和 Chromium Dashboard。完整隔离矩阵为 5×5×2=50 组，默认 simple 为 2×2×2=8 组。
+验证 QuantStream 通过 AgentVault 购买 MarketPulse 新闻：覆盖 Rust、Go、Python、TypeScript、Java 五语言 SDK，HTTP 控制面，Anvil 上的 x402/EVM、Solana SPL 实付、MPP/Tempo charge 与交付恢复、A2A 边界和 Chromium Dashboard。完整隔离矩阵为 5×5×1=25 组，默认 simple 为 2×2×1=4 组。
 
 `deploy/` 按服务水平拆分，mock 的生产源码和依赖清单放在各自 `source/`，原生契约测试迁入所属纵向场景的 `contracts/`；SDK 仍引用仓库 `src/sdk/`。AgentVault 的 Dockerfile、Dockerfile.dockerignore 链接到正式部署文件；该组件根目录只保留两条链接、config/ 和 docker-compose.yaml。Helm 直接使用仓库 deploy/helm/agentvault，E2E 叠加配置放在 config/。中间件使用上游镜像，无须复制上游源码；shared-helm 目录仅保存共享叠加配置。
 
@@ -111,7 +111,7 @@ Web 截图证明浏览器操作与展示，历史矩阵 API 路由不构成独�
 | 层次 | 观察位置 | 预期 |
 | --- | --- | --- |
 | 商户调用 | QuantStream → MarketPulse | MCP `tools/call` 或 A2A 非流式 `message/send` |
-| 签名控制面 | SDK → AgentVault | gRPC 或 MQTT，与业务 HTTP 是两条链路 |
+| 签名控制面 | SDK → AgentVault | 标准 HTTP |
 | x402 HTTP | Header | `PAYMENT-REQUIRED` → `PAYMENT-SIGNATURE` → `PAYMENT-RESPONSE` |
 | x402 MCP | ToolResult / request `_meta` | HTTP 200、`isError:true`、x402 v2 `structuredContent`；不要求 HTTP 402 或 `PAYMENT-REQUIRED` 头 |
 | x402 A2A | Task / Message metadata | `input-required`、`x402.payment.required` → `x402.payment.payload` → `x402.payment.receipts` |
@@ -123,7 +123,7 @@ Web 截图证明浏览器操作与展示，历史矩阵 API 路由不构成独�
 
 MCP/A2A 的支付信息在消息中，不能只抓 HTTP Header 判断协议是否生效。MPP 当前实现 Tempo `charge`，不是把 EVM EIP-3009 报文换成 MPP Header。
 
-保留环境的 15 个 payee 当前统一使用 gRPC 控制面；`manual-payment/manual-matrix --transport` 选择 payer 控制面。因此本页 300 组合表示三链 × 两消息协议 × 两 payer 控制面 × 25 语言组合，不表示两端控制面的全部交叉组合。旧隔离矩阵的 `--transport` 则同时配置该案例两端，按其报告解释。
+保留环境的 15 个 payee 和五个 payer 统一使用 HTTP。因此本页 150 组合表示三链 × 两消息协议 × HTTP × 25 语言组合，不表示两端控制面的全部交叉组合。旧隔离矩阵的 `--transport` 则同时配置该案例两端，按其报告解释。
 
 ### 2. 启动与检查
 
@@ -168,7 +168,7 @@ kubectl -n "$PAYER_NS" get cronjob,job,svc,pvc
 kubectl -n "$PAYMENT_NS" get deployment,svc
 ```
 
-应看到三条链、Vault、Postgres、EMQX、外部支付 Provider 和 15 个 MarketPulse 服务。五个 payer CronJob 保持 suspended，供人工创建一次性 Job，不会后台持续花钱。`ErrImageNeverPull`、`Init:ImagePullBackOff`、`CrashLoopBackOff` 都不算就绪。
+应看到三条链、Vault、Postgres、外部支付 Provider 和 15 个 MarketPulse 服务。五个 payer CronJob 保持 suspended，供人工创建一次性 Job，不会后台持续花钱。`ErrImageNeverPull`、`Init:ImagePullBackOff`、`CrashLoopBackOff` 都不算就绪。
 
 `manual` 对五个 payer 镜像使用 containerd 的 `io.cri-containerd.pinned=pinned`，并等待 CRI 确认 `status.pinned=true`，避免 suspended 模板尚未使用的镜像被 Kubelet GC 回收。清理入口只按本组件的 `io.agentvault.manual-image-pin=true` 标记解除 pin，即使公开部署状态文件丢失也可释放；已有的外部 pin 保持原归属。该机制作用于 Kubelet GC；显式 `ctr images prune --all` 仍可能删除镜像。参见 [containerd CRI 实现](https://github.com/containerd/containerd/blob/v2.2.3/internal/cri/store/image/image.go) 和 [维护者说明](https://github.com/containerd/containerd/discussions/12156)。本轮公开核对结果保存在 `payment/manual/challenges/runtime-image-pins.json`。
 
@@ -277,20 +277,20 @@ curl -sS -i -H 'Content-Type: application/json' \
 以下每条生成独立 Job 和新 run，并保留日志及业务数据库。先执行第 6、7 节记录付款前状态：
 
 ```bash
-# Python payer → Java payee，MCP/x402/Anvil，Vault gRPC 控制面。
+# Python payer → Java payee，MCP/x402/Anvil，Vault HTTP 接口。
 python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-payment \
   --payment-profile evm --message-protocol mcp \
-  --payer-language python --payee-language java --transport grpc --timeout 900
+  --payer-language python --payee-language java --transport http --timeout 900
 
-# Go payer → Rust payee，A2A/x402/Solana，Vault MQTT 控制面。
+# Go payer → Rust payee，A2A/x402/Solana，Vault HTTP 接口。
 python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-payment \
   --payment-profile solana --message-protocol a2a \
-  --payer-language go --payee-language rust --transport mqtt --timeout 900
+  --payer-language go --payee-language rust --transport http --timeout 900
 
 # TypeScript payer → Python payee，A2A/MPP/Tempo。
 python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-payment \
   --payment-profile tempo --message-protocol a2a \
-  --payer-language typescript --payee-language python --transport grpc --timeout 900
+  --payer-language typescript --payee-language python --transport http --timeout 900
 ```
 
 `--transport` 只选择 SDK→Vault 的内部控制面；`--message-protocol` 才选择付款业务调用的 MCP/A2A。Payer 只知道 Client/Scenario，不接受人工指定 Wallet 或私钥。Vault 从对应 Policy 的两个成员中选择可签名钱包。
@@ -299,7 +299,7 @@ python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-payment \
 
 ```bash
 python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-payment \
-  --payment-profile evm --message-protocol mcp --transport grpc \
+  --payment-profile evm --message-protocol mcp --transport http \
   --payer-language python --payee-language java --fail-after-settlement --timeout 900
 ```
 
@@ -342,7 +342,7 @@ kubectl -n "$PAYMENT_NS" logs -f deployment/x402-facilitator --since=10m
 
 SDK 自身还记录 `payment_required`、`signing_requested`、`signed`；A2A payer 完成摘要 `manual.payer.completed` 含 run、Task、Intent 和回执检查结果。付款后业务数据位于 `Task.artifacts[0].parts[0].data`。免费昨日新闻仍走官方 MCP 调用，`--message-protocol a2a` 切换的是收费实时新闻。
 
-实际签名入口是 `POST /api/v1/payments/authorize`：服务内先授权、选钱包、按需审批，再调用托管签名组件，返回绑定 Intent 的 Credential。不存在额外的公开 `/sign` 路由。gRPC/MQTT 封装的是同一业务请求，SDK 随后把 Credential 写回相应 MCP/A2A 消息重投，并向 `/payments/{intent_id}/outbound-response` 上报回执。
+实际签名入口是 `POST /api/v1/payments/authorize`：服务内先授权、选钱包、按需审批，再调用托管签名组件，返回绑定 Intent 的 Credential。不存在额外的公开 `/sign` 路由。SDK 通过 HTTP 提交该业务请求，SDK 随后把 Credential 写回相应 MCP/A2A 消息重投，并向 `/payments/{intent_id}/outbound-response` 上报回执。
 
 ```bash
 curl -fsS http://127.0.0.1:19091/metrics | \
@@ -433,7 +433,6 @@ kubectl -n "$PAYER_NS" set env deployment/quantstream-ui \
   QUANTSTREAM_CLIENT_ID="client-quantstream-${PAYER_LANGUAGE}" \
   QUANTSTREAM_SCENARIO_ID="scenario-quantstream-${PAYER_LANGUAGE}-market-ingestion${PROFILE_SUFFIX}" \
   QUANTSTREAM_APPROVER_PRINCIPAL="principal-quantstream-${PAYER_LANGUAGE}-admin" \
-  AGENTVAULT_MQTT_APPROVER_USERNAME="quantstream-${PAYER_LANGUAGE}-approver"
 kubectl -n "$PAYER_NS" rollout status deployment/quantstream-ui --timeout=120s
 ```
 
@@ -598,10 +597,10 @@ python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s x402-solana --timeout 
 
 ```bash
 python3 "$E2E_DIR/runner.py" run --deployer kubernetes -s manual-matrix \
-  --payment-profile evm --message-protocol mcp --transport grpc --timeout 1800
+  --payment-profile evm --message-protocol mcp --transport http --timeout 1800
 ```
 
-逐项切换 `evm/solana/tempo`、`mcp/a2a`、`grpc/mqtt` 可覆盖 3×2×2×25=300 个购买组合。不要把命令列表当成执行结果，已完成范围以该轮报告、Job、两端 Intent、Ledger 和链上回执为准。预算/余额不足会按真实策略进入审批或失败，不会被测试代码直接改成成功。
+逐项切换 `evm/solana/tempo`、`mcp/a2a`、`http` 可覆盖 3×2×1×25=150 个购买组合。不要把命令列表当成执行结果，已完成范围以该轮报告、Job、两端 Intent、Ledger 和链上回执为准。预算/余额不足会按真实策略进入审批或失败，不会被测试代码直接改成成功。
 
 历史 `matrix --e2e-sdk-scope full` 是五语言×五语言×两 Transport=50 个隔离的 x402/EVM/MCP Case；每 Case 两笔购买。它每次重置独立 Case 数据和链；不能与 manual 并发使用同一组 Namespace。
 

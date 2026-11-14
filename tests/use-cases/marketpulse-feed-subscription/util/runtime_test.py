@@ -34,9 +34,9 @@ class RuntimeTest(unittest.TestCase):
         )
 
     def test_image_override(self):
-        env = {"E2E_IMAGE_NETWORK": "NON_GFW", "E2E_EMQX_IMAGE": "local/test:1"}
+        env = {"E2E_IMAGE_NETWORK": "NON_GFW", "E2E_POSTGRES_IMAGE": "local/test:1"}
         Images.configure(env)
-        self.assertEqual(Images.reference("emqx", env), "local/test:1")
+        self.assertEqual(Images.reference("postgres", env), "local/test:1")
 
     def test_docker_explicit_context_does_not_fallback(self):
         with patch.object(

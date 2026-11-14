@@ -21,6 +21,6 @@ fn role_configuration_validates_limits_and_redacts_edge_secrets() {
     .validate()
     .is_err());
 
-    let grpc = GrpcConfig::new("vault.example:443").with_authguard_bearer("edge-secret");
-    assert!(!format!("{grpc:?}").contains("edge-secret"));
+    let http = HttpConfig::new("https://vault.example").with_authguard_bearer("edge-secret");
+    assert!(!format!("{http:?}").contains("edge-secret"));
 }

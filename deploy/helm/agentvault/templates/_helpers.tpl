@@ -32,10 +32,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if $authguard.enabled }}true{{ else }}false{{ end -}}
 {{- end -}}
 
-{{- define "agentvault.grpcEnabled" -}}
-{{- $value := default "false" (index .Values.agentvault.backend.env "AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED") -}}
-{{- if eq (lower ($value | toString)) "true" }}true{{ else }}false{{ end -}}
-{{- end -}}
 
 {{- define "agentvault.secretsProvider" -}}
 {{- lower (default "kubernetes" .Values.agentvault.backend.secrets.provider) -}}

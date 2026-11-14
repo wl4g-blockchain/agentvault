@@ -1,6 +1,6 @@
 import unittest
 
-from agentvault.sdk.config import GrpcConfig, PayeeConfig, PayerConfig
+from agentvault.sdk.config import HttpConfig, PayeeConfig, PayerConfig
 
 
 class ConfigurationTest(unittest.TestCase):
@@ -11,5 +11,5 @@ class ConfigurationTest(unittest.TestCase):
             PayerConfig("scenario", delivery_retries=4)
         with self.assertRaises(ValueError):
             PayeeConfig(0)
-        grpc = GrpcConfig("vault.example:443", authguard_bearer="edge-secret")
-        self.assertNotIn("edge-secret", repr(grpc))
+        http = HttpConfig("https://vault.example", authguard_bearer="edge-secret")
+        self.assertNotIn("edge-secret", repr(http))

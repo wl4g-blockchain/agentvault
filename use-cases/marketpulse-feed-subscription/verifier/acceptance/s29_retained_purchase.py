@@ -178,12 +178,9 @@ class E2ES29RetainedPurchaseVerifier:
                 "MARKETPULSE_MESSAGE_PROTOCOL": message,
                 "QUANTSTREAM_CLIENT_ID": identity.client_id,
                 "QUANTSTREAM_SCENARIO_ID": identity.scenario_id + cls.suffix(profile),
-                "AGENTVAULT_TRANSPORT": transport,
-                "AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
-                "AGENTVAULT_GRPC_TLS": "false",
-                "AGENTVAULT_GRPC_TIMEOUT_SECONDS": "30",
-                "AGENTVAULT_MQTT_TIMEOUT_SECONDS": "30",
-                "AGENTVAULT_MQTT_USERNAME": identity.mqtt_username,
+                "AGENTVAULT_TRANSPORT": "http",
+                "AGENTVAULT_HTTP_BASE_URL": "http://127.0.0.1:8080",
+                "AGENTVAULT_HTTP_TIMEOUT_SECONDS": "30",
                 "AGENTVAULT_APPROVAL_TIMEOUT_SECONDS": "900",
             }
 
@@ -1433,7 +1430,7 @@ class E2ES29RetainedPurchaseVerifier:
             )
             settings = {
                 **self._image_values(f"payee-{language}"),
-                "env.AGENTVAULT_TRANSPORT": "grpc",
+                "env.AGENTVAULT_TRANSPORT": "http",
                 "persistence.existingClaim": name,
                 "env.MARKETPULSE_SCENARIO_ID": f"scenario-marketpulse-feed{suffix}",
                 "env.MARKETPULSE_PRICE_ID": f"price-{language}-{profile}-mcp",
@@ -1517,7 +1514,7 @@ class E2ES29RetainedPurchaseVerifier:
             return job
 
         def _suspended_payer(self, language):
-            job = self._payer_job(language, "rust", "evm", "mcp", "grpc")
+            job = self._payer_job(language, "rust", "evm", "mcp", "http")
             self._apply_document(
                 {
                     "apiVersion": "batch/v1",

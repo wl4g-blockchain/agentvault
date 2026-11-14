@@ -3,15 +3,16 @@ module github.com/wl4g-blockchain/agentvault/src/sdk/golang
 go 1.26.0
 
 require (
-	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/tempoxyz/mpp-go v0.2.0
 	github.com/x402-foundation/x402/go/v2 v2.28.0
-	google.golang.org/grpc v1.76.0
-	google.golang.org/protobuf v1.36.11
 )
 
-require github.com/google/uuid v1.6.0 // indirect
+require (
+	github.com/google/uuid v1.6.0 // indirect
+	google.golang.org/grpc v1.76.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
 
 require (
 	github.com/a2aproject/a2a-go v0.3.15
@@ -27,7 +28,6 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -49,5 +49,4 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
 )

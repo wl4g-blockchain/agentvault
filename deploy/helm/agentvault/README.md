@@ -6,7 +6,7 @@ Templates follow workload ownership rather than Kubernetes-kind flat files:
 templates/
 ├── platform/  # optional runtime ConfigMap, Secret projection, ServiceAccount
 ├── server/    # AgentVault Deployment, API/management Services, NetworkPolicy, ServiceMonitor
-├── gateway/   # protected API/gRPC HTTPRoute
+├── gateway/   # protected HTTP API routes
 ├── web/       # Dashboard Deployment, Service and protected Route
 ├── _helpers.tpl
 └── NOTES.txt
@@ -69,7 +69,7 @@ matching Kubernetes Secret key contains the actual PostgreSQL URL. The loader ex
 that value from the serializable `AppConfig` and resolves it only through the
 configured `SecretRef`. There is no second helper/slot naming convention and
 no legacy alias fallback. Wallet encryption keys, recovery keys, approval
-signing keys, provider credentials, and MQTT passwords follow the same rule.
+signing keys and provider credentials follow the same rule.
 
 `agentvault.backend.env` is reserved for deployment-specific scalar overrides.
 Complex maps and lists may be supplied as native YAML through
@@ -153,20 +153,15 @@ helm upgrade --install agentvault deploy/helm/agentvault \
 ```
 
 That mode is fully open on the API Service by design; the chart's NetworkPolicy
-opens only API and optional gRPC ingress, while management remains limited to
-the configured Envoy/monitoring selectors. MQTT remains a separate
-broker/client-id boundary in both modes.
+opens only HTTP API ingress, while management remains limited to
+the configured Envoy/monitoring selectors.
 
 `/healthz` is process liveness only. `/readyz` performs a bounded probe against
 the authoritative SQL adapter (`mgmt.health.probe_timeout`, default `1s`)
 and returns 503 on failure or timeout. Redis is deliberately not a readiness
 gate because it is a non-authoritative acceleration layer.
 
-The SDK gRPC listener is disabled by default. Setting
-`agentvault.backend.env.AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED=true`
-adds an h2c ClusterIP port and a protected Gateway route for
-`/agentvault.transport.v1.PaymentTransport/*`. AuthGuard authenticates that
-route and injects the same signed `x-authguard-context` metadata; the NetworkPolicy
-accepts the internal h2c port only from the configured Envoy selector. The
-Envelope accepts only domain-authorized SDK payment routes and never exposes
-`/admin/*`. Do not expose port `50051` directly in the normal protected mode.
+`agentvault.backend.role` selects `payer`, `payee` or `all` (default).
+Independent role releases expose their own HTTP routes and use the same shared
+configuration and SQL providers. The payee process does not load wallet custody
+keys; each role's reconciliation worker leases only its own payment direction.

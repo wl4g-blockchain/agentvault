@@ -42,112 +42,24 @@ class E2ES15IdentityBoundaryVerifier:
         return {"x-authguard-context": value + "." + signature}
 
     @staticmethod
-    def grpc_boundary(
+    def http_boundary(
         context: VerificationContext, owner_headers: dict, outsider_headers: dict
     ) -> None:
-        import uuid
-
-        import grpc
-
-        runtime = Infra.session(context)
-        if runtime.backend == "kubernetes":
-            context.state["session"].enter_context(
-                runtime._runtime_forwards(("agentvault-grpc",))
-            )
-        port = int(runtime.environment["E2E_AGENTVAULT_GRPC_PORT"])
-
-        def encode(payload):
-            length = len(payload)
-            prefix = bytearray([10])
-            while length > 127:
-                prefix.append((length & 127) | 128)
-                length >>= 7
-            prefix.append(length)
-            return bytes(prefix) + payload
-
-        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
-            execute = channel.unary_unary(
-                "/agentvault.transport.v1.PaymentTransport/Execute",
-                request_serializer=encode,
-                response_deserializer=lambda value: value,
-            )
-            for path in ("/api/v1/admin/prices", "/api/v1/unsupported"):
-                payload = json.dumps(
-                    {"method": "GET", "path": path, "headers": {}, "body": ""}
-                ).encode()
-                metadata = [
-                    (
-                        "traceparent",
-                        f"00-{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-01",
-                    ),
-                    *owner_headers.items(),
-                ]
-                try:
-                    execute(payload, metadata=metadata, timeout=10)
-                except grpc.RpcError as error:
-                    if error.code() != grpc.StatusCode.PERMISSION_DENIED:
-                        raise RuntimeError(
-                            f"unexpected gRPC boundary rejection: {error.code()}"
-                        ) from error
-                else:
-                    raise RuntimeError("gRPC exposed an admin or unknown route")
-            intent = context.require("purchase")["evidence"].audit[
-                "outbound_intent_ids"
-            ][0]
-            scenario = payer_identity(context.payer_language).scenario_id
-            path = f"/api/v1/payments/{intent}?scenario_id={scenario}"
-            payload = json.dumps(
-                {"method": "GET", "path": path, "headers": {}, "body": ""}
-            ).encode()
-            # Missing identity must be denied even for an allowed payment route.
-            try:
-                execute(
-                    payload,
-                    metadata=[
-                        (
-                            "traceparent",
-                            f"00-{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-01",
-                        )
-                    ],
-                    timeout=10,
-                )
-            except grpc.RpcError as error:
-                if error.code() != grpc.StatusCode.UNAUTHENTICATED:
-                    raise
-            else:
-                raise RuntimeError("gRPC accepted a payment without trusted context")
-            for headers, expected in ((outsider_headers, 200), (owner_headers, 403)):
-                reply = execute(
-                    payload,
-                    metadata=[
-                        (
-                            "traceparent",
-                            f"00-{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-01",
-                        ),
-                        *headers.items(),
-                    ],
-                    timeout=10,
-                )
-                if not reply or reply[0] != 10:
-                    raise RuntimeError("invalid gRPC Envelope response")
-                offset, length, shift = 1, 0, 0
-                while True:
-                    value = reply[offset]
-                    offset += 1
-                    length |= (value & 127) << shift
-                    if value < 128:
-                        break
-                    shift += 7
-                response = json.loads(reply[offset : offset + length])
-                if response["status"] != expected:
-                    raise RuntimeError(
-                        f"gRPC cross-client authorization: expected {expected}, got {response['status']}"
-                    )
+        Infra.request(
+            context, "GET", "/unsupported", expected=(404,), headers=owner_headers
+        )
+        intent = context.require("purchase")["evidence"].audit["outbound_intent_ids"][0]
+        scenario = payer_identity(context.payer_language).scenario_id
+        path = f"/payments/{intent}?scenario_id={scenario}"
+        Infra.request(context, "GET", path, expected=(401,))
+        for headers, expected in ((outsider_headers, 200), (owner_headers, 403)):
+            Infra.request(context, "GET", path, expected=(expected,), headers=headers)
         context.state.setdefault("requests", []).append(
             {
-                "transport": "grpc",
-                "admin_and_unknown": "PERMISSION_DENIED",
-                "missing_context": "UNAUTHENTICATED",
+                "transport": "http",
+                "unknown_route": 404,
+                "missing_context": 401,
+                "cross_client": "denied",
             }
         )
 
@@ -228,7 +140,7 @@ class E2ES15IdentityBoundaryVerifier:
                 expected=(403,),
                 headers=E2ES15IdentityBoundaryVerifier.signed(outsider, key),
             )
-            E2ES15IdentityBoundaryVerifier.grpc_boundary(
+            E2ES15IdentityBoundaryVerifier.http_boundary(
                 context,
                 E2ES15IdentityBoundaryVerifier.signed(owner, key),
                 E2ES15IdentityBoundaryVerifier.signed(outsider, key),

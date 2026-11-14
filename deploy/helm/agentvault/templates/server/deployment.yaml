@@ -101,7 +101,7 @@ spec:
         - name: agentvault
           image: "{{ $backend.image.repository }}:{{ default .Chart.AppVersion $backend.image.tag }}"
           imagePullPolicy: {{ $backend.image.pullPolicy }}
-          args: [--config, /etc/agentvault/agentvault.yaml, serve]
+          args: [--config, /etc/agentvault/agentvault.yaml, serve, --role, {{ $backend.role | default "all" | quote }}]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           env:
             {{- range $name, $value := $backend.env }}
@@ -123,9 +123,6 @@ spec:
           ports:
             - { name: api, containerPort: {{ $backend.service.apiPort }} }
             - { name: management, containerPort: {{ $backend.service.managementPort }} }
-            {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
-            - { name: grpc, containerPort: {{ $backend.service.grpcPort }} }
-            {{- end }}
           startupProbe: { httpGet: { path: /healthz, port: management }, periodSeconds: 2, failureThreshold: 30 }
           livenessProbe: { httpGet: { path: /healthz, port: management }, periodSeconds: 10, timeoutSeconds: 2 }
           readinessProbe: { httpGet: { path: /readyz, port: management }, periodSeconds: 5, timeoutSeconds: 2 }

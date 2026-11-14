@@ -442,7 +442,7 @@ def cleanup(
             round_number=0,
             payer_language="rust",
             payee_language="rust",
-            transport="mqtt",
+            transport="http",
             deployer=deployer,
             timeout_seconds=timeout_seconds,
             skip_build=True,
@@ -468,7 +468,7 @@ def cleanup(
             round_number=0,
             payer_language="rust",
             payee_language="rust",
-            transport="mqtt",
+            transport="http",
             deployer=deployer,
             timeout_seconds=timeout_seconds,
             skip_build=True,
@@ -524,8 +524,8 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--transport",
-        choices=("mqtt", "grpc"),
-        default="mqtt",
+        choices=("http",),
+        default="http",
         help="AgentVault payer/payee control-plane transport; matrix always verifies both",
     )
     result.add_argument("--skip-build", action="store_true")

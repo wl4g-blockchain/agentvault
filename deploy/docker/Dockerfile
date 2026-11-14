@@ -5,7 +5,7 @@ ARG RUNTIME_IMAGE=debian:trixie-slim
 
 FROM ${RUST_BUILDER_IMAGE} AS builder
 WORKDIR /workspace
-COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN cargo --version
 COPY src ./src
 COPY migrations ./migrations

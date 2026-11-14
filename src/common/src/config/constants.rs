@@ -1,0 +1,18 @@
+use std::time::Duration;
+pub const SECRETS_ENV_FILE_ENV: &str = "AGENTVAULT__SECRETS__ENV_FILE";
+pub(super) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+pub const MAX_CACHE_ENTRIES: usize = 1_000_000;
+pub const MAX_CACHE_VALUE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_CACHE_REDIS_ENDPOINTS: usize = 32;
+pub const MAX_CACHE_RETRIES: u32 = 32;
+pub const MAX_CACHE_TTL: Duration = Duration::from_hours(24);
+pub(super) const MAX_STORAGE_CONNECTIONS: u32 = 256;
+pub(super) const MAX_PROVIDER_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_RECONCILIATION_BATCH_SIZE: usize = 10_000;
+pub(super) const MAX_CHALLENGE_TTL: Duration = Duration::from_hours(24);
+pub(super) const MAX_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const MAX_PROTOCOL_ASSETS: usize = 64;
+pub(super) const MAX_RPC_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const DEFAULT_APPROVAL_JWT_ISSUER: &str = "agentvault";
+pub(super) const DEFAULT_APPROVAL_JWT_AUDIENCE: &str = "agentvault:approval-grant";
+pub(super) const DEFAULT_APPROVAL_JWT_KEY_ID: &str = "approval-hs256-v1";

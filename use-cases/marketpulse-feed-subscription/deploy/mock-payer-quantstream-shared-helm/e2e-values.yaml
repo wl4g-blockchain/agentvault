@@ -1,10 +1,3 @@
-env:
-  AGENTVAULT_GRPC_ENDPOINT: "127.0.0.1:50051"
-  AGENTVAULT_GRPC_TLS: "false"
-  AGENTVAULT_MQTT_HOST: "127.0.0.1"
-  AGENTVAULT_MQTT_PORT: "1883"
-  AGENTVAULT_MQTT_TLS: "false"
-
 # A native sidecar init container becomes ready before the one-shot payer
 # starts, so its loopback-only Vault transports cannot race Envoy startup.
 initContainers:

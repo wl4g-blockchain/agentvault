@@ -8,7 +8,7 @@ fn shared_native_contract_and_unsupported_boundaries() {
         .create(&["x402".into(), "mpp".into()])
         .unwrap();
     let mut expected = BTreeSet::new();
-    for t in ["grpc", "mqtt"] {
+    for t in ["http"] {
         for p in ["x402", "mpp"] {
             for role in ["payer", "payee"] {
                 expected.insert(format!("{t}/{p}/{role}"));
@@ -27,7 +27,7 @@ fn shared_native_contract_and_unsupported_boundaries() {
             )
         })
         .collect();
-    assert_eq!(rows.len(), 8);
+    assert_eq!(rows.len(), 4);
     assert_eq!(actual, expected);
     for (name, contract) in fixture["protocols"].as_object().unwrap() {
         assert_eq!(

@@ -4,6 +4,8 @@ global:
 agentvault:
   # Kubernetes resources for the Rust AgentVault backend.
   backend:
+    # all exposes both role routers; use payer/payee for independent processes.
+    role: all
     nameOverride: ""
     fullnameOverride: ""
     replicaCount: 2
@@ -40,7 +42,6 @@ agentvault:
       type: ClusterIP
       apiPort: 8080
       managementPort: 9091
-      grpcPort: 50051
 
     route:
       enabled: true
@@ -83,9 +84,6 @@ agentvault:
       AGENTVAULT__AGENTVAULT__PAYER__X402__ENABLED: "true"
       AGENTVAULT__AGENTVAULT__PAYEE__ENABLED: "true"
       AGENTVAULT__AGENTVAULT__PAYEE__X402__ENABLED: "true"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED: "false"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__HOST: "0.0.0.0"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__PORT: "{{ .Values.agentvault.backend.service.grpcPort }}"
 
     management:
       serviceMonitor:

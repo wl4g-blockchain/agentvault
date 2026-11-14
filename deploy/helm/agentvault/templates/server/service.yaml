@@ -12,6 +12,3 @@ spec:
     app.kubernetes.io/component: server
   ports:
     - { name: api, port: {{ $backend.service.apiPort }}, targetPort: api }
-    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
-    - { name: grpc, port: {{ $backend.service.grpcPort }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }
-    {{- end }}

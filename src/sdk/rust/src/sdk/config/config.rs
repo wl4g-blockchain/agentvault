@@ -5,7 +5,7 @@ use crate::{Error, Result};
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(2);
 const DEFAULT_APPROVAL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_CHALLENGE_BYTES: usize = 256 * 1024;
-const DEFAULT_MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 struct ProtocolDefaults;
 
@@ -38,79 +38,36 @@ impl ProtocolDefaults {
 }
 
 #[derive(Clone)]
-pub struct GrpcConfig {
-    pub endpoint: String,
-    pub tls: bool,
+pub struct HttpConfig {
+    pub base_url: String,
     pub authguard_bearer: Option<String>,
     pub request_timeout: Duration,
-    pub max_message_bytes: usize,
+    pub max_response_bytes: usize,
 }
-
-impl GrpcConfig {
+impl HttpConfig {
     #[must_use]
-    pub fn new(endpoint: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            endpoint: endpoint.into(),
-            tls: true,
+            base_url: base_url.into(),
             authguard_bearer: None,
             request_timeout: Duration::from_secs(30),
-            max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
     }
-
     #[must_use]
     pub fn with_authguard_bearer(mut self, token: impl Into<String>) -> Self {
         self.authguard_bearer = Some(token.into());
         self
     }
-
-    #[must_use]
-    pub const fn with_tls(mut self, tls: bool) -> Self {
-        self.tls = tls;
-        self
-    }
 }
-
-impl fmt::Debug for GrpcConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GrpcConfig")
-            .field("endpoint", &self.endpoint)
-            .field("tls", &self.tls)
+impl fmt::Debug for HttpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpConfig")
+            .field("base_url", &self.base_url)
             .field(
                 "authguard_bearer",
                 &self.authguard_bearer.as_ref().map(|_| "<redacted>"),
             )
-            .field("request_timeout", &self.request_timeout)
-            .field("max_message_bytes", &self.max_message_bytes)
-            .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct MqttConfig {
-    pub host: String,
-    pub port: u16,
-    pub tls: bool,
-    pub username: String,
-    pub password: String,
-    pub connection_prefix: String,
-    pub vault_client_id: String,
-    pub request_timeout: Duration,
-    pub max_response_bytes: usize,
-}
-
-impl fmt::Debug for MqttConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("MqttConfig")
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("tls", &self.tls)
-            .field("username", &"<redacted>")
-            .field("password", &"<redacted>")
-            .field("connection_prefix", &self.connection_prefix)
-            .field("vault_client_id", &self.vault_client_id)
             .field("request_timeout", &self.request_timeout)
             .field("max_response_bytes", &self.max_response_bytes)
             .finish()

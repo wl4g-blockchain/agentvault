@@ -22,7 +22,7 @@ AgentVault ── Scenario / Policy / Approval / Signer / Settlement / Ledger
 外部 x402 Facilitator / MPP Provider / 固定 RPC
 ```
 
-AgentVault 不实现登录、OAuth2/OIDC、会话和 IAM 策略引擎。标准 Docker/Helm 部署默认由 AuthGuard 保护所有 HTTP 支付和 Admin API；显式关闭后，HTTP 按设计完全开放。MQTT 不复用 HTTP 身份，而是使用 Broker 认证、默认拒绝的 Topic ACL 和持久化 Client/Scenario 映射。审批决策使用独立认证的管理员 Topic，AgentVault 将其中的 Client 与审批 Principal 再绑定到 SQL Scenario/Approver 映射，报文体不能自报这两种身份。
+AgentVault 不实现登录、OAuth2/OIDC、会话和 IAM 策略引擎。标准 Docker/Helm 部署默认由 AuthGuard 保护所有 HTTP 支付和 Admin API；显式关闭后，HTTP 按设计完全开放。SDK 与浏览器统一通过标准 HTTP 调用；审批决策通过 HTTP 提交，并验证持久化 Scenario/Approver 映射，报文体不能自报审批身份。
 
 资源关系为：
 
@@ -98,7 +98,7 @@ docker compose --env-file deploy/docker/.env \
 
 隔离可信网络可明确选择 `docker-compose.open.yaml`。Helm Chart 位于 `deploy/helm/agentvault/`，同样默认启用 AuthGuard 依赖。
 
-仓库配置默认关闭 `agentvault.payer.enabled` 与 `agentvault.payee.enabled`。生产必须由运营方提供 SQL、Wallet KEK、按方向独立的协议/Provider、共享链注册表和可选的认证 MQTT 配置及 SecretRef。
+仓库配置默认关闭 `agentvault.payer.enabled` 与 `agentvault.payee.enabled`。生产必须由运营方提供 SQL、Wallet KEK、按方向独立的协议/Provider、共享链注册表以及 HTTP 网关配置与 SecretRef。
 
 ## 真实 E2E
 
@@ -107,7 +107,7 @@ docker compose --env-file deploy/docker/.env \
 - MarketPulse Payee：免费昨日新闻 MCP Tool 与付费实时新闻 Tool。
 - QuantStream Payer：逻辑等价的 Rust、Go、Python、TypeScript、Java 采集服务和管理员审批 UI。
 
-x402 SDK 矩阵使用 PostgreSQL、带认证/ACL 的 EMQX、官方 x402 Facilitator、Anvil/E2EUSDC、AgentVault、Payee 和 SDK 进程，验证 402 重试、MQTT/gRPC 签名、日限额审批、一次性 Grant、EVM 结算、Receipt/Ledger/交易绑定、Facilitator 精确 Gas 与交付恢复。显式 x402 Solana 门禁让固定版本的上游 client/facilitator 访问真实本地 Validator，并验证 SPL 与 Lamport 手续费精确守恒。独立 MPP 门禁使用固定镜像摘要的官方 Tempo localnet 和由官方 MPP Rust SDK 支撑的 HTTP 结算边界，验证 Vault 签名 type-0x76 charge、verify/settle、丢响应恢复、单次广播、回执及包含 Gas 的 pathUSD 守恒。
+x402 SDK 矩阵使用 PostgreSQL、官方 x402 Facilitator、Anvil/E2EUSDC、AgentVault、Payee 和 SDK 进程，验证 402 重试、HTTP 授权与签名、日限额审批、一次性 Grant、EVM 结算、Receipt/Ledger/交易绑定、Facilitator 精确 Gas 与交付恢复。显式 x402 Solana 门禁让固定版本的上游 client/facilitator 访问真实本地 Validator，并验证 SPL 与 Lamport 手续费精确守恒。独立 MPP 门禁使用固定镜像摘要的官方 Tempo localnet 和由官方 MPP Rust SDK 支撑的 HTTP 结算边界，验证 Vault 签名 type-0x76 charge、verify/settle、丢响应恢复、单次广播、回执及包含 Gas 的 pathUSD 守恒。
 
 五种 SDK 的协议 Provider 均以 x402 v2 处理 HTTP（`PAYMENT-REQUIRED`，兼容 JSON body 且冲突即拒绝）和 MCP JSON-RPC（`structuredContent`/文本 Challenge 及协议自有 `_meta` 凭据/回执）。MPP 同样通过官方 paymentauth wire 类型覆盖 HTTP 与 MCP；付款认证头不得覆盖无关的业务 Bearer。进入受保护业务 Handler 前会移除协议自有付款凭据元数据。
 
@@ -130,3 +130,18 @@ x402 EVM 五语言矩阵、x402 Solana 支付门禁与 MPP Tempo charge 门禁�
 ## License
 
 Apache-2.0，见 [LICENSE](LICENSE)。
+
+Rust 服务端采用 `common`、`protocol`、`payer`、`payee`、`cmd` 五个独立 crate。
+配置集中在 `src/common/src/config/config.rs`，领域仓库组合 `base_sqlite.rs` 或
+`base_postgres.rs`；付款与收款各自拥有 handler、HTTP routes 和服务入口，并统一调用
+`ApmComponent` 启动管理与可观测组件。
+
+准备好各自的 YAML、SecretRef 和监听端口后，可分别运行：
+
+```sh
+agentvault --config /etc/agentvault/payer.yaml serve --role payer
+agentvault --config /etc/agentvault/payee.yaml serve --role payee
+```
+
+同一宿主机上的两个进程应使用不同的 API/管理端口。`serve` 同时支持 E2E 使用的共享
+HTTP 入口；仅启动 payee 时不加载钱包托管密钥，对账 worker 按付款方向领取任务。

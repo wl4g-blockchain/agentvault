@@ -252,25 +252,3 @@ agentvault:
 
   # HTTP, gRPC and MQTT adapters invoke the same handlers. No
   # transport accepts a caller-supplied digest.
-  transport:
-    grpc:
-      enabled: false
-      host: 127.0.0.1
-      port: 50051
-      max_message_bytes: 2097152
-      request_timeout: 30s
-    mqtt:
-      enabled: false
-      host: 127.0.0.1
-      port: 1883
-      client_id: agentvault-01
-      consumer_group: agentvault-pool
-      topic_prefix: agentvault/v1/clients
-      qos: 1
-      tls: false
-      username: ""
-      password:
-        file: ""
-        env: AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__PASSWORD
-      request_timeout: 10s
-      reconnect_delay: 1s

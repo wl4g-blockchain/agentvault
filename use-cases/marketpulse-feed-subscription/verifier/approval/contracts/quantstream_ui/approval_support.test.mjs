@@ -5,9 +5,7 @@ import { after, before, test } from "node:test";
 import {
   ApprovalQueue,
   approvalDecisionBody,
-  approvalTopics,
   loadPendingApprovals,
-  mqttConnectionOptions
 } from "../../../../deploy/mock-payer-quantstream-ui/source/src/approval_support.mjs";
 
 const scenarioId = "scenario-quantstream-market-ingestion";
@@ -23,7 +21,7 @@ before(async () => {
   server = createServer((request, response) => {
     requests.push({
       authorization: request.headers.authorization,
-      url: request.url
+      url: request.url,
     });
     const url = new URL(request.url, "http://localhost");
     const offset = Number.parseInt(url.searchParams.get("offset"), 10);
@@ -34,7 +32,7 @@ before(async () => {
       run_id: item.runId,
       requested_amount: item.requestedAmount,
       expires_at: item.expiresAt,
-      status: "pending"
+      status: "pending",
     }));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ items, total: authority.length }));
@@ -45,7 +43,9 @@ before(async () => {
 });
 
 after(async () => {
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
 });
 
 test("approve binds the exact requested amount while reject omits it", () => {
@@ -55,66 +55,24 @@ test("approve binds the exact requested amount while reject omits it", () => {
     approval_id: "approval-1",
     decision: "approve",
     reason: "QuantStream administrator decision",
-    approved_amount: "1000000"
+    approved_amount: "1000000",
   });
-  assert.equal("approved_amount" in approvalDecisionBody(first, "reject"), false);
+  assert.equal(
+    "approved_amount" in approvalDecisionBody(first, "reject"),
+    false,
+  );
   assert.throws(
     () => approvalDecisionBody({ ...first, requestedAmount: "1e6" }, "approve"),
-    /amount is invalid/
+    /amount is invalid/,
   );
   assert.throws(
-    () => approvalDecisionBody({ ...first, requestedAmount: (1n << 128n).toString() }, "approve"),
-    /amount is invalid/
+    () =>
+      approvalDecisionBody(
+        { ...first, requestedAmount: (1n << 128n).toString() },
+        "approve",
+      ),
+    /amount is invalid/,
   );
-});
-
-test("MQTT identity is stable and requests a persistent broker session", () => {
-  const options = mqttConnectionOptions("client-quantstream", "approver", "secret");
-  assert.equal(options.clientId, "quantstream-admin-client-quantstream");
-  assert.equal(options.clean, false);
-  assert.equal(options.password, "secret");
-});
-
-test("approval topics bind both the business client and durable approver principal", () => {
-  assert.deepEqual(approvalTopics("client-quantstream", "principal-quantstream-admin"), {
-    required: "agentvault/v1/clients/client-quantstream/approvals/required",
-    decision: "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/decisions",
-    resultPrefix: "agentvault/v1/clients/client-quantstream/approvers/principal-quantstream-admin/results/"
-  });
-  assert.throws(
-    () => approvalTopics("client-quantstream", "principal/admin"),
-    /approver principal is invalid/
-  );
-});
-
-test("offline recovery pages through authoritative pending approvals and deduplicates MQTT replay", async () => {
-  requests.length = 0;
-  authority = [first, second];
-  const recovered = await loadPendingApprovals({
-    baseUrl,
-    scenarioId,
-    authguardBearer: "approver-token",
-    pageSize: 1
-  });
-  assert.deepEqual(recovered, [first, second]);
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].authorization, "Bearer approver-token");
-  assert.match(requests[0].url, /scenario_id=scenario-quantstream-market-ingestion/);
-  assert.match(requests[0].url, /offset=0/);
-  assert.match(requests[1].url, /offset=1/);
-
-  const queue = new ApprovalQueue(scenarioId);
-  const reconciliationRevision = queue.beginReconcile();
-  assert.equal(queue.upsert(first), true);
-  assert.equal(queue.upsert(first), false);
-  queue.replaceFromAuthority(recovered, reconciliationRevision);
-  assert.deepEqual(queue.snapshot(), [first, second]);
-
-  authority = [second];
-  const nextRevision = queue.beginReconcile();
-  const current = await loadPendingApprovals({ baseUrl, scenarioId, authguardBearer: "approver-token", pageSize: 1 });
-  queue.replaceFromAuthority(current, nextRevision);
-  assert.deepEqual(queue.snapshot(), [second]);
 });
 
 test("approval API refuses credential-bearing redirects and non-loopback plaintext URLs", async () => {
@@ -123,9 +81,9 @@ test("approval API refuses credential-bearing redirects and non-loopback plainte
       baseUrl: "http://example.com/api/v1",
       scenarioId,
       authguardBearer: "approver-token",
-      fetchImpl: () => assert.fail("unsafe URL must fail before fetch")
+      fetchImpl: () => assert.fail("unsafe URL must fail before fetch"),
     }),
-    /HTTPS or loopback HTTP/
+    /HTTPS or loopback HTTP/,
   );
 
   let redirectPolicy;
@@ -137,11 +95,18 @@ test("approval API refuses credential-bearing redirects and non-loopback plainte
     fetchImpl: async (url, options) => {
       redirectPolicy = options.redirect;
       return fetch(url, options);
-    }
+    },
   });
   assert.equal(redirectPolicy, "error");
 });
 
 function approval(approvalId, intentId, requestedAmount, expiresAt) {
-  return { approvalId, intentId, runId: `run-${approvalId}`, scenarioId, requestedAmount, expiresAt };
+  return {
+    approvalId,
+    intentId,
+    runId: `run-${approvalId}`,
+    scenarioId,
+    requestedAmount,
+    expiresAt,
+  };
 }

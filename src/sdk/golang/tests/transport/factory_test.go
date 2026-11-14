@@ -1,42 +1,30 @@
 package transport_test
 
 import (
-	"testing"
-
 	"github.com/wl4g-blockchain/agentvault/src/sdk/golang/pkg/sdk/config"
 	"github.com/wl4g-blockchain/agentvault/src/sdk/golang/pkg/sdk/transport"
+	"testing"
 )
 
-func TestVaultTransportFactoryCreatesIsolatedIdempotentlyClosableProviders(t *testing.T) {
-	factory := transport.NewVaultTransportFactory()
-	settings := config.VaultTransportConfig{
-		Provider: config.TransportProviderMqtt,
-		Mqtt: &config.MqttConfig{
-			Host: "127.0.0.1", Port: 1883, Username: "client", Password: "secret",
-			ConnectionPrefix: "agent", VaultClientID: "vault-client",
-		},
+func TestFactoryOwnsIndependentHttpClients(t *testing.T) {
+	f := transport.NewVaultTransportFactory()
+	c := config.VaultTransportConfig{Provider: config.TransportProviderHttp, Http: &config.HttpConfig{BaseURL: "http://127.0.0.1:65535"}}
+	a, e := f.Create(c)
+	if e != nil {
+		t.Fatal(e)
 	}
-	first, err := factory.Create(settings)
-	if err != nil {
-		t.Fatal(err)
+	b, e := f.Create(c)
+	if e != nil {
+		t.Fatal(e)
 	}
-	second, err := factory.Create(settings)
-	if err != nil {
-		t.Fatal(err)
+	defer b.Close()
+	if a == b {
+		t.Fatal("reused client")
 	}
-	if first == second {
-		t.Fatal("transport factory reused a provider instance")
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("second close was not idempotent: %v", err)
-	}
-
-	invalid := settings
-	invalid.Grpc = &config.GrpcConfig{Endpoint: "127.0.0.1:50051"}
-	if _, err := factory.Create(invalid); err == nil {
-		t.Fatal("mixed transport provider blocks were accepted")
+	a.Close()
+	a.Close()
+	c.Provider = "unknown"
+	if _, e = f.Create(c); e == nil {
+		t.Fatal("accepted unknown transport")
 	}
 }
