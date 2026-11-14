@@ -13,6 +13,7 @@ UNIT_PRICE = 1_000_000
 import json
 import re
 import time
+
 from typing import Any
 
 from verifier.infra.s00_infrastructure import (
@@ -251,18 +252,27 @@ class E2ES24AccountingVerifier:
 
         def _assert_durable_invariants(self, payer: str, payee: str) -> str:
             identity = payer_identity(payer)
+            config = self._read_agentvault_config()
+            # HTTP identity is authoritative only when AuthGuard is enabled.
+            # The standalone matrix deliberately uses the explicit open mode.
+            approver = (
+                identity.approver_principal
+                if config["server"]["authguard"]["enabled"]
+                else "agentvault:internal:unrestricted"
+            )
             approval = self._sql(
                 payer,
                 payee,
                 "SELECT count(*) FROM pay_approval WHERE status='consumed' AND requested_amount=1000000 "
-                f"AND approved_amount=1000000 AND approved_by='{identity.approver_principal}' AND consumed_at IS NOT NULL "
+                f"AND approved_amount=1000000 AND approved_by='{approver}' AND consumed_at IS NOT NULL "
                 "AND length(grant_jti)>0 AND grant_claims_hash ~ '^[0-9a-f]{64}$' "
                 "AND (sealed_grant_token->>'version')::INTEGER>0 AND sealed_grant_token->>'key_id'='recovery-v1' "
                 "AND length(sealed_grant_token->>'nonce')>16 AND length(sealed_grant_token->>'ciphertext')>32;",
             )
             if approval != "1":
                 raise RuntimeError(
-                    "one-time encrypted approval grant was not atomically consumed"
+                    "one-time encrypted approval grant was not atomically consumed "
+                    f"by the configured HTTP principal: expected={approver} matching_rows={approval}"
                 )
             selection = self._sql(
                 payer,

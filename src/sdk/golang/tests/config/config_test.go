@@ -17,9 +17,9 @@ func TestRoleConfigurationValidatesLimitsAndRedactsEdgeSecrets(t *testing.T) {
 	if err := payer.Validate(); err == nil {
 		t.Fatal("unsafe retry limit must be rejected")
 	}
-	grpc := config.GrpcConfig{Endpoint: "vault.example:443", TLS: true, AuthguardBearer: "edge-secret"}
-	grpc.ApplyDefaults()
-	if strings.Contains(grpc.String(), "edge-secret") {
+	http := config.HttpConfig{BaseURL: "https://vault.example", AuthguardBearer: "edge-secret"}
+	http.ApplyDefaults()
+	if strings.Contains(http.String(), "edge-secret") {
 		t.Fatal("edge bearer leaked")
 	}
 }

@@ -1,7 +1,7 @@
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use agentvault_sdk::{
-    AgentVault, AxumPayeeMiddleware, AxumPayeeRoute, ConfiguredVaultTransport, GrpcConfig, MqttConfig, PayeeConfig,
+    AgentVault, AxumPayeeMiddleware, AxumPayeeRoute, ConfiguredVaultTransport, HttpConfig, PayeeConfig,
     VaultTransportConfig,
 };
 use axum::{http::Method, routing::post, Router};
@@ -112,41 +112,13 @@ fn parse_bind(value: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
     Ok(value.parse()?)
 }
 
-fn payee_transport_config() -> Result<VaultTransportConfig, Box<dyn std::error::Error>> {
-    match env::var("AGENTVAULT_TRANSPORT")
-        .unwrap_or_else(|_| "mqtt".to_owned())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "mqtt" => Ok(VaultTransportConfig::Mqtt(MqttConfig {
-            host: required_env("AGENTVAULT_MQTT_HOST")?,
-            port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
-            tls: boolean_env("AGENTVAULT_MQTT_TLS")?,
-            username: required_env("AGENTVAULT_MQTT_USERNAME")?,
-            password: required_env("AGENTVAULT_MQTT_PASSWORD")?,
-            connection_prefix: "marketpulse-rust".to_owned(),
-            vault_client_id: required_env("AGENTVAULT_MQTT_CLIENT_ID")?,
-            request_timeout: Duration::from_secs(required_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?.parse()?),
-            max_response_bytes: 2 * 1024 * 1024,
-        })),
-        "grpc" => {
-            let mut config = GrpcConfig::new(required_env("AGENTVAULT_GRPC_ENDPOINT")?)
-                .with_tls(boolean_env("AGENTVAULT_GRPC_TLS")?);
-            config.request_timeout = Duration::from_secs(required_env("AGENTVAULT_GRPC_TIMEOUT_SECONDS")?.parse()?);
-            Ok(VaultTransportConfig::Grpc(config))
-        }
-        _ => Err("AGENTVAULT_TRANSPORT must be mqtt or grpc".into()),
-    }
+fn payee_transport_config()->Result<VaultTransportConfig,Box<dyn std::error::Error>> {
+ let mut config=HttpConfig::new(required_env("AGENTVAULT_HTTP_BASE_URL")?);
+ config.request_timeout=Duration::from_secs(required_env("AGENTVAULT_HTTP_TIMEOUT_SECONDS")?.parse()?);
+ config.authguard_bearer=env::var("AGENTVAULT_AUTHGUARD_BEARER").ok();
+ Ok(VaultTransportConfig::Http(config))
 }
 
-fn boolean_env(name: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    match env::var(name).unwrap_or_else(|_| "false".to_owned()).trim() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(format!("{name} must be true or false").into()),
-    }
-}
 
 #[cfg(test)]
 #[path = "../../../../verifier/purchase/contracts/marketpulse_rust/server_test.rs"]

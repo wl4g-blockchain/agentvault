@@ -11,7 +11,5 @@
     "check": "node --check src/server.mjs && node --check src/approval_support.mjs",
     "test": "node --test ../../../verifier/approval/contracts/quantstream_ui/*.test.mjs"
   },
-  "dependencies": {
-    "mqtt": "5.14.1"
-  }
+  "dependencies": {}
 }

@@ -72,11 +72,8 @@ SERVICE_NAMES = {
     "tempo": (PAYMENT_NAMESPACE, "tempo", 8545),
     "solana": (PAYMENT_NAMESPACE, "solana-validator", 8899),
     "facilitator": (PAYMENT_NAMESPACE, "x402-facilitator", 8085),
-    "emqx-mqtt": (INFRA_NAMESPACE, "emqx", 1883),
-    "emqx-dashboard": (INFRA_NAMESPACE, "emqx", 18083),
     "jaeger": (INFRA_NAMESPACE, "jaeger", 16686),
     "postgres": (INFRA_NAMESPACE, "postgres", 5432),
-    "agentvault-grpc": (AGENTVAULT_NAMESPACE, "agentvault", 50051),
     "admin-ui": (PAYER_NAMESPACE, "quantstream-ui", 8086),
 }
 
@@ -114,8 +111,6 @@ PAYER_PRIVATE_KEY_DEFAULTS = {
 
 DEFAULTS = {
     "E2E_POSTGRES_PORT": "25432",
-    "E2E_EMQX_MQTT_PORT": "28883",
-    "E2E_EMQX_DASHBOARD_PORT": "38084",
     "E2E_JAEGER_UI_PORT": "26686",
     "E2E_JAEGER_OTLP_GRPC_PORT": "24317",
     "E2E_JAEGER_OTLP_HTTP_PORT": "24318",
@@ -125,15 +120,9 @@ DEFAULTS = {
     "E2E_SOLANA_FAUCET_PORT": "28900",
     "E2E_FACILITATOR_PORT": "38085",
     "E2E_AGENTVAULT_PORT": "38080",
-    "E2E_AGENTVAULT_GRPC_PORT": "45051",
     "E2E_AGENTVAULT_MGMT_PORT": "39091",
     "E2E_MARKETPULSE_PORT": "38081",
     "E2E_QUANTSTREAM_UI_PORT": "38083",
-    "E2E_EMQX_DASHBOARD_PASSWORD": "agentvault-e2e-dashboard",
-    "E2E_AGENTVAULT_MQTT_PASSWORD": "agentvault-e2e-vault",
-    "E2E_MARKETPULSE_MQTT_PASSWORD": "agentvault-e2e-payee",
-    "E2E_QUANTSTREAM_MQTT_PASSWORD": "agentvault-e2e-workload",
-    "E2E_QUANTSTREAM_UI_MQTT_PASSWORD": "agentvault-e2e-approver",
     **{
         PAYER_IDENTITIES[language].primary_private_key_env: keys[0]
         for language, keys in PAYER_PRIVATE_KEY_DEFAULTS.items()
@@ -358,6 +347,17 @@ class E2ES00InfrastructureVerifier:
                 timeout=timeout,
             )
 
+        @staticmethod
+        def _shared_overrides_for_chart(chart: Path) -> tuple[Path, ...]:
+            if chart.resolve() == AGENTVAULT_CHART.resolve():
+                return (AGENTVAULT_VALUES,)
+            component = chart.parent.name
+            if component.startswith("mock-payee-marketpulse-"):
+                return (MARKETPULSE_SHARED_VALUES,)
+            if component.startswith("mock-payer-quantstream-service-"):
+                return (QUANTSTREAM_SHARED_VALUES,)
+            return ()
+
         def _chart_image_flags(
             self, chart: Path, values: Iterable[Path] = ()
         ) -> list[str]:
@@ -366,14 +366,6 @@ class E2ES00InfrastructureVerifier:
             prefix = "agentvault.backend.image" if key == "agentvault" else "image"
             selected = E2EImagesDefinitions.helm_values(
                 E2EImagesDefinitions.reference(key, self.environment), prefix
-            )
-            selected.update(
-                {
-                    f"env.{name}": value
-                    for name, value in E2EImagesDefinitions.runtime_environment(
-                        key, self.environment
-                    ).items()
-                }
             )
             for source in (chart / "values.yaml", *values):
                 if source.is_file():
@@ -417,6 +409,9 @@ class E2ES00InfrastructureVerifier:
                     f"component Chart name must rely on namespace isolation, got: {name}"
                 )
             return name
+
+        def _read_agentvault_config(self) -> dict[str, Any]:
+            return yaml.safe_load(self.agentvault_config.read_text())
 
         def _render_agentvault_config(self) -> str:
             image_flags = self._chart_image_flags(
@@ -653,145 +648,6 @@ class E2ES00InfrastructureVerifier:
                 )
             return int(value, 16)
 
-        def _emqx_api(
-            self,
-            token: str,
-            method: str,
-            path: str,
-            body: dict[str, object] | None = None,
-        ) -> tuple[int, str]:
-            payload = (
-                None
-                if body is None
-                else json.dumps(body, separators=(",", ":")).encode()
-            )
-            status, _, raw = self._http(
-                self._url("E2E_EMQX_DASHBOARD_PORT", path),
-                method,
-                payload,
-                {
-                    "authorization": f"Bearer {token}",
-                    "content-type": "application/json",
-                },
-            )
-            return status, raw
-
-        def _bootstrap_emqx(self) -> None:
-            self._wait_http(self._url("E2E_EMQX_DASHBOARD_PORT", "/status"), 90)
-            status, _, raw = self._http(
-                self._url("E2E_EMQX_DASHBOARD_PORT", "/api/v5/login"),
-                "POST",
-                json.dumps(
-                    {
-                        "username": "admin",
-                        "password": self.environment["E2E_EMQX_DASHBOARD_PASSWORD"],
-                    }
-                ).encode(),
-                {"content-type": "application/json"},
-            )
-            if status != 200 or not isinstance(json.loads(raw).get("token"), str):
-                raise RuntimeError(
-                    f"EMQX dashboard authentication failed with HTTP {status}"
-                )
-            token = json.loads(raw)["token"]
-            status, authentication = self._emqx_api(
-                token, "GET", "/api/v5/authentication"
-            )
-            if status != 200:
-                raise RuntimeError(
-                    f"read EMQX authentication configuration failed with HTTP {status}"
-                )
-            if "password_based:built_in_database" not in authentication:
-                status, _ = self._emqx_api(
-                    token,
-                    "POST",
-                    "/api/v5/authentication",
-                    {
-                        "mechanism": "password_based",
-                        "backend": "built_in_database",
-                        "user_id_type": "username",
-                        "password_hash_algorithm": {
-                            "name": "sha256",
-                            "salt_position": "suffix",
-                        },
-                    },
-                )
-                if status not in {200, 201, 204, 409}:
-                    raise RuntimeError(
-                        f"create EMQX password authenticator failed with HTTP {status}"
-                    )
-            users = [
-                ("agentvault-vault", "E2E_AGENTVAULT_MQTT_PASSWORD"),
-                ("marketpulse-payee", "E2E_MARKETPULSE_MQTT_PASSWORD"),
-                *(
-                    (identity.mqtt_username, "E2E_QUANTSTREAM_MQTT_PASSWORD")
-                    for identity in PAYER_IDENTITIES.values()
-                ),
-                *(
-                    (
-                        identity.approver_mqtt_username,
-                        "E2E_QUANTSTREAM_UI_MQTT_PASSWORD",
-                    )
-                    for identity in PAYER_IDENTITIES.values()
-                ),
-            ]
-            for user, password_name in users:
-                path = "/api/v5/authentication/password_based%3Abuilt_in_database/users"
-                status, _ = self._emqx_api(
-                    token,
-                    "POST",
-                    path,
-                    {
-                        "user_id": user,
-                        "password": self.environment[password_name],
-                        "is_superuser": False,
-                    },
-                )
-                if status == 409:
-                    status, _ = self._emqx_api(
-                        token,
-                        "PUT",
-                        f"{path}/{user}",
-                        {
-                            "password": self.environment[password_name],
-                            "is_superuser": False,
-                        },
-                    )
-                if status not in {200, 201, 204}:
-                    raise RuntimeError(
-                        f"EMQX user {user} provisioning failed with HTTP {status}"
-                    )
-            probe_environment = {
-                **self.environment,
-                "MQTT_PORT": self.environment["E2E_EMQX_MQTT_PORT"],
-                "MQTT_WORKLOAD_USERNAME": self.environment[
-                    "E2E_QUANTSTREAM_MQTT_USERNAME"
-                ],
-                "MQTT_APPROVER_USERNAME": self.environment[
-                    "E2E_QUANTSTREAM_UI_MQTT_USERNAME"
-                ],
-                "MQTT_CLIENT_ID": self.environment["E2E_QUANTSTREAM_CLIENT_ID"],
-                "MQTT_APPROVER_PRINCIPAL": self.environment[
-                    "E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL"
-                ],
-                "MQTT_WORKLOAD_PASSWORD": self.environment[
-                    "E2E_QUANTSTREAM_MQTT_PASSWORD"
-                ],
-                "MQTT_APPROVER_PASSWORD": self.environment[
-                    "E2E_QUANTSTREAM_UI_MQTT_PASSWORD"
-                ],
-                "MQTT_VAULT_PASSWORD": self.environment["E2E_AGENTVAULT_MQTT_PASSWORD"],
-                "MQTT_PAYEE_PASSWORD": self.environment[
-                    "E2E_MARKETPULSE_MQTT_PASSWORD"
-                ],
-            }
-            E2EProcessHelper.run(
-                ["python3", str(Project.E2E_ROOT / "verifier/infra/s02_emqx_acl.py")],
-                Project.E2E_ROOT,
-                probe_environment,
-                90,
-            )
-
         def _target_budget(self) -> None:
             target = Project.REPOSITORY_ROOT / "target"
             if not target.exists():
@@ -932,12 +788,18 @@ class E2ES00InfrastructureVerifier:
             for chart in charts:
                 namespace = self._chart_namespace(chart)
                 release_name = self._chart_name(chart)
-                values = (
-                    (AGENTVAULT_VALUES,)
-                    if chart.resolve() == AGENTVAULT_CHART.resolve()
-                    else ()
-                )
+                values = self._shared_overrides_for_chart(chart)
                 flags = self._chart_image_flags(chart, values)
+                if namespace in {
+                    PAYER_NAMESPACE,
+                    PAYEE_NAMESPACE,
+                } and chart.parent.name.startswith("mock-"):
+                    flags.extend(
+                        (
+                            "--set-string",
+                            "env.AGENTVAULT_HTTP_BASE_URL=http://127.0.0.1:8080",
+                        )
+                    )
                 flags += [item for path in values for item in ("--values", str(path))]
                 self._run(
                     ["helm", "lint", "--namespace", namespace, str(chart), *flags]
@@ -1005,7 +867,7 @@ class E2ES00InfrastructureVerifier:
             self._dependency_initialize(role, include_solana=include_solana)
 
         def _dependency_deploy(self, role: str, *, include_solana: bool = True) -> None:
-            services = ["anvil", "postgres", "emqx", "jaeger"]
+            services = ["anvil", "postgres", "jaeger"]
             if include_solana:
                 services.insert(1, "solana")
             self._compose(("infra", role), "up", "-d", *services)
@@ -1019,7 +881,6 @@ class E2ES00InfrastructureVerifier:
             if include_solana:
                 self._wait_rpc(self._url("E2E_SOLANA_RPC_PORT"), "getHealth", "ok", 90)
             self._compose(("infra", role), "up", "--no-deps", "evm-fixture")
-            self._bootstrap_emqx()
             if role == "payee":
                 self._wait_http(self._url("E2E_FACILITATOR_PORT", "/health"), 60)
 
@@ -1049,9 +910,6 @@ class E2ES00InfrastructureVerifier:
                 "-d",
                 "agentvault",
             )
-            self._compose(
-                profiles, "exec", "-T", "emqx", "/opt/emqx/bin/emqx", "ctl", "status"
-            )
             self._wait_http(self._url("E2E_JAEGER_UI_PORT"), 5)
             if role == "payee":
                 self._facilitator_capabilities()
@@ -1062,7 +920,7 @@ class E2ES00InfrastructureVerifier:
                         "payer profile unexpectedly started the facilitator"
                     )
             chains = "Anvil and Solana" if include_solana else "Anvil"
-            return f"dependency {role} smoke passed; real {chains}, PostgreSQL, EMQX and Jaeger are healthy"
+            return f"dependency {role} smoke passed; real {chains}, PostgreSQL and Jaeger are healthy"
 
         def _solana_command(
             self, executable: str, *arguments: str, timeout: float = 60
@@ -1201,7 +1059,6 @@ class E2ES00InfrastructureVerifier:
                     "agentvault",
                     f"marketpulse-{payee}",
                     "facilitator",
-                    "emqx",
                     "postgres",
                     "anvil",
                     f"quantstream-{payer}",
@@ -1482,19 +1339,10 @@ class E2ES00InfrastructureVerifier:
                 "postgres-password": self.environment.get(
                     "E2E_POSTGRES_PASSWORD", "agentvault-e2e-only"
                 ),
-                "emqx-dashboard-password": self.environment[
-                    "E2E_EMQX_DASHBOARD_PASSWORD"
-                ],
                 "facilitator-private-key": self.environment.get(
                     "E2E_FACILITATOR_PRIVATE_KEY",
                     "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
                 ),
-                "mqtt-workload-password": self.environment[
-                    "E2E_QUANTSTREAM_MQTT_PASSWORD"
-                ],
-                "mqtt-approver-password": self.environment[
-                    "E2E_QUANTSTREAM_UI_MQTT_PASSWORD"
-                ],
                 "admin-ui-token": self.environment.get(
                     "E2E_QUANTSTREAM_UI_TOKEN",
                     "quantstream-e2e-ui-token-0000000000000000001",
@@ -1502,19 +1350,6 @@ class E2ES00InfrastructureVerifier:
             }
             for namespace in (INFRA_NAMESPACE, PAYMENT_NAMESPACE, PAYER_NAMESPACE):
                 self._apply_secret(namespace, "marketpulse-e2e-secrets", shared)
-            for (
-                language,
-                chart_language,
-            ) in E2EImagesDefinitions.LANGUAGE_IMAGE_NAMES.items():
-                self._apply_secret(
-                    PAYEE_NAMESPACE,
-                    f"marketpulse-{chart_language}-e2e-secrets",
-                    {
-                        "agentvault-mqtt-password": self.environment[
-                            "E2E_MARKETPULSE_MQTT_PASSWORD"
-                        ]
-                    },
-                )
 
             # The manifest refers to the HELPER_SECRET_QUANTSTREAM_* slots;
             # preserve explicit operator overrides while keeping deterministic E2E defaults.
@@ -1556,9 +1391,6 @@ class E2ES00InfrastructureVerifier:
                     "E2E_AGENTVAULT_APPROVAL_KEY",
                     "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
                 ),
-                "HELPER_SECRET_MQTT_PASSWORD": self.environment[
-                    "E2E_AGENTVAULT_MQTT_PASSWORD"
-                ],
                 "AUTHGUARD__AUTHZ__SCOPE_DELIVERY__DIRECT_CONTEXT_HMAC_KEY": "agentvault-e2e-authguard-disabled-key",
                 **wallet_values,
             }
@@ -1635,12 +1467,6 @@ class E2ES00InfrastructureVerifier:
                 )
             component = E2EImagesDefinitions.COMPONENT_KEYS.get(chart.parent.name)
             selected = {
-                **{
-                    f"env.{name}": value
-                    for name, value in E2EImagesDefinitions.runtime_environment(
-                        component, self.environment
-                    ).items()
-                },
                 **selected,
             }
             if component and not any(
@@ -1677,21 +1503,10 @@ class E2ES00InfrastructureVerifier:
         def _component_chart(self, component: str) -> Path:
             return Project.component_chart(component)
 
-        @staticmethod
-        def _shared_overrides_for_chart(chart: Path) -> tuple[Path, ...]:
-            if chart.resolve() == AGENTVAULT_CHART.resolve():
-                return (AGENTVAULT_VALUES,)
-            component = chart.parent.name
-            if component.startswith("mock-payee-marketpulse-"):
-                return (MARKETPULSE_SHARED_VALUES,)
-            if component.startswith("mock-payer-quantstream-service-"):
-                return (QUANTSTREAM_SHARED_VALUES,)
-            return ()
-
         def _install_dependencies(self, role: str, *, include_solana: bool) -> None:
             if role not in {"payer", "payee"}:
                 raise ValueError(f"unsupported payment role: {role}")
-            for release in ("postgres", "emqx", "jaeger"):
+            for release in ("postgres", "jaeger"):
                 self._helm_install(
                     release, self._component_chart(release), INFRA_NAMESPACE
                 )
@@ -1718,8 +1533,6 @@ class E2ES00InfrastructureVerifier:
                 wait_for_jobs=True,
             )
 
-            with self._runtime_forwards(("emqx-mqtt", "emqx-dashboard")):
-                self._bootstrap_emqx()
             if role == "payee":
                 # The official facilitator requires the initialized Permit2 contracts.
                 # Deployment must not wait on readiness before init creates them.
@@ -1779,6 +1592,19 @@ class E2ES00InfrastructureVerifier:
                     }
                 )
 
+        def _read_agentvault_config(self) -> dict[str, Any]:
+            config_map = json.loads(
+                self._kubectl(
+                    "get",
+                    "configmap",
+                    "agentvault-config",
+                    "--namespace",
+                    AGENTVAULT_NAMESPACE,
+                    "--output=json",
+                )
+            )
+            return yaml.safe_load(config_map["data"]["agentvault.yaml"])
+
         def _install_agentvault(self) -> None:
             self._ensure_cluster_image(self.images["agentvault"])
             self._helm_install(
@@ -1824,8 +1650,9 @@ class E2ES00InfrastructureVerifier:
                     "persistence.existingClaim": self._business_claim(
                         "payee", language
                     ),
-                    "env.AGENTVAULT_TRANSPORT": self.context.transport,
-                    "env.AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
+                    "env.AGENTVAULT_TRANSPORT": "http",
+                    "env.AGENTVAULT_HTTP_BASE_URL": "http://127.0.0.1:8080",
+                    "env.AGENTVAULT_HTTP_TIMEOUT_SECONDS": "15",
                     "env.MARKETPULSE_RESOURCE_URL": f"http://{fqdn}:8081/mcp",
                     "env.MARKETPULSE_ORIGIN": f"http://{fqdn}:8081",
                 },
@@ -1843,7 +1670,6 @@ class E2ES00InfrastructureVerifier:
                     "env.QUANTSTREAM_CLIENT_ID": identity.client_id,
                     "env.QUANTSTREAM_SCENARIO_ID": identity.scenario_id,
                     "env.QUANTSTREAM_APPROVER_PRINCIPAL": identity.approver_principal,
-                    "env.AGENTVAULT_MQTT_APPROVER_USERNAME": identity.approver_mqtt_username,
                 },
             )
 
@@ -1921,11 +1747,8 @@ class E2ES00InfrastructureVerifier:
                 "tempo": "E2E_TEMPO_RPC_PORT",
                 "solana": "E2E_SOLANA_RPC_PORT",
                 "facilitator": "E2E_FACILITATOR_PORT",
-                "emqx-mqtt": "E2E_EMQX_MQTT_PORT",
-                "emqx-dashboard": "E2E_EMQX_DASHBOARD_PORT",
                 "jaeger": "E2E_JAEGER_UI_PORT",
                 "postgres": "E2E_POSTGRES_PORT",
-                "agentvault-grpc": "E2E_AGENTVAULT_GRPC_PORT",
                 "admin-ui": "E2E_QUANTSTREAM_UI_PORT",
             }
             previous: dict[str, str | None] = {}
@@ -1969,7 +1792,7 @@ class E2ES00InfrastructureVerifier:
             return self.verify_dependencies(role)
 
         def verify_dependencies(self, role: str) -> str:
-            forwards = ["anvil", "solana", "emqx-dashboard", "jaeger"]
+            forwards = ["anvil", "solana", "jaeger"]
             if role == "payee":
                 forwards.append("facilitator")
             with self._runtime_forwards(forwards):
@@ -1978,7 +1801,7 @@ class E2ES00InfrastructureVerifier:
                 self._wait_http(self._url("E2E_JAEGER_UI_PORT"), 10)
                 if role == "payee":
                     self._facilitator_capabilities()
-            return f"Kubernetes dependency {role} smoke passed; Anvil, Solana, PostgreSQL, EMQX and Jaeger are healthy"
+            return f"Kubernetes dependency {role} smoke passed; Anvil, Solana, PostgreSQL and Jaeger are healthy"
 
         def _solana_command(
             self, executable: str, *arguments: str, timeout: float = 60
@@ -2127,15 +1950,9 @@ class E2ES00InfrastructureVerifier:
                 ),
                 "env.QUANTSTREAM_CLIENT_ID": identity.client_id,
                 "env.QUANTSTREAM_SCENARIO_ID": identity.scenario_id,
-                "env.AGENTVAULT_TRANSPORT": self.context.transport,
-                "env.AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:50051",
-                "env.AGENTVAULT_GRPC_TLS": "false",
-                "env.AGENTVAULT_GRPC_TIMEOUT_SECONDS": "15",
-                "env.AGENTVAULT_MQTT_HOST": "127.0.0.1",
-                "env.AGENTVAULT_MQTT_PORT": "1883",
-                "env.AGENTVAULT_MQTT_TLS": "false",
-                "env.AGENTVAULT_MQTT_USERNAME": identity.mqtt_username,
-                "env.AGENTVAULT_MQTT_TIMEOUT_SECONDS": "15",
+                "env.AGENTVAULT_TRANSPORT": "http",
+                "env.AGENTVAULT_HTTP_BASE_URL": "http://127.0.0.1:8080",
+                "env.AGENTVAULT_HTTP_TIMEOUT_SECONDS": "15",
                 "env.AGENTVAULT_APPROVAL_TIMEOUT_SECONDS": "45",
             }
 
@@ -2643,6 +2460,8 @@ class E2ES00InfrastructureVerifier:
                         "cargo",
                         "test",
                         "--locked",
+                        "--package",
+                        "agentvault-common",
                         "--lib",
                         name,
                         "--",

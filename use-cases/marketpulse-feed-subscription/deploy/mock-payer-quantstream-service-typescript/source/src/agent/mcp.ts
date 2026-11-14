@@ -1,20 +1,22 @@
-import type {Task} from '@a2a-js/sdk';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Task } from "@a2a-js/sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   AgentVault,
-  GrpcConfig,
-  MqttConfig,
+  HttpConfig,
   PayerRequestContext,
   readBounded,
   type FetchPayerMiddleware,
   type VaultTransportConfig,
-} from '@agentvault/sdk';
+} from "@agentvault/sdk";
 
-const YESTERDAY_TOOL = 'marketpulse.yesterday_news';
-const REALTIME_TOOL = 'marketpulse.realtime_news';
+const YESTERDAY_TOOL = "marketpulse.yesterday_news";
+const REALTIME_TOOL = "marketpulse.realtime_news";
 
-export interface ToolResult { body: Uint8Array; paymentIntentId?: string }
+export interface ToolResult {
+  body: Uint8Array;
+  paymentIntentId?: string;
+}
 
 interface PaymentMetadata {
   runId: string;
@@ -37,45 +39,50 @@ export class MCPHelper {
   }
 
   static async fromEnvironment(): Promise<MCPHelper> {
-    const timeout = positive('AGENTVAULT_MQTT_TIMEOUT_SECONDS') * 1000;
-    const transportName = (process.env.AGENTVAULT_TRANSPORT ?? 'mqtt').trim().toLowerCase();
-    let transportConfig: VaultTransportConfig;
-    if (transportName === 'mqtt') {
-      transportConfig = { provider: 'mqtt', mqtt: new MqttConfig(
-        required('AGENTVAULT_MQTT_HOST'), positive('AGENTVAULT_MQTT_PORT'),
-        boolean('AGENTVAULT_MQTT_TLS'), required('AGENTVAULT_MQTT_USERNAME'),
-        required('AGENTVAULT_MQTT_PASSWORD'), 'quantstream-typescript',
-        required('QUANTSTREAM_CLIENT_ID'), timeout,
-      ) };
-    } else if (transportName === 'grpc') {
-      transportConfig = { provider: 'grpc', grpc: new GrpcConfig(
-        required('AGENTVAULT_GRPC_ENDPOINT'), boolean('AGENTVAULT_GRPC_TLS'), undefined, timeout,
-      ) };
-    } else {
-      throw new Error('AGENTVAULT_TRANSPORT must be mqtt or grpc');
-    }
+    const timeout = positive("AGENTVAULT_HTTP_TIMEOUT_SECONDS") * 1000;
+    const transportName = "http";
+    const transportConfig: VaultTransportConfig = {
+      provider: "http",
+      http: new HttpConfig(
+        required("AGENTVAULT_HTTP_BASE_URL"),
+        process.env.AGENTVAULT_AUTHGUARD_BEARER,
+        Number(required("AGENTVAULT_HTTP_TIMEOUT_SECONDS")) * 1000,
+      ),
+    };
     const vault = AgentVault.fromConfig(transportConfig);
-    console.info(JSON.stringify({
-      event: 'agentvault.sdk.payer.transport_selected', transport: transportName,
-    }));
-    const payer = vault.payer({
-      scenarioId: required('QUANTSTREAM_SCENARIO_ID'),
-      approvalTimeoutMs: positive('AGENTVAULT_APPROVAL_TIMEOUT_SECONDS') * 1000,
-      deliveryRetries: 1,
-    }).standard();
+    console.info(
+      JSON.stringify({
+        event: "agentvault.sdk.payer.transport_selected",
+        transport: transportName,
+      }),
+    );
+    const payer = vault
+      .payer({
+        scenarioId: required("QUANTSTREAM_SCENARIO_ID"),
+        approvalTimeoutMs:
+          positive("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS") * 1000,
+        deliveryRetries: 1,
+      })
+      .standard();
     const payments = new Map<string, string>();
     const paidFetch = mcpFetch(payer, payments);
     const mcpTransport = new StreamableHTTPClientTransport(
-      new URL(required('MARKETPULSE_URL')),
+      new URL(required("MARKETPULSE_URL")),
       { fetch: paidFetch },
     );
-    const client = new Client({ name: 'quantstream-typescript', version: '0.1.0' });
+    const client = new Client({
+      name: "quantstream-typescript",
+      version: "0.1.0",
+    });
     try {
       await client.connect(mcpTransport);
       const listed = await client.listTools();
       const tools = listed.tools.map((tool) => tool.name);
       for (const requiredTool of [YESTERDAY_TOOL, REALTIME_TOOL]) {
-        if (!tools.includes(requiredTool)) throw new Error(`MarketPulse MCP server did not expose ${requiredTool}`);
+        if (!tools.includes(requiredTool))
+          throw new Error(
+            `MarketPulse MCP server did not expose ${requiredTool}`,
+          );
       }
       return new MCPHelper(client, vault, payments, tools, payer);
     } catch (error: unknown) {
@@ -94,7 +101,10 @@ export class MCPHelper {
     return this.call(YESTERDAY_TOOL, runId, false);
   }
 
-  realtimeNews(runId: string, failAfterSettlement = false): Promise<ToolResult> {
+  realtimeNews(
+    runId: string,
+    failAfterSettlement = false,
+  ): Promise<ToolResult> {
     return this.call(REALTIME_TOOL, runId, failAfterSettlement);
   }
 
@@ -103,79 +113,163 @@ export class MCPHelper {
     runId: string,
     failAfterSettlement: boolean,
   ): Promise<ToolResult> {
-    if (tool === REALTIME_TOOL && process.env.MARKETPULSE_MESSAGE_PROTOCOL === 'a2a') return this.a2a(runId, failAfterSettlement);
-    if (!this.tools.has(tool)) throw new Error(`MarketPulse MCP tool ${JSON.stringify(tool)} is not registered`);
-    const metadata: PaymentMetadata = { runId, paid: tool === REALTIME_TOOL, failAfterSettlement };
+    if (
+      tool === REALTIME_TOOL &&
+      process.env.MARKETPULSE_MESSAGE_PROTOCOL === "a2a"
+    )
+      return this.a2a(runId, failAfterSettlement);
+    if (!this.tools.has(tool))
+      throw new Error(
+        `MarketPulse MCP tool ${JSON.stringify(tool)} is not registered`,
+      );
+    const metadata: PaymentMetadata = {
+      runId,
+      paid: tool === REALTIME_TOOL,
+      failAfterSettlement,
+    };
     const result = await this.client.callTool({
       name: tool,
       arguments: {},
       _meta: { agentvault: metadata },
     });
-    if (result.isError) throw new Error(`MarketPulse MCP tool ${tool} returned an application error`);
-    const body = new TextEncoder().encode(JSON.stringify(result.structuredContent ?? {}));
+    if (result.isError)
+      throw new Error(
+        `MarketPulse MCP tool ${tool} returned an application error`,
+      );
+    const body = new TextEncoder().encode(
+      JSON.stringify(result.structuredContent ?? {}),
+    );
     const paymentIntentId = this.payments.get(runId);
     this.payments.delete(runId);
     if (tool === REALTIME_TOOL && !paymentIntentId) {
-      throw new Error('paid MCP result omitted AgentVault payment metadata');
+      throw new Error("paid MCP result omitted AgentVault payment metadata");
     }
     return paymentIntentId ? { body, paymentIntentId } : { body };
   }
-  private async a2a(runId:string, failAfterSettlement:boolean):Promise<ToolResult> {
-    const url = process.env.MARKETPULSE_A2A_URL ?? required('MARKETPULSE_URL').replace(/\/mcp$/, '/a2a');
-    const headers:Record<string,string> = {'content-type':'application/json'};
-    if (failAfterSettlement) headers['x-e2e-fail-after-settlement'] = 'once';
-    const response = await this.payer.request(url, {method:'POST', headers, body:JSON.stringify({
-      jsonrpc:'2.0', id:runId, method:'message/send', params:{message:{kind:'message', messageId:runId,
-        role:'user', parts:[{kind:'text', text:REALTIME_TOOL}]}}})}, new PayerRequestContext(runId));
-    const value = await response.json() as {result?:Task};
+  private async a2a(
+    runId: string,
+    failAfterSettlement: boolean,
+  ): Promise<ToolResult> {
+    const url =
+      process.env.MARKETPULSE_A2A_URL ??
+      required("MARKETPULSE_URL").replace(/\/mcp$/, "/a2a");
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (failAfterSettlement) headers["x-e2e-fail-after-settlement"] = "once";
+    const response = await this.payer.request(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: runId,
+          method: "message/send",
+          params: {
+            message: {
+              kind: "message",
+              messageId: runId,
+              role: "user",
+              parts: [{ kind: "text", text: REALTIME_TOOL }],
+            },
+          },
+        }),
+      },
+      new PayerRequestContext(runId),
+    );
+    const value = (await response.json()) as { result?: Task };
     const task = value.result;
-    if (!response.ok || task?.status.state !== 'completed') throw new Error('A2A business Task did not complete');
+    if (!response.ok || task?.status.state !== "completed")
+      throw new Error("A2A business Task did not complete");
     const part = task.artifacts?.[0]?.parts[0];
     const payment = this.payer.payment(response);
-    if (part?.kind !== 'data' || !payment) throw new Error('paid A2A result omitted news or payment evidence');
-    console.info(JSON.stringify({event:'manual.payer.completed', run_id:runId, task_id:task.id,
-      message_protocol:'a2a', payment_protocol:payment.intent.protocol, intent_id:payment.intent.id, receipt_verified:true}));
-    return {body:new TextEncoder().encode(JSON.stringify(part.data)), paymentIntentId:payment.intent.id};
+    if (part?.kind !== "data" || !payment)
+      throw new Error("paid A2A result omitted news or payment evidence");
+    console.info(
+      JSON.stringify({
+        event: "manual.payer.completed",
+        run_id: runId,
+        task_id: task.id,
+        message_protocol: "a2a",
+        payment_protocol: payment.intent.protocol,
+        intent_id: payment.intent.id,
+        receipt_verified: true,
+      }),
+    );
+    return {
+      body: new TextEncoder().encode(JSON.stringify(part.data)),
+      paymentIntentId: payment.intent.id,
+    };
   }
-
 }
 
-function mcpFetch(payer: FetchPayerMiddleware, payments: Map<string, string>): typeof globalThis.fetch {
-  return async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+function mcpFetch(
+  payer: FetchPayerMiddleware,
+  payments: Map<string, string>,
+): typeof globalThis.fetch {
+  return async (
+    input: URL | RequestInfo,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const source = new Request(input, init);
     const metadata = await paymentMetadata(source.clone());
     if (!metadata) return payer.request(source);
     const headers = new Headers(source.headers);
-    headers.set('x-run-id', metadata.runId);
-    if (metadata.failAfterSettlement) headers.set('x-e2e-fail-after-settlement', 'once');
-    const operation = metadata.paid ? new PayerRequestContext(metadata.runId) : undefined;
-    const response = await payer.request(new Request(source, { headers }), undefined, operation);
+    headers.set("x-run-id", metadata.runId);
+    if (metadata.failAfterSettlement)
+      headers.set("x-e2e-fail-after-settlement", "once");
+    const operation = metadata.paid
+      ? new PayerRequestContext(metadata.runId)
+      : undefined;
+    const response = await payer.request(
+      new Request(source, { headers }),
+      undefined,
+      operation,
+    );
     const payment = payer.payment(response);
     if (payment) payments.set(metadata.runId, payment.intent.id);
     return response;
   };
 }
 
-async function paymentMetadata(request: Request): Promise<PaymentMetadata | undefined> {
-  if (request.method !== 'POST') return undefined;
+async function paymentMetadata(
+  request: Request,
+): Promise<PaymentMetadata | undefined> {
+  if (request.method !== "POST") return undefined;
   const body = await readBounded(await fetchlessResponse(request), 1024 * 1024);
   let value: unknown;
-  try { value = JSON.parse(new TextDecoder().decode(body)); } catch { return undefined; }
-  if (!isRecord(value) || value.method !== 'tools/call' || !isRecord(value.params)) return undefined;
+  try {
+    value = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    value.method !== "tools/call" ||
+    !isRecord(value.params)
+  )
+    return undefined;
   const meta = value.params._meta;
   if (!isRecord(meta) || !isRecord(meta.agentvault)) return undefined;
   const candidate = meta.agentvault;
-  if (typeof candidate.runId !== 'string' || typeof candidate.paid !== 'boolean'
-      || typeof candidate.failAfterSettlement !== 'boolean') return undefined;
+  if (
+    typeof candidate.runId !== "string" ||
+    typeof candidate.paid !== "boolean" ||
+    typeof candidate.failAfterSettlement !== "boolean"
+  )
+    return undefined;
   return candidate as unknown as PaymentMetadata;
 }
 
 async function fetchlessResponse(request: Request): Promise<Response> {
-  return new Response(await request.arrayBuffer(), { headers: request.headers });
+  return new Response(await request.arrayBuffer(), {
+    headers: request.headers,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === "object" && value !== null;
 }
 
 export function required(name: string): string {
@@ -186,12 +280,14 @@ export function required(name: string): string {
 
 export function positive(name: string): number {
   const value = Number(required(name));
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be positive`);
+  if (!Number.isInteger(value) || value <= 0)
+    throw new Error(`${name} must be positive`);
   return value;
 }
 
 function boolean(name: string): boolean {
   const value = required(name).toLowerCase();
-  if (!['true', 'false'].includes(value)) throw new Error(`${name} must be boolean`);
-  return value === 'true';
+  if (!["true", "false"].includes(value))
+    throw new Error(`${name} must be boolean`);
+  return value === "true";
 }

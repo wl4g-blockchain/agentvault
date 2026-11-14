@@ -5,7 +5,6 @@ edge. AgentVault does not parse login credentials, issue sessions, or evaluate
 IAM policies; it verifies AuthGuard's short-lived signed workload context (or
 resolves its opaque scope token over AuthGuard's internal gRPC service) and
 maps the resulting principal into the payment-domain Client/Scenario hierarchy.
-MQTT remains outside HTTP and uses broker ACL plus registered `client_id`.
 
 ```bash
 cp deploy/docker/.env.example deploy/docker/.env
@@ -14,13 +13,10 @@ docker compose -p agentvault --env-file deploy/docker/.env \
   -f deploy/docker/docker-compose.yaml up -d
 ```
 
-The only public listener is `http://localhost:8080`: `/auth/*` belongs to
-AuthGuard, `/api/v1/*` and the optional
-`/agentvault.transport.v1.PaymentTransport/*` gRPC service are protected and
-forwarded to AgentVault, and `/` serves the AgentVault Dashboard. Management
-port `9091` is loopback-only. Set
-`AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED=true` to enable that gRPC
-listener; clients still connect through Envoy rather than port `50051`.
+The public listener is `http://localhost:8080`: `/auth/*` belongs to
+AuthGuard, `/api/v1/*` is forwarded to AgentVault, and `/` serves the Dashboard.
+Management port `9091` is loopback-only. Every business SDK uses the same
+standard HTTP API through this edge.
 
 For an intentionally identity-free trusted network, use the separate open
 topology. It sets `server.authguard.enabled=false`; therefore every HTTP API is
@@ -39,14 +35,8 @@ symlink to that file; deployment-specific scalar and secret values belong in
 and the official x402 Facilitator are deliberately not embedded here; the full
 disposable stack lives under `use-cases/marketpulse-feed-subscription`.
 
-MQTT is disabled in this general-purpose stack. Enable it only after pointing
-AgentVault at a broker with password/TLS authentication and per-client topic
-ACLs. The E2E stack provisions and verifies that independent `client_id`
-boundary against EMQX; HTTP AuthGuard identity is never reused as MQTT trust.
-
-Unix-socket payment transport has been removed. On upgrade, delete the
-`agentvault.transport.local` subsection and any
-`AGENTVAULT__AGENTVAULT__TRANSPORT__LOCAL__*` environment overrides; strict typed
-configuration rejects those settings. Configure the existing gRPC or MQTT
-transport for SDK-to-Vault calls. HTTP administration and Envoy's TCP loopback
-forwarding retain their separate listener and authorization boundaries.
+The CLI can run independent HTTP services with `serve --role payer` and
+`serve --role payee`, or both role routers with `serve`. Configure distinct
+API and management listeners for two processes on one host. The payee startup
+path does not open wallet custody keys. Remove obsolete `agentvault.transport`
+settings when upgrading; configuration rejects unknown fields.

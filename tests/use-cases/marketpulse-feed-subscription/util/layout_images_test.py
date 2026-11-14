@@ -72,11 +72,11 @@ class LayoutImagesTest(unittest.TestCase):
             "E2E_AGENTVAULT_IMAGE": "localhost/custom-vault:review",
         }
         Images.configure(env)
-        self.assertTrue(env["E2E_EMQX_IMAGE"].startswith(Images.ALIYUN))
+        self.assertTrue(env["E2E_POSTGRES_IMAGE"].startswith(Images.ALIYUN))
         env["E2E_IMAGE_NETWORK"] = "NON_GFW"
-        self.assertTrue(Images.reference("emqx", env).startswith("docker.io/"))
+        self.assertTrue(Images.reference("postgres", env).startswith("docker.io/"))
         Images.configure(env)
-        self.assertTrue(env["E2E_EMQX_IMAGE"].startswith("docker.io/"))
+        self.assertTrue(env["E2E_POSTGRES_IMAGE"].startswith("docker.io/"))
         self.assertEqual(env["E2E_AGENTVAULT_IMAGE"], "localhost/custom-vault:review")
 
     def test_production_docker_build_uses_declared_arguments_and_component_overrides(

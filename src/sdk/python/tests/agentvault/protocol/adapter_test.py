@@ -13,32 +13,40 @@ from agentvault.sdk.protocol import PaymentProtocolFactory
 class ProtocolAdapterTest(unittest.TestCase):
     def test_shared_protocol_http_fixture(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_http.json").read_text()
+            (
+                Path(__file__).resolve().parents[4]
+                / "tests"
+                / "payment_protocol_http.json"
+            ).read_text()
         )
         self.assertEqual(fixture["schema"], "agentvault.sdk.protocol-http.v1")
         registry = PaymentProtocolFactory().create(("x402", "mpp"))
         encoded_evidence = {
-            "x402": encode_payment_response_header(SettleResponse(
-                success=True,
-                payer="0x" + "33" * 20,
-                transaction="0x1111",
-                network="eip155:42431",
-            )),
+            "x402": encode_payment_response_header(
+                SettleResponse(
+                    success=True,
+                    payer="0x" + "33" * 20,
+                    transaction="0x1111",
+                    network="eip155:42431",
+                )
+            ),
             "mpp": Receipt.success(
                 "0x1111", datetime(2033, 5, 18, 3, 33, 20, tzinfo=timezone.utc)
             ).to_payment_receipt(),
         }
         for name, contract in fixture["protocols"].items():
-            evidence = registry.get(name).merchant_evidence({
-                contract["evidence_header"]: encoded_evidence[name]
-            })
+            evidence = registry.get(name).merchant_evidence(
+                {contract["evidence_header"]: encoded_evidence[name]}
+            )
             self.assertIsNotNone(evidence)
             self.assertEqual(evidence.header_name, contract["evidence_header"])
         with self.assertRaises(ValueError):
-            registry.merchant_evidence({
-                fixture["protocols"][name]["evidence_header"]: value
-                for name, value in encoded_evidence.items()
-            })
+            registry.merchant_evidence(
+                {
+                    fixture["protocols"][name]["evidence_header"]: value
+                    for name, value in encoded_evidence.items()
+                }
+            )
         self.assertEqual(
             registry.credential_header_names(),
             ("payment-signature", "payment-authorization", "authorization"),
@@ -49,7 +57,7 @@ class ProtocolAdapterTest(unittest.TestCase):
         )
         expected = {
             (transport, protocol, role)
-            for transport in ("grpc", "mqtt")
+            for transport in ("http",)
             for protocol in ("x402", "mpp")
             for role in ("payer", "payee")
         }
@@ -57,12 +65,16 @@ class ProtocolAdapterTest(unittest.TestCase):
             (row["transport"], row["protocol"], row["role"])
             for row in fixture["matrix"]
         }
-        self.assertEqual(len(fixture["matrix"]), 8)
+        self.assertEqual(len(fixture["matrix"]), 4)
         self.assertEqual(actual, expected)
 
     def test_shared_protocol_mcp_fixture_uses_native_models(self) -> None:
         fixture = json.loads(
-            (Path(__file__).resolve().parents[4] / "tests" / "payment_protocol_mcp.json").read_text()
+            (
+                Path(__file__).resolve().parents[4]
+                / "tests"
+                / "payment_protocol_mcp.json"
+            ).read_text()
         )
         self.assertEqual(fixture["schema"], "agentvault.sdk.protocol-mcp.v1")
         registry = PaymentProtocolFactory().create(("x402", "mpp"))
@@ -70,7 +82,9 @@ class ProtocolAdapterTest(unittest.TestCase):
         combined_receipts: dict[str, object] = {}
         for name, contract in fixture["protocols"].items():
             with self.subTest(protocol=name):
-                challenge = registry.mcp_challenge(contract["challenge_response"], 16_384)
+                challenge = registry.mcp_challenge(
+                    contract["challenge_response"], 16_384
+                )
                 self.assertIsNotNone(challenge)
                 self.assertEqual(challenge[0].name, name)
                 credential_protocol, credential = registry.presented_mcp_credential(
@@ -103,7 +117,7 @@ class ProtocolAdapterTest(unittest.TestCase):
         )
         expected = {
             (transport, protocol, role)
-            for transport in ("grpc", "mqtt")
+            for transport in ("http",)
             for protocol in ("x402", "mpp")
             for role in ("payer", "payee")
         }

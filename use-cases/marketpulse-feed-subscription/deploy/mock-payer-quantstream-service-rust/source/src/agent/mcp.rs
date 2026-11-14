@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, env, sync::Arc, time::Duration};
 
 use agentvault_sdk::{
-    AgentVault, AuthorizedPayment, ConfiguredVaultTransport, GrpcConfig, MqttConfig, PayerConfig, PayerRequestContext,
+    AgentVault, AuthorizedPayment, ConfiguredVaultTransport, HttpConfig, PayerConfig, PayerRequestContext,
     PayerRequestExt, VaultTransportConfig,
 };
 use futures::stream::BoxStream;
@@ -49,34 +49,18 @@ impl MCPHelper {
     /// Returns an error for invalid configuration, MCP initialization, or a
     /// `MarketPulse` server that does not expose the required tools.
     pub async fn from_env() -> Result<Self, DynError> {
-        let transport_name = env::var("AGENTVAULT_TRANSPORT").unwrap_or_else(|_| "mqtt".to_owned());
-        let timeout = Duration::from_secs(positive_env("AGENTVAULT_MQTT_TIMEOUT_SECONDS")?);
+        let transport_name = "http";
+        let timeout = Duration::from_secs(positive_env("AGENTVAULT_HTTP_TIMEOUT_SECONDS")?);
         let payer = PayerConfig::new(required_env("QUANTSTREAM_SCENARIO_ID")?)?
             .with_approval_wait(
                 Duration::from_secs(positive_env("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")?),
                 Duration::from_secs(1),
             )
             .with_delivery_retries(1);
-        let transport_config = match transport_name.as_str() {
-            "mqtt" => VaultTransportConfig::Mqtt(MqttConfig {
-                host: required_env("AGENTVAULT_MQTT_HOST")?,
-                port: required_env("AGENTVAULT_MQTT_PORT")?.parse()?,
-                tls: required_env("AGENTVAULT_MQTT_TLS")?.parse()?,
-                username: required_env("AGENTVAULT_MQTT_USERNAME")?,
-                password: required_env("AGENTVAULT_MQTT_PASSWORD")?,
-                connection_prefix: "quantstream-rust".to_owned(),
-                vault_client_id: required_env("QUANTSTREAM_CLIENT_ID")?,
-                request_timeout: timeout,
-                max_response_bytes: 2 * 1024 * 1024,
-            }),
-            "grpc" => {
-                let mut config = GrpcConfig::new(required_env("AGENTVAULT_GRPC_ENDPOINT")?)
-                    .with_tls(required_env("AGENTVAULT_GRPC_TLS")?.parse()?);
-                config.request_timeout = timeout;
-                VaultTransportConfig::Grpc(config)
-            }
-            _ => return Err("AGENTVAULT_TRANSPORT must be mqtt or grpc".into()),
-        };
+        let mut config=HttpConfig::new(required_env("AGENTVAULT_HTTP_BASE_URL")?);
+        config.request_timeout=timeout;
+        config.authguard_bearer=env::var("AGENTVAULT_AUTHGUARD_BEARER").ok();
+        let transport_config=VaultTransportConfig::Http(config);
         let vault = Arc::new(AgentVault::from_config(transport_config)?);
         let http = vault.payer(payer)?.standard().client()?;
         tracing::info!(

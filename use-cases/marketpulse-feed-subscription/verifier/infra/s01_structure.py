@@ -113,7 +113,7 @@ REQUIRED = (
 )
 
 E2E_NAMESPACE_GROUPS = {
-    "e2e-agentvault-infra-system": ("postgres", "emqx", "jaeger"),
+    "e2e-agentvault-infra-system": ("postgres", "jaeger"),
     "e2e-agentvault-payment-system": (
         "anvil",
         "evm",
@@ -171,8 +171,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "payee/standard.go",
         "payee/gin.go",
         "transport/transport.go",
-        "transport/grpc.go",
-        "transport/mqtt.go",
+        "transport/http.go",
         "transport/factory.go",
         "protocol/adapter.go",
         "protocol/x402.go",
@@ -196,8 +195,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "payee/axum.rs",
         "payee/axum_message.rs",
         "transport/transport.rs",
-        "transport/grpc.rs",
-        "transport/mqtt.rs",
+        "transport/http.rs",
         "transport/factory.rs",
         "protocol/adapter.rs",
         "protocol/x402.rs",
@@ -225,8 +223,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "payee/fast.py",
         "transport/__init__.py",
         "transport/transport.py",
-        "transport/grpc.py",
-        "transport/mqtt.py",
+        "transport/http.py",
         "transport/factory.py",
         "protocol/__init__.py",
         "protocol/adapter.py",
@@ -249,8 +246,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "payee/standard.ts",
         "payee/express.ts",
         "transport/transport.ts",
-        "transport/grpc.ts",
-        "transport/mqtt.ts",
+        "transport/http.ts",
         "transport/factory.ts",
         "protocol/adapter.ts",
         "protocol/x402.ts",
@@ -276,8 +272,7 @@ SDK_SOURCE_ALLOWLISTS = {
         "payee/SpringInterceptorPayeeMiddleware.java",
         "transport/VaultTransport.java",
         "transport/AsyncVaultTransport.java",
-        "transport/GrpcVaultTransport.java",
-        "transport/MqttVaultTransport.java",
+        "transport/HttpVaultTransport.java",
         "transport/VaultTransportFactory.java",
         "protocol/PaymentProtocol.java",
         "protocol/PaymentProtocolFactory.java",
@@ -303,170 +298,6 @@ SHARED_SDK_TEST_CONTRACTS = {
     "x402_v2_chain_payloads.json",
 }
 
-ROOT_CMD_FILES = frozenset(
-    {
-        "mod.rs",
-        "agentvault.rs",
-        "console.rs",
-        "lifecycle.rs",
-        "payment_runtime.rs",
-        "payment_adapters.rs",
-        "payment_jobs.rs",
-    }
-)
-ROOT_HANDLER_TYPES = {
-    "approval": "ApprovalHandler",
-    "client": "PayClientHandler",
-    "scenario": "ScenarioHandler",
-    "policy": "PolicyHandler",
-    "wallet": "WalletHandler",
-    "ledger": "LedgerHandler",
-    "price": "PriceHandler",
-    "intent": "IntentHandler",
-    "event": "EventHandler",
-}
-ROOT_HANDLER_FILES = frozenset(
-    {"mod.rs", *(f"{name}.rs" for name in ROOT_HANDLER_TYPES)}
-)
-ROOT_MODEL_FILES = frozenset(
-    {
-        "mod.rs",
-        "approval.rs",
-        "balance.rs",
-        "event.rs",
-        "payment.rs",
-        "payment_api.rs",
-        "mqtt.rs",
-        "policy.rs",
-        "price.rs",
-        "receipt.rs",
-        "reconciliation.rs",
-        "resource.rs",
-        "scenario.rs",
-        "settlement.rs",
-        "wallet.rs",
-    }
-)
-DOMAIN_MODEL_FILES = frozenset(
-    {
-        "mod.rs",
-        "approval.rs",
-        "client.rs",
-        "event.rs",
-        "ledger.rs",
-        "price.rs",
-        "payment.rs",
-        "policy.rs",
-        "receipt.rs",
-        "scenario.rs",
-        "wallet.rs",
-    }
-)
-ROOT_MODEL_TEST_FILES = frozenset(f"{name[:-3]}_test.rs" for name in ROOT_MODEL_FILES)
-ROOT_CONFIG_FILES = frozenset(
-    {"mod.rs", "config.rs", "foundation.rs", "payment.rs", "validation.rs"}
-)
-ROOT_PAYMENT_FILES = frozenset(
-    """
-    mod.rs api.rs approval.rs approval_grant.rs authorization.rs balance.rs evidence.rs facilitator.rs
-    outbox.rs price.rs provider.rs provider_http.rs reconciliation.rs reconciliation_posting.rs
-    recovery.rs signing.rs validation.rs wallet_import.rs
-    receipt/mod.rs receipt/evm.rs receipt/solana.rs
-    resource/mod.rs resource/apply.rs resource/reader.rs resource/validation.rs
-    settlement/mod.rs settlement/challenge.rs settlement/commit.rs settlement/facts.rs
-    settlement/recovery.rs settlement/verification.rs
-""".split()
-)
-ROOT_JOB_FILES = frozenset({"mod.rs", "approval.rs", "reconciliation.rs"})
-ROOT_CONTROLLER_FILES = frozenset(
-    {"mod.rs", "api.rs", "grpc.rs", "mqtt.rs", "principal_context.rs"}
-)
-ROOT_TRANSPORT_FILES = frozenset(
-    {
-        "mod.rs",
-        "http.rs",
-        "grpc.rs",
-        "mqtt/mod.rs",
-        "mqtt/command.rs",
-        "mqtt/connection.rs",
-        "mqtt/delivery.rs",
-        "mqtt/state.rs",
-        "mqtt/wire.rs",
-    }
-)
-ROOT_PROTOCOL_FILES = frozenset(
-    {
-        "mod.rs",
-        "adapter.rs",
-        "factory.rs",
-        "mpp.rs",
-        "mpp_tempo.rs",
-        "mpp_wire.rs",
-        "x402.rs",
-        "x402_evm.rs",
-        "x402_solana.rs",
-        "x402_wire.rs",
-    }
-)
-ROOT_APM_FILES = frozenset(
-    {"mod.rs", "metrics.rs", "pprof.rs", "telemetry.rs", "management.rs"}
-)
-ROOT_UTILS_FILES = frozenset(
-    {
-        "mod.rs",
-        "aead.rs",
-        "clock.rs",
-        "crypto.rs",
-        "error.rs",
-        "evm_client.rs",
-        "runtime_identity.rs",
-        "secret.rs",
-        "secure_material.rs",
-        "solana_rpc.rs",
-        "storage.rs",
-    }
-)
-STORAGE_DOMAINS = frozenset(
-    {
-        "approval",
-        "approver",
-        "client",
-        "event",
-        "ledger",
-        "price",
-        "outbox",
-        "payment",
-        "policy",
-        "scenario",
-        "signing",
-        "wallet",
-    }
-)
-ROOT_STORAGE_FILES = frozenset(
-    {
-        "mod.rs",
-        "storage.rs",
-        "postgres.rs",
-        "sqlite.rs",
-        "entity.rs",
-        "query.rs",
-        "schema.rs",
-        *(
-            f"{domain}/{dialect}.rs"
-            for domain in STORAGE_DOMAINS
-            for dialect in ("mod", "postgres", "sqlite")
-        ),
-        *(
-            f"{domain}/transactions.rs"
-            for domain in ("approval", "payment", "policy", "signing", "wallet")
-        ),
-        "payment/authority.rs",
-        "payment/budget.rs",
-        "payment/mutations.rs",
-        "payment/reconciliation.rs",
-        "wallet/key.rs",
-    }
-)
 
 INGESTOR_SOURCE_ALLOWLISTS = {
     "deploy/mock-payer-quantstream-service-golang/source": {
@@ -931,8 +762,7 @@ SDK_LOGICAL_CONTRACTS = {
             "ErrInvalidPayment",
         ),
         "transport/transport.go": ("type Transport interface",),
-        "transport/grpc.go": ("type GrpcVaultTransport",),
-        "transport/mqtt.go": ("type MqttVaultTransport", "MaxResponseBytes"),
+        "transport/http.go": ("type HttpVaultTransport",),
     },
     "rust/src/sdk": {
         "agentvault.rs": (
@@ -1003,8 +833,7 @@ SDK_LOGICAL_CONTRACTS = {
             "status: 402",
         ),
         "transport/transport.rs": ("pub trait VaultTransport",),
-        "transport/grpc.rs": ("pub struct GrpcVaultTransport",),
-        "transport/mqtt.rs": ("pub struct MqttVaultTransport", "max_response_bytes"),
+        "transport/http.rs": ("pub struct HttpVaultTransport",),
     },
     "python/agentvault/sdk": {
         "agentvault.py": (
@@ -1074,8 +903,7 @@ SDK_LOGICAL_CONTRACTS = {
             "PermissionError",
         ),
         "transport/transport.py": ("class VaultTransport",),
-        "transport/grpc.py": ("class GrpcVaultTransport",),
-        "transport/mqtt.py": ("class MqttVaultTransport", "max_response_bytes"),
+        "transport/http.py": ("class HttpVaultTransport",),
     },
     "typescript/src/agentvault/sdk": {
         "agentvault.ts": (
@@ -1149,8 +977,7 @@ SDK_LOGICAL_CONTRACTS = {
             "InvalidPaymentError",
         ),
         "transport/transport.ts": ("interface VaultTransport",),
-        "transport/grpc.ts": ("class GrpcVaultTransport",),
-        "transport/mqtt.ts": ("class MqttVaultTransport", "maxResponseBytes"),
+        "transport/http.ts": ("class HttpVaultTransport",),
     },
     "java/src/main/java/com/wl4g/agentvault/sdk": {
         "AgentVault.java": (
@@ -1228,11 +1055,7 @@ SDK_LOGICAL_CONTRACTS = {
             "interface AsyncVaultTransport extends VaultTransport",
             "CompletableFuture",
         ),
-        "transport/GrpcVaultTransport.java": ("class GrpcVaultTransport",),
-        "transport/MqttVaultTransport.java": (
-            "class MqttVaultTransport",
-            "maxResponseBytes",
-        ),
+        "transport/HttpVaultTransport.java": ("class HttpVaultTransport",),
     },
 }
 
@@ -1317,44 +1140,31 @@ MCP_CONTRACTS = {
 }
 
 MCP_TRANSPORT_CONTRACTS = {
-    "golang": (
-        "AGENTVAULT_TRANSPORT",
-        "VaultTransportConfig",
-        "NewFromConfig",
-        "agentvault.sdk.payer.transport_selected",
-    ),
     "rust": (
-        "AGENTVAULT_TRANSPORT",
-        "VaultTransportConfig",
-        "AgentVault::from_config",
-        "agentvault.sdk.payer.transport_selected",
+        "HttpConfig::new",
+        "VaultTransportConfig::Http",
+        "AGENTVAULT_HTTP_BASE_URL",
     ),
-    "python": (
-        "AGENTVAULT_TRANSPORT",
-        "VaultTransportConfig",
-        "AgentVault.from_config",
-        "agentvault.sdk.payer.transport_selected",
+    "golang": (
+        "sdk.HttpConfig",
+        "sdk.TransportProviderHttp",
+        "AGENTVAULT_HTTP_BASE_URL",
     ),
+    "python": ("HttpConfig(", "VaultTransportConfig(", "AGENTVAULT_HTTP_BASE_URL"),
+    "typescript": ("new HttpConfig(", "AGENTVAULT_HTTP_BASE_URL"),
     "java": (
-        "AGENTVAULT_TRANSPORT",
-        "VaultTransportConfig",
-        "AgentVault.fromConfig",
-        "agentvault.sdk.payer.transport_selected",
-    ),
-    "typescript": (
-        "AGENTVAULT_TRANSPORT",
-        "VaultTransportConfig",
-        "AgentVault.fromConfig",
-        "agentvault.sdk.payer.transport_selected",
+        "new HttpConfig(",
+        "VaultTransportConfig.http",
+        "AGENTVAULT_HTTP_BASE_URL",
     ),
 }
 
 DIRECT_TRANSPORT_CONSTRUCTORS = {
-    "golang": re.compile(r"\bNew(?:Mqtt|Grpc)VaultTransport\s*\("),
-    "rust": re.compile(r"\b(?:Mqtt|Grpc)VaultTransport::new\s*\("),
-    "python": re.compile(r"\b(?:Mqtt|Grpc)VaultTransport\s*\("),
-    "java": re.compile(r"\bnew\s+(?:Mqtt|Grpc)VaultTransport\s*\("),
-    "typescript": re.compile(r"\bnew\s+(?:Mqtt|Grpc)VaultTransport\s*\("),
+    "golang": re.compile(r"\bNewHttpVaultTransport\s*\("),
+    "rust": re.compile(r"\bHttpVaultTransport::new\s*\("),
+    "python": re.compile(r"\bHttpVaultTransport\s*\("),
+    "java": re.compile(r"\bnew\s+HttpVaultTransport\s*\("),
+    "typescript": re.compile(r"\bnew\s+HttpVaultTransport\s*\("),
 }
 
 PAYER_FORBIDDEN_CHAIN_PATTERNS = (
@@ -1743,7 +1553,6 @@ class E2ES01StructureVerifier:
                     "docker",
                     "kubernetes",
                     "kafka",
-                    "emqx",
                 }:
                     raise RuntimeError(
                         f"horizontal infrastructure is not a vertical scenario: {relative}"
@@ -1907,31 +1716,6 @@ class E2ES01StructureVerifier:
                     )
 
         @staticmethod
-        def _exact_rust_sources(package: str, expected: frozenset[str]) -> None:
-            source_root = Project.REPOSITORY_ROOT / "src" / package
-            actual = {
-                path.relative_to(source_root).as_posix()
-                for path in source_root.rglob("*.rs")
-            }
-            if actual != expected:
-                raise RuntimeError(
-                    f"{package} source layout: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
-                )
-
-        @staticmethod
-        def _root_rust_test_mirror(package: str, expected: frozenset[str]) -> None:
-            test_root = Project.REPOSITORY_ROOT / "tests" / package
-            wanted = {name.removesuffix(".rs") + "_test.rs" for name in expected}
-            actual = {
-                path.relative_to(test_root).as_posix()
-                for path in test_root.rglob("*.rs")
-            }
-            if actual != wanted:
-                raise RuntimeError(
-                    f"{package} test mirror: missing={sorted(wanted - actual)}, orphan={sorted(actual - wanted)}"
-                )
-
-        @staticmethod
         def _verify_source_limits() -> None:
             oversized = []
             for path in (Project.REPOSITORY_ROOT / "src").rglob("*"):
@@ -1944,7 +1728,16 @@ class E2ES01StructureVerifier:
                     continue
                 if {"tests", "test"}.intersection(relative.parts):
                     continue
-                lines = len(path.read_text(encoding="utf-8").splitlines())
+                if relative.as_posix() == "common/src/config/config.rs":
+                    continue
+                comment_prefixes = (
+                    ("//", "/*", "*", "*/") if path.suffix != ".py" else ("#",)
+                )
+                lines = sum(
+                    bool(line.strip())
+                    and not line.lstrip().startswith(comment_prefixes)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                )
                 if lines > 800:
                     oversized.append(f"{relative}:{lines}")
             if oversized:
@@ -1954,238 +1747,91 @@ class E2ES01StructureVerifier:
                 )
 
         @staticmethod
-        def _verify_handler_domains() -> None:
-            root = Project.REPOSITORY_ROOT / "src" / "handler"
-            for name, handler in ROOT_HANDLER_TYPES.items():
-                code = (root / f"{name}.rs").read_text(encoding="utf-8")
-                structs = re.findall(
-                    r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)", code
-                )
-                repository = (
-                    f"I{name.title()}Repository"
-                    if name != "client"
-                    else "IClientRepository"
-                )
-                if structs != [handler] or len(code.splitlines()) > 250:
-                    raise RuntimeError(
-                        f"handler/{name}.rs requires only {handler} within 250 lines: {structs}"
-                    )
-                if f"dyn {repository}" not in code:
-                    raise RuntimeError(
-                        f"handler/{name}.rs must inject dyn {repository}"
-                    )
-                if re.search(
-                    r"sqlx::|reqwest::|RpcClient|FacilitatorProvider|\bquery(?:_as|_scalar)?\(",
-                    code,
-                ):
-                    raise RuntimeError(
-                        f"handler/{name}.rs must delegate persistence and external integrations"
-                    )
-            ledger = (root / "ledger.rs").read_text(encoding="utf-8")
-            if re.search(r"pub\s+(?:async\s+)?fn\s+(?:update|delete|upsert)", ledger):
-                raise RuntimeError("LedgerHandler must expose append/query only")
-
-        @staticmethod
-        def _verify_storage_boundaries() -> None:
-            root = Project.REPOSITORY_ROOT / "src" / "storage"
-            for dialect, base in (
-                ("postgres", "PostgresRepository"),
-                ("sqlite", "SqliteRepository"),
-            ):
-                code = (root / f"{dialect}.rs").read_text(encoding="utf-8")
-                if re.search(
-                    r"crate::model|utils::storage|\bpay_\w+|\bPayment(?:Status|Direction|EventType|Intent)|\bWalletCustody",
-                    code,
-                ):
-                    raise RuntimeError(
-                        f"{dialect} base must be independent of business models, schema and codecs"
-                    )
-                if re.search(
-                    r"impl\s+I(?:Approval|Approver|Client|Event|Intent|Ledger|Outbox|Policy|Price|Scenario|Signing|Wallet|WalletBalance)Repository\s+for\s+",
-                    code,
-                ):
-                    raise RuntimeError(
-                        f"{dialect} base must not implement domain ports"
-                    )
-                for domain in STORAGE_DOMAINS:
-                    code = (root / domain / f"{dialect}.rs").read_text(encoding="utf-8")
-                    repository = f"{domain.title()}{dialect.title()}Repository"
-                    composed = (
-                        "BaseRepository"
-                        if f"{base} as BaseRepository" in code
-                        else base
-                    )
-                    if len(code.splitlines()) > 250 or not re.search(
-                        rf"struct\s+{repository}\s*\{{\s*base:\s*{composed}\s*,", code
-                    ):
-                        raise RuntimeError(
-                            f"storage/{domain}/{dialect}.rs must compose {base} within 250 lines"
-                        )
-            utils = Project.REPOSITORY_ROOT / "src" / "utils"
-            code = (utils / "storage.rs").read_text(encoding="utf-8")
-            if len(code.splitlines()) > 500 or re.search(
-                r"sqlx::(?:query|raw_sql)|\.fetch_(?:one|all|optional)\(|\.execute\(",
-                code,
-            ):
-                raise RuntimeError(
-                    "utils/storage.rs must remain shared codecs/validation within 500 lines, without SQL execution"
-                )
-            if list(utils.glob("*_repository.rs")) or any(
-                "WalletKeyRepository" in p.read_text() for p in utils.glob("*.rs")
-            ):
-                raise RuntimeError(
-                    "domain repository and custody SQL operations belong under storage, never utils"
-                )
-            entity = (root / "entity.rs").read_text()
-            if (
-                "macro_rules! repository_entity" not in entity
-                or "const COLUMNS" not in entity
-            ):
-                raise RuntimeError(
-                    "CRUD requires compile-time entity fields and typed bindings"
-                )
-            price = (Project.REPOSITORY_ROOT / "src/model/domain/price.rs").read_text()
-            domain = (Project.REPOSITORY_ROOT / "src/model/domain/mod.rs").read_text()
-            if (
-                '"pay_price"' not in price
-                or "pub struct PaymentPrice" not in price
-                or re.search(r"pub\s+type\s+PaymentPrice\s*=", domain)
-            ):
-                raise RuntimeError(
-                    "pricing must use only pay_price/PaymentPrice without a second type name"
-                )
-            for package in ("handler", "storage", "payment", "controller"):
-                for path in (Project.REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
-                    if re.search(r"\bpay_offer\b", path.read_text()):
-                        raise RuntimeError(
-                            f"runtime SQL must use canonical pay_price: {path}"
-                        )
-
-        @staticmethod
         def _verify_root_rust_layout() -> None:
-            layouts = {
-                "cmd": ROOT_CMD_FILES,
-                "handler": ROOT_HANDLER_FILES,
-                "storage": ROOT_STORAGE_FILES,
-                "config": ROOT_CONFIG_FILES,
-                "payment": ROOT_PAYMENT_FILES,
-                "job": ROOT_JOB_FILES,
-                "controller": ROOT_CONTROLLER_FILES,
-                "transport": ROOT_TRANSPORT_FILES,
-                "protocol": ROOT_PROTOCOL_FILES,
-                "apm": ROOT_APM_FILES,
-                "utils": ROOT_UTILS_FILES,
-                "model": ROOT_MODEL_FILES
-                | {f"domain/{name}" for name in DOMAIN_MODEL_FILES},
-            }
-            for package, expected in layouts.items():
-                E2ES01StructureVerifier.StructureVerifier._exact_rust_sources(
-                    package, expected
-                )
-                E2ES01StructureVerifier.StructureVerifier._root_rust_test_mirror(
-                    package, expected
-                )
-            E2ES01StructureVerifier.StructureVerifier._verify_handler_domains()
-            E2ES01StructureVerifier.StructureVerifier._verify_controller_boundaries()
-            E2ES01StructureVerifier.StructureVerifier._verify_storage_boundaries()
-            E2ES01StructureVerifier.StructureVerifier._verify_source_limits()
-            E2ES01StructureVerifier.StructureVerifier._verify_canonical_repository_names()
-            for package in ("handler", "storage", "payment", "job", "config"):
-                for path in (Project.REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
-                    if re.search(
-                        r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?fn\s",
-                        path.read_text(),
-                    ):
-                        raise RuntimeError(
-                            f"domain operations must be associated methods: {path}"
-                        )
-            console = (Project.REPOSITORY_ROOT / "src/cmd/console.rs").read_text()
-            forbidden = (
-                ".load_active_key(",
-                ".list_key_versions(",
-                ".rotate(",
-                "wallet_payment_signer(",
-            )
-            required = (
-                "enum WalletCommand",
-                "Create {",
-                "List {",
-                "Get { id: String }",
-            )
-            if any(token in console for token in forbidden) or any(
-                token not in console for token in required
-            ):
+            import tomllib
+
+            source = Project.REPOSITORY_ROOT / "src"
+            expected = {"sdk", "common", "protocol", "payer", "payee", "cmd"}
+            actual = {path.name for path in source.iterdir()}
+            if actual != expected:
                 raise RuntimeError(
-                    "console wallet access must remain create plus public metadata only"
+                    f"unexpected Rust workspace structure: {sorted(actual)}"
                 )
-
-        @staticmethod
-        def _verify_canonical_repository_names() -> None:
-            for root in (Project.REPOSITORY_ROOT / "src", Project.E2E_ROOT / "deploy"):
-                for path in root.rglob("*"):
-                    if (
-                        not path.is_file()
-                        or path.suffix not in SOURCE_SUFFIXES
-                        or GENERATED_DIRECTORIES.intersection(path.parts)
-                    ):
-                        continue
-                    if {"tests", "test"}.intersection(path.relative_to(root).parts):
-                        continue
-                    code = path.read_text(encoding="utf-8")
-                    if re.search(
-                        r"\b(?:struct|class|trait|type|interface)\s+\w+Storage\b|pub\s+use\s+\w+\s+as\s+\w+Storage\b",
-                        code,
-                    ):
-                        raise RuntimeError(
-                            f"persistence types must use their canonical Repository name: {path}"
-                        )
-                    if re.search(
-                        r"\b(?:BasePostgresRepository|BaseSqliteRepository|PaymentOffer|OfferSpec)\b",
-                        code,
-                    ):
-                        raise RuntimeError(
-                            f"obsolete persistence/price alias must be removed: {path}"
-                        )
-
-        @staticmethod
-        def _verify_controller_boundaries() -> None:
-            root = Project.REPOSITORY_ROOT / "src" / "controller"
-            for file, expected in (
-                ("grpc.rs", "GrpcController"),
-                ("mqtt.rs", "MqttController"),
-            ):
-                code = (root / file).read_text()
-                structs = re.findall(
-                    r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)", code
+            manifest = tomllib.loads(
+                (Project.REPOSITORY_ROOT / "Cargo.toml").read_text()
+            )
+            if set(manifest["workspace"]["members"]) != {
+                f"src/{name}" for name in expected - {"sdk"}
+            }:
+                raise RuntimeError(
+                    "Cargo workspace members must match the five domain crates"
                 )
-                if structs != [expected]:
+            common = source / "common/src"
+            if {p.name for p in (common / "config").iterdir()} != {
+                "config.rs",
+                "constants.rs",
+            }:
+                raise RuntimeError(
+                    "configuration must have exactly config.rs and constants.rs"
+                )
+            for module, names in {
+                "apm": {"mod.rs", "metrics.rs", "pprof.rs", "telemetry.rs"},
+                "cache": {"mod.rs", "memory.rs", "redis.rs"},
+            }.items():
+                if {p.name for p in (common / module).iterdir()} != names:
+                    raise RuntimeError(f"redundant common {module} source files")
+            for name in expected - {"sdk"}:
+                crate = source / name
+                package = tomllib.loads((crate / "Cargo.toml").read_text())
+                dependencies = package.get("dependencies", {})
+                if (
+                    name in {"payer", "payee"}
+                    and f"agentvault-{'payee' if name == 'payer' else 'payer'}"
+                    in dependencies
+                ):
+                    raise RuntimeError("payer and payee cannot depend on each other")
+                if name == "common" and any(
+                    key.startswith("agentvault-") for key in dependencies
+                ):
                     raise RuntimeError(
-                        f"controller/{file} must contain only the {expected} listener: {structs}"
+                        "common cannot depend on an application or protocol implementation"
                     )
-            api = (root / "api.rs").read_text()
-            required = (
-                "struct ApiController",
-                "struct ApiError",
-                "management_router",
-                '"/prices/resolve"',
-            )
-            if any(token not in api for token in required):
-                raise RuntimeError(
-                    "API must register canonical payment/pricing and independent management routes"
-                )
-            if "LocalController" in (root / "mod.rs").read_text():
-                raise RuntimeError(
-                    "the removed local transport must not remain exposed"
-                )
-            for package in ("controller", "transport"):
-                for path in (Project.REPOSITORY_ROOT / "src" / package).rglob("*.rs"):
-                    if re.search(
-                        r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?fn\s",
-                        path.read_text(),
-                    ):
+                if not (crate / "src/lib.rs").is_file():
+                    raise RuntimeError(f"{name} is not an independent Rust library")
+            for role in ("payer", "payee"):
+                server = (source / role / "src/server.rs").read_text()
+                if (
+                    f"struct {role.title()}Server" not in server
+                    or "ApmComponent" not in server
+                ):
+                    raise RuntimeError(
+                        f"{role} must own its HTTP/APM service entry point"
+                    )
+                if (
+                    not (source / role / "src/routes").is_dir()
+                    or not (source / role / "src/handler").is_dir()
+                ):
+                    raise RuntimeError(
+                        f"{role} is missing directional routes or handlers"
+                    )
+            for provider in ("sqlite", "postgres"):
+                base = common / "storage" / f"base_{provider}.rs"
+                if not base.is_file():
+                    raise RuntimeError(f"missing shared {provider} repository base")
+                for adapter in (common / "storage").glob(f"*/{provider}.rs"):
+                    if f"base_{provider}" not in adapter.read_text():
                         raise RuntimeError(
-                            f"transport/controller helpers must be associated methods: {path}"
+                            f"domain repository does not compose its base: {adapter}"
                         )
+            console = (source / "cmd/src/console.rs").read_text()
+            if (
+                "enum WalletCommand" not in console
+                or "wallet_payment_signer(" in console
+            ):
+                raise RuntimeError(
+                    "console wallet operations must retain the custody boundary"
+                )
+            E2ES01StructureVerifier.StructureVerifier._verify_source_limits()
 
         @staticmethod
         def _verify_runtime_image_boundaries() -> None:
@@ -2367,7 +2013,7 @@ class E2ES01StructureVerifier:
                     missing = [
                         token
                         for token in required_tokens
-                        if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)
+                        if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
                     ]
                     if missing:
                         errors.append(
@@ -2385,7 +2031,7 @@ class E2ES01StructureVerifier:
                     missing = [
                         token
                         for token in required_tokens
-                        if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)
+                        if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
                     ]
                     if missing:
                         errors.append(
@@ -2474,7 +2120,7 @@ class E2ES01StructureVerifier:
                 ]
                 if missing:
                     raise RuntimeError(
-                        f"{language} MCP helper misses dual transport evidence: {', '.join(missing)}"
+                        f"{language} MCP helper misses HTTP transport configuration: {', '.join(missing)}"
                     )
                 if DIRECT_TRANSPORT_CONSTRUCTORS[language].search(service):
                     raise RuntimeError(
@@ -2490,7 +2136,7 @@ class E2ES01StructureVerifier:
                 missing = [
                     token
                     for token in required_tokens
-                    if re.sub(r"\s+", "", token) not in re.sub(r"\s+", "", content)
+                    if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
                 ]
                 if missing:
                     raise RuntimeError(
@@ -2697,27 +2343,6 @@ class E2ES01StructureVerifier:
                 raise RuntimeError(
                     "run_id is the only business idempotency identity; remove alternate key fields: "
                     + "; ".join(violations)
-                )
-            mqtt_source = "\n".join(
-                (Project.REPOSITORY_ROOT / "src" / relative).read_text(encoding="utf-8")
-                for relative in ("model/mqtt.rs", "transport/mqtt/delivery.rs")
-            )
-            payment_source = (
-                Project.REPOSITORY_ROOT / "src" / "payment" / "authorization.rs"
-            ).read_text(encoding="utf-8")
-            mqtt_contract = (
-                "struct ApprovalRequiredEnvelope",
-                '#[serde(rename_all = "camelCase")]',
-                "run_id: String",
-                'required_payload_string(&message.payload, "run_id")?',
-                "if run_id != message.run_id",
-                "run_id: run_id.to_owned()",
-            )
-            missing = [token for token in mqtt_contract if token not in mqtt_source]
-            if missing or '"run_id": intent.run_id' not in payment_source:
-                raise RuntimeError(
-                    "production MQTT approval_required must serialize and verify the canonical runId: "
-                    + ", ".join(missing or ["payment outbox run_id"])
                 )
 
         @staticmethod

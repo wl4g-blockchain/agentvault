@@ -27,12 +27,5 @@ func (factory *VaultTransportFactory) Create(settings config.VaultTransportConfi
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	switch settings.Provider {
-	case config.TransportProviderGrpc:
-		return NewGrpcVaultTransport(*settings.Grpc)
-	case config.TransportProviderMqtt:
-		return NewMqttVaultTransport(*settings.Mqtt)
-	default:
-		return nil, errors.New("unsupported AgentVault transport provider")
-	}
+	return NewHttpVaultTransport(*settings.Http)
 }

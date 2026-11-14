@@ -11,7 +11,6 @@ COPY use-cases/marketpulse-feed-subscription/deploy/mock-payer-quantstream-ui/so
 FROM ${E2E_QUANTSTREAM_UI_RUNTIME_IMAGE}
 WORKDIR /app
 COPY --from=builder --chown=65532:65532 /build/package.json /build/package-lock.json ./
-COPY --from=builder --chown=65532:65532 /build/node_modules ./node_modules
 COPY --from=builder --chown=65532:65532 /build/public ./public
 COPY --from=builder --chown=65532:65532 /build/src ./src
 USER 65532:65532

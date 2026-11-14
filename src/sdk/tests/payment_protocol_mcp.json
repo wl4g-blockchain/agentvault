@@ -6,19 +6,32 @@
         "jsonrpc": "2.0",
         "id": 1,
         "result": {
-          "content": [{"type": "text", "text": "{\"x402Version\":2,\"resource\":{\"url\":\"mcp://tool/marketpulse.realtime\",\"mimeType\":\"application/json\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:42431\",\"amount\":\"1000\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":60,\"asset\":\"0x2222222222222222222222222222222222222222\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"}}]}"}],
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"x402Version\":2,\"resource\":{\"url\":\"mcp://tool/marketpulse.realtime\",\"mimeType\":\"application/json\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:42431\",\"amount\":\"1000\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":60,\"asset\":\"0x2222222222222222222222222222222222222222\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"}}]}"
+            }
+          ],
           "structuredContent": {
             "x402Version": 2,
-            "resource": {"url": "mcp://tool/marketpulse.realtime", "mimeType": "application/json"},
-            "accepts": [{
-              "scheme": "exact",
-              "network": "eip155:42431",
-              "amount": "1000",
-              "payTo": "0x1111111111111111111111111111111111111111",
-              "maxTimeoutSeconds": 60,
-              "asset": "0x2222222222222222222222222222222222222222",
-              "extra": {"name": "USDC", "version": "2"}
-            }]
+            "resource": {
+              "url": "mcp://tool/marketpulse.realtime",
+              "mimeType": "application/json"
+            },
+            "accepts": [
+              {
+                "scheme": "exact",
+                "network": "eip155:42431",
+                "amount": "1000",
+                "payTo": "0x1111111111111111111111111111111111111111",
+                "maxTimeoutSeconds": 60,
+                "asset": "0x2222222222222222222222222222222222222222",
+                "extra": {
+                  "name": "USDC",
+                  "version": "2"
+                }
+              }
+            ]
           },
           "isError": true
         }
@@ -26,7 +39,10 @@
       "credential_meta": {
         "x402/payment": {
           "x402Version": 2,
-          "resource": {"url": "mcp://tool/marketpulse.realtime", "mimeType": "application/json"},
+          "resource": {
+            "url": "mcp://tool/marketpulse.realtime",
+            "mimeType": "application/json"
+          },
           "accepted": {
             "scheme": "exact",
             "network": "eip155:42431",
@@ -34,7 +50,10 @@
             "payTo": "0x1111111111111111111111111111111111111111",
             "maxTimeoutSeconds": 60,
             "asset": "0x2222222222222222222222222222222222222222",
-            "extra": {"name": "USDC", "version": "2"}
+            "extra": {
+              "name": "USDC",
+              "version": "2"
+            }
           },
           "payload": {
             "signature": "0xababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
@@ -67,14 +86,19 @@
           "message": "Payment Required",
           "data": {
             "httpStatus": 402,
-            "challenges": [{
-              "id": "challenge-0123456789abcdef",
-              "realm": "marketpulse.example",
-              "method": "tempo",
-              "intent": "charge",
-              "request": {"amount": "1000", "currency": "USDC"},
-              "header": "Payment-Authorization"
-            }]
+            "challenges": [
+              {
+                "id": "challenge-0123456789abcdef",
+                "realm": "marketpulse.example",
+                "method": "tempo",
+                "intent": "charge",
+                "request": {
+                  "amount": "1000",
+                  "currency": "USDC"
+                },
+                "header": "Payment-Authorization"
+              }
+            ]
           }
         }
       },
@@ -85,10 +109,16 @@
             "realm": "marketpulse.example",
             "method": "tempo",
             "intent": "charge",
-            "request": {"amount": "1000", "currency": "USDC"},
+            "request": {
+              "amount": "1000",
+              "currency": "USDC"
+            },
             "header": "Payment-Authorization"
           },
-          "payload": {"type": "hash", "hash": "0x1111"}
+          "payload": {
+            "type": "hash",
+            "hash": "0x1111"
+          }
         }
       },
       "receipt_meta": {
@@ -104,13 +134,25 @@
     }
   },
   "matrix": [
-    {"transport": "grpc", "protocol": "x402", "role": "payer"},
-    {"transport": "grpc", "protocol": "x402", "role": "payee"},
-    {"transport": "grpc", "protocol": "mpp", "role": "payer"},
-    {"transport": "grpc", "protocol": "mpp", "role": "payee"},
-    {"transport": "mqtt", "protocol": "x402", "role": "payer"},
-    {"transport": "mqtt", "protocol": "x402", "role": "payee"},
-    {"transport": "mqtt", "protocol": "mpp", "role": "payer"},
-    {"transport": "mqtt", "protocol": "mpp", "role": "payee"}
+    {
+      "transport": "http",
+      "protocol": "x402",
+      "role": "payer"
+    },
+    {
+      "transport": "http",
+      "protocol": "x402",
+      "role": "payee"
+    },
+    {
+      "transport": "http",
+      "protocol": "mpp",
+      "role": "payer"
+    },
+    {
+      "transport": "http",
+      "protocol": "mpp",
+      "role": "payee"
+    }
   ]
 }

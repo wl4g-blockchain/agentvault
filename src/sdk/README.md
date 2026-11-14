@@ -40,38 +40,19 @@ method. There are no parallel `PaymentClient`, `PayeeClient`, or
 `ApprovalClient` entrypoints; advanced operations remain methods on the role
 middleware or the single facade.
 
-Business applications choose one `VaultTransport` at startup:
+All five language SDKs call the standard HTTP/HTTPS JSON API. Configure one
+`HttpConfig` with the service base URL, optional AuthGuard bearer, request timeout
+and response size limit, then create `AgentVault` through its transport factory.
+The native clients reuse connections, bound response bodies and do not follow
+redirects with credentials. Rust and TypeScript expose Futures/Promises, Go uses
+request contexts, Python uses httpx, and Java exposes native CompletableFutures.
 
-- gRPC for synchronous service-to-service calls (TLS required off loopback);
-- MQTT for asynchronous client-scoped commands and correlated results;
-
-With gRPC, one transport instance can back both role middlewares and
-the approval methods on `AgentVault`. MQTT exposes only the payer/payee command
-flow and correlated results to workload credentials; approval events and the
-administrative query/decision API require a separate Admin identity.
-No SDK accepts
-a private key, arbitrary digest, `client_id`, or caller principal. Switching
-transport does not change middleware configuration or application handlers.
-
-MQTT keeps one connection and callback/event loop per transport instance. Go
-exposes `DoAsync`, Python `request_async`, Java `getAsync`/`postAsync`, and
-Rust/TypeScript return Futures/Promises. Request/response entrypoints wait
-on that same asynchronous implementation. Both commands and result subscriptions
-require QoS 1; a rejected or downgraded subscription fails closed.
-
-After reconnect, the transport restores the result subscription before replaying
-pending requests with identical envelope bytes and `requestSpanId`. The Vault
-receiver coalesces identical deliveries, rejects conflicting reuse, and preserves
-database idempotency through `run_id`. Deadlines include connection setup; pending
-requests are bounded, cancellation removes local waiters, and close is idempotent.
-Cancellation or timeout cannot undo a command already delivered to Vault: payment
-recovery must retain the original `run_id`. Pending SDK queues are in memory;
-financial recovery after process restart remains Vault's responsibility.
-
-The shared internal gRPC wire lives in `proto/transport.proto`. It deliberately
-wraps the same bounded SDK DTO contract instead of publishing a second business
-API surface.
-
+The SDK never accepts a private key, arbitrary digest, caller principal or
+`client_id`. Authorization comes from the HTTP identity boundary and durable
+Scenario ownership. A timeout does not cancel a committed payment: retain the
+same `run_id` across delivery retries, approval waits and recovery queries.
+Closing an SDK-created transport is idempotent; injected transports remain
+owned by the application.
 
 ## A2A automatic payments
 
@@ -121,7 +102,7 @@ Construct `vault` through the SDK's typed `AgentVault.from_config` /
 `fromConfig` / `NewFromConfig` entrypoint. In these snippets `store` is the
 application's TaskStore, `route` contains its existing scenario, price, resource
 and origin, and `request` contains an upstream `MessageSendParams` JSON-RPC body.
-Selecting MQTT versus gRPC in Vault configuration does not change this code.
+The same HTTP transport configuration backs every role adapter.
 
 | SDK | Payee attachment | Payer attachment |
 |---|---|---|
@@ -139,7 +120,7 @@ ownership stay with the host application.
 ### Reproducible SDK acceptance
 
 The shared [A2A fixture](tests/payment_protocol_a2a.json) defines native x402/MPP
-messages and the complete MQTT/gRPC × protocol × role contract. Mirrored
+messages and the complete HTTP × protocol × role contract. Mirrored
 `model/a2a`, `payer/a2a`, `payee/a2a` tests in each SDK execute both sides through
 the actual HTTP adapters. They cover Task continuation, stable operation hashes,
 Bearer preservation, extension negotiation, protocol conflicts, unsupported calls

@@ -8,7 +8,7 @@ The Go SDK exposes one framework-neutral core and thin ecosystem adapters:
   named MCP tool.
 
 ```go
-wire, err := agentvault.NewMqttVaultTransport(mqttConfig) // or NewGrpcVaultTransport
+wire, err := agentvault.NewHttpVaultTransport(agentvault.HttpConfig{BaseURL: "https://vault.example"})
 if err != nil { return err }
 vault := agentvault.New(wire)
 core, err := vault.Payer(payerConfig)
@@ -21,7 +21,7 @@ response, err := client.Do(request)
 ```
 
 The transport is selected once at startup; handlers and Middleware code are
-unchanged between gRPC and MQTT. DTOs never carry a
+backed by the same standard HTTP client. DTOs never carry a
 caller principal or `client_id`, and no SDK accepts private keys or arbitrary
 digests.
 

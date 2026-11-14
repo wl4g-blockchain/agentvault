@@ -11,18 +11,15 @@ command: []
 args:
   - "--once"
 env:
+  AGENTVAULT_HTTP_BASE_URL: "http://127.0.0.1:8080"
+  AGENTVAULT_HTTP_TIMEOUT_SECONDS: "15"
   MARKETPULSE_URL: "http://marketpulse:8081/mcp"
   QUANTSTREAM_CLIENT_ID: "client-quantstream-java"
   QUANTSTREAM_SCENARIO_ID: "scenario-quantstream-java-market-ingestion"
-  AGENTVAULT_MQTT_HOST: "emqx.e2e-agentvault-infra-system.svc.cluster.local"
-  AGENTVAULT_MQTT_PORT: "1883"
-  AGENTVAULT_MQTT_TLS: "false"
-  AGENTVAULT_MQTT_USERNAME: "quantstream-java-workload"
   QUANTSTREAM_DATABASE: "/var/lib/quantstream/ingestion.sqlite3"
 secret:
   name: marketpulse-e2e-secrets
   env:
-    AGENTVAULT_MQTT_PASSWORD: "mqtt-workload-password"
 ports: []
 service:
   enabled: false

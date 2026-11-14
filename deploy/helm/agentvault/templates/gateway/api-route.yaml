@@ -17,10 +17,6 @@ spec:
   rules:
     - matches: [{ path: { type: PathPrefix, value: /api/v1/ } }]
       backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ $backend.service.apiPort }} }]
-    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
-    - matches: [{ path: { type: PathPrefix, value: /agentvault.transport.v1.PaymentTransport/ } }]
-      backendRefs: [{ name: {{ include "agentvault.fullname" . }}, port: {{ $backend.service.grpcPort }} }]
-    {{- end }}
     - matches: [{ path: { type: PathPrefix, value: /agentvault-management/ } }]
       filters:
         - type: URLRewrite

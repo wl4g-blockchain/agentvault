@@ -20,6 +20,12 @@ jobs:
       issues: write
       packages: write
       pull-requests: write
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUST_TEST_THREADS: "2"
     outputs:
       dirty_tag: ${{ steps.dirty-tag.outputs.value }}
       dirty_chart_version: ${{ steps.dirty-tag.outputs.chart_version }}
@@ -131,7 +137,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: "1.26.x"
           cache-dependency-path: src/sdk/golang/go.sum
 
       - name: Install Java
@@ -155,19 +161,23 @@ jobs:
         with:
           version: v3.17.0
 
-      - name: Verify root Rust crate
+      - name: Verify Rust workspace
         run: |
           make fmt-check
           make lint
-          CARGO_BUILD_JOBS=4 cargo test --all-targets --locked
-          cargo test --locked --lib payment::wallet_import::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
+          make guard-target-size
+          CARGO_BUILD_JOBS=2 cargo test --workspace --all-targets --locked
+          make guard-target-size
+          cargo test --package agentvault-payer --locked --lib handler::wallet_import::tests::browser_public_key_encryption_reaches_kek_encrypted_sql -- --ignored --exact
 
       - name: Verify Rust SDK
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
           cargo fmt --manifest-path src/sdk/rust/Cargo.toml -- --check
+          make guard-target-size
           cargo clippy --manifest-path src/sdk/rust/Cargo.toml --all-targets --locked -- -D warnings
+          make guard-target-size
           cargo test --manifest-path src/sdk/rust/Cargo.toml --all-targets --locked
 
       - name: Verify Go SDK
@@ -335,12 +345,12 @@ jobs:
       - name: Pull immutable dirty runtime
         run: docker pull "${E2E_AGENTVAULT_IMAGE}"
 
-      - name: Run default Rust and Go SDK E2E matrix
+      - name: Run all five HTTP SDK E2E combinations
         run: |
           set -o pipefail
           mkdir -p use-cases/marketpulse-feed-subscription/reports
           python3 use-cases/marketpulse-feed-subscription/runner.py run \
-            --scenario matrix --e2e-sdk-scope simple \
+            --scenario matrix --e2e-sdk-scope full \
             --reuse-build --cleanup-after-run --timeout 150m \
             2>&1 | tee use-cases/marketpulse-feed-subscription/reports/ci-docker-runner.log
 

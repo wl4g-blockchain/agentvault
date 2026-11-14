@@ -43,37 +43,15 @@ type MCPHelper struct {
 
 func NewMCPHelperFromEnv(ctx context.Context) (*MCPHelper, error) {
 	values := &environment{}
-	mqttTimeout := values.positiveDuration("AGENTVAULT_MQTT_TIMEOUT_SECONDS")
+	httpTimeout := values.positiveDuration("AGENTVAULT_HTTP_TIMEOUT_SECONDS")
 	approvalTimeout := values.positiveDuration("AGENTVAULT_APPROVAL_TIMEOUT_SECONDS")
 	scenarioID := values.required("QUANTSTREAM_SCENARIO_ID")
 	marketPulseURL := values.required("MARKETPULSE_URL")
 	if values.err != nil {
 		return nil, values.err
 	}
-	transportName := os.Getenv("AGENTVAULT_TRANSPORT")
-	if transportName == "" {
-		transportName = "mqtt"
-	}
-	var settings sdk.VaultTransportConfig
-	switch strings.ToLower(strings.TrimSpace(transportName)) {
-	case "mqtt":
-		settings = sdk.VaultTransportConfig{Provider: sdk.TransportProviderMqtt, Mqtt: &sdk.MqttConfig{
-			Host:             values.required("AGENTVAULT_MQTT_HOST"),
-			Port:             uint16(values.positiveUint("AGENTVAULT_MQTT_PORT", 16)),
-			TLS:              values.boolean("AGENTVAULT_MQTT_TLS"),
-			Username:         values.required("AGENTVAULT_MQTT_USERNAME"),
-			Password:         values.required("AGENTVAULT_MQTT_PASSWORD"),
-			ConnectionPrefix: "quantstream-go", VaultClientID: values.required("QUANTSTREAM_CLIENT_ID"),
-			RequestTimeout: mqttTimeout,
-		}}
-	case "grpc":
-		settings = sdk.VaultTransportConfig{Provider: sdk.TransportProviderGrpc, Grpc: &sdk.GrpcConfig{
-			Endpoint: values.required("AGENTVAULT_GRPC_ENDPOINT"),
-			TLS:      values.boolean("AGENTVAULT_GRPC_TLS"), RequestTimeout: mqttTimeout,
-		}}
-	default:
-		return nil, errors.New("AGENTVAULT_TRANSPORT must be mqtt or grpc")
-	}
+	transportName := "http"
+	settings := sdk.VaultTransportConfig{Provider: sdk.TransportProviderHttp, Http: &sdk.HttpConfig{BaseURL: values.required("AGENTVAULT_HTTP_BASE_URL"), AuthguardBearer: os.Getenv("AGENTVAULT_AUTHGUARD_BEARER"), RequestTimeout: httpTimeout}}
 	if values.err != nil {
 		return nil, values.err
 	}

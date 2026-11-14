@@ -110,58 +110,15 @@ func (server *Server) Close() error {
 }
 
 func payeeVaultFromEnv() (*sdk.AgentVault, error) {
-	var settings sdk.VaultTransportConfig
-	switch strings.ToLower(envDefault("AGENTVAULT_TRANSPORT", "mqtt")) {
-	case "mqtt":
-		timeout, err := positiveSeconds("AGENTVAULT_MQTT_TIMEOUT_SECONDS")
-		if err != nil {
-			return nil, err
-		}
-		port, parseErr := strconv.ParseUint(envDefault("AGENTVAULT_MQTT_PORT", "1883"), 10, 16)
-		if parseErr != nil || port == 0 {
-			return nil, fmt.Errorf("AGENTVAULT_MQTT_PORT must be valid")
-		}
-		host, err := required("AGENTVAULT_MQTT_HOST")
-		if err != nil {
-			return nil, err
-		}
-		username, err := required("AGENTVAULT_MQTT_USERNAME")
-		if err != nil {
-			return nil, err
-		}
-		password, err := required("AGENTVAULT_MQTT_PASSWORD")
-		if err != nil {
-			return nil, err
-		}
-		clientID, err := required("AGENTVAULT_MQTT_CLIENT_ID")
-		if err != nil {
-			return nil, err
-		}
-		settings = sdk.VaultTransportConfig{Provider: sdk.TransportProviderMqtt, Mqtt: &sdk.MqttConfig{
-			Host: host, Port: uint16(port),
-			TLS:      envDefault("AGENTVAULT_MQTT_TLS", "false") == "true",
-			Username: username, Password: password,
-			ConnectionPrefix: "marketpulse-go", VaultClientID: clientID,
-			RequestTimeout: timeout,
-		}}
-	case "grpc":
-		timeout, err := positiveSeconds("AGENTVAULT_GRPC_TIMEOUT_SECONDS")
-		if err != nil {
-			return nil, err
-		}
-		endpoint, err := required("AGENTVAULT_GRPC_ENDPOINT")
-		if err != nil {
-			return nil, err
-		}
-		settings = sdk.VaultTransportConfig{Provider: sdk.TransportProviderGrpc, Grpc: &sdk.GrpcConfig{
-			Endpoint:       endpoint,
-			TLS:            envDefault("AGENTVAULT_GRPC_TLS", "false") == "true",
-			RequestTimeout: timeout,
-		}}
-	default:
-		return nil, fmt.Errorf("AGENTVAULT_TRANSPORT must be mqtt or grpc")
+	baseURL, err := required("AGENTVAULT_HTTP_BASE_URL")
+	if err != nil {
+		return nil, err
 	}
-	return sdk.NewFromConfig(settings)
+	timeout, err := positiveSeconds("AGENTVAULT_HTTP_TIMEOUT_SECONDS")
+	if err != nil {
+		return nil, err
+	}
+	return sdk.NewFromConfig(sdk.VaultTransportConfig{Provider: sdk.TransportProviderHttp, Http: &sdk.HttpConfig{BaseURL: baseURL, AuthguardBearer: os.Getenv("AGENTVAULT_AUTHGUARD_BEARER"), RequestTimeout: timeout}})
 }
 
 func envDefault(name, fallback string) string {

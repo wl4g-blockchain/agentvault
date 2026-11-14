@@ -25,8 +25,6 @@ class PayerIdentity:
     secondary_private_key_env: str
     primary_agentvault_key_env: str
     secondary_agentvault_key_env: str
-    mqtt_username: str
-    approver_mqtt_username: str
 
     @property
     def wallet_ids(self) -> tuple[str, str]:
@@ -48,8 +46,6 @@ class PayerIdentity:
             secondary_private_key_env=f"E2E_QUANTSTREAM_{upper}_SECONDARY_PAYER_PRIVATE_KEY",
             primary_agentvault_key_env=f"HELPER_SECRET_QUANTSTREAM_{upper}_PRIMARY_WALLET_PRIVATE_KEY",
             secondary_agentvault_key_env=f"HELPER_SECRET_QUANTSTREAM_{upper}_SECONDARY_WALLET_PRIVATE_KEY",
-            mqtt_username=f"quantstream-{language}-workload",
-            approver_mqtt_username=f"quantstream-{language}-approver",
         )
 
     @staticmethod
@@ -250,8 +246,6 @@ class VerificationContext:
             "E2E_QUANTSTREAM_CLIENT_ID": payer.client_id,
             "E2E_QUANTSTREAM_SCENARIO_ID": payer.scenario_id,
             "E2E_QUANTSTREAM_UI_APPROVER_PRINCIPAL": payer.approver_principal,
-            "E2E_QUANTSTREAM_MQTT_USERNAME": payer.mqtt_username,
-            "E2E_QUANTSTREAM_UI_MQTT_USERNAME": payer.approver_mqtt_username,
             # The runner is the lifecycle owner. It retains the stack unless
             # --cleanup-after-run is explicitly requested.
             "E2E_RUNNER_KEEP_STACK": "1",

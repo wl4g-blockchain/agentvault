@@ -173,8 +173,11 @@ class E2ES26ExactSettlementVerifier:
                 [
                     "cargo",
                     "test",
+                    "--package",
+                    "agentvault-protocol",
+                    "--lib",
                     "--locked",
-                    "protocol::x402::tests::live_solana_x402_vault_handlers_reconcile_both_ledgers",
+                    "x402::tests::live_solana_x402_vault_handlers_reconcile_both_ledgers",
                     "--",
                     "--ignored",
                     "--exact",
@@ -348,7 +351,7 @@ class E2ES26ExactSettlementVerifier:
 
         def verify_x402_solana(self) -> str:
             return self._run_live_rust_test(
-                "protocol::x402::tests::live_solana_x402_vault_handlers_reconcile_both_ledgers"
+                "x402::tests::live_solana_x402_vault_handlers_reconcile_both_ledgers"
             )
 
         def x402_solana(self):
