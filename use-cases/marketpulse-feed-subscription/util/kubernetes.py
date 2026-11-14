@@ -557,25 +557,53 @@ class E2EKubernetesDeployer:
             return not self.ctr
 
         @staticmethod
+        def inspect_image(
+            docker: list[str],
+            environment: dict[str, str],
+            reference: str,
+            *,
+            platform: str | None = None,
+            template: str = "{{json .}}",
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            command = [*docker, "image", "inspect"]
+            selection = ["--platform", platform] if platform else []
+            arguments = [f"--format={template}", reference]
+            result = E2EProcessHelper.execute(
+                [*command, *selection, *arguments],
+                Project.E2E_ROOT,
+                environment,
+                30,
+            )
+            # Docker 28.0/API 1.48 can save a selected platform but cannot
+            # inspect one. Callers still verify the returned OS/architecture.
+            unsupported = "unknown flag: --platform" in result.stdout or (
+                "--platform" in result.stdout
+                and "requires API version" in result.stdout
+            )
+            if result.returncode != 0 and selection and unsupported:
+                result = E2EProcessHelper.execute(
+                    [*command, *arguments], Project.E2E_ROOT, environment, 30
+                )
+            if check and result.returncode != 0:
+                raise RuntimeError(
+                    f"could not inspect source image {reference}:\n{result.stdout[-2048:]}"
+                )
+            return result
+
+        @staticmethod
         def image_platform(
             docker: list[str],
             environment: dict[str, str],
             reference: str,
             platform: str | None = None,
         ) -> str | None:
-            selection = ["--platform", platform] if platform else []
-            result = E2EProcessHelper.execute(
-                [
-                    *docker,
-                    "image",
-                    "inspect",
-                    *selection,
-                    "--format={{.Os}}/{{.Architecture}}",
-                    reference,
-                ],
-                Project.E2E_ROOT,
+            result = E2EKubernetesDeployer.LocalImageLoader.inspect_image(
+                docker,
                 environment,
-                15,
+                reference,
+                platform=platform,
+                template="{{.Os}}/{{.Architecture}}",
             )
             return result.stdout.strip() if result.returncode == 0 else None
 
@@ -586,15 +614,6 @@ class E2EKubernetesDeployer:
             )
             self.validate_platform(platform, reference)
             pull = [*self.docker, "pull", "--platform", platform]
-            inspect = [
-                *self.docker,
-                "image",
-                "inspect",
-                "--platform",
-                platform,
-                "--format={{json .}}",
-                reference,
-            ]
             pulled = False
             if (
                 self.image_platform(self.docker, self.environment, reference, platform)
@@ -613,7 +632,13 @@ class E2EKubernetesDeployer:
                     reference  # E2E application builds produce one selected platform.
                 )
             metadata = json.loads(
-                E2EProcessHelper.run(inspect, Project.E2E_ROOT, self.environment, 30)
+                self.inspect_image(
+                    self.docker,
+                    self.environment,
+                    reference,
+                    platform=platform,
+                    check=True,
+                ).stdout
             )
             descriptor = metadata.get("Descriptor", {})
             if descriptor.get("mediaType") in {
@@ -639,9 +664,13 @@ class E2EKubernetesDeployer:
                             timeout,
                         )
                         metadata = json.loads(
-                            E2EProcessHelper.run(
-                                inspect, Project.E2E_ROOT, self.environment, 30
-                            )
+                            self.inspect_image(
+                                self.docker,
+                                self.environment,
+                                reference,
+                                platform=platform,
+                                check=True,
+                            ).stdout
                         )
                         pinned = (
                             E2EImagesDefinitions.repository(reference)
@@ -1222,25 +1251,14 @@ class E2EKubernetesDeployer:
 
     def _ensure_cluster_image(self, reference: str) -> None:
         platform = E2EImagesDefinitions.reference_platform(reference, self.environment)
-        inspect = E2EProcessHelper.execute(
-            [
-                *self.docker,
-                "image",
-                "inspect",
-                "--platform",
-                platform,
-                "--format={{.Id}} {{.Os}}/{{.Architecture}}",
-                reference,
-            ],
-            Project.E2E_ROOT,
+        inspect = self._image_loader.inspect_image(
+            self.docker,
             self.environment,
-            30,
+            reference,
+            platform=platform,
+            template="{{.Id}} {{.Os}}/{{.Architecture}}",
+            check=True,
         )
-        if inspect.returncode != 0:
-            raise RuntimeError(
-                f"Kubernetes image {reference} is absent from the local source-image engine; "
-                "rerun without --skip-build"
-            )
         fields = inspect.stdout.strip().split()
         if len(fields) != 2:
             raise RuntimeError(f"invalid source image metadata for {reference}")
