@@ -1,5 +1,3 @@
-env:
-
 extraContainers:
   - name: local-envoy-cm
     image: ""

@@ -347,6 +347,17 @@ class E2ES00InfrastructureVerifier:
                 timeout=timeout,
             )
 
+        @staticmethod
+        def _shared_overrides_for_chart(chart: Path) -> tuple[Path, ...]:
+            if chart.resolve() == AGENTVAULT_CHART.resolve():
+                return (AGENTVAULT_VALUES,)
+            component = chart.parent.name
+            if component.startswith("mock-payee-marketpulse-"):
+                return (MARKETPULSE_SHARED_VALUES,)
+            if component.startswith("mock-payer-quantstream-service-"):
+                return (QUANTSTREAM_SHARED_VALUES,)
+            return ()
+
         def _chart_image_flags(
             self, chart: Path, values: Iterable[Path] = ()
         ) -> list[str]:
@@ -774,12 +785,18 @@ class E2ES00InfrastructureVerifier:
             for chart in charts:
                 namespace = self._chart_namespace(chart)
                 release_name = self._chart_name(chart)
-                values = (
-                    (AGENTVAULT_VALUES,)
-                    if chart.resolve() == AGENTVAULT_CHART.resolve()
-                    else ()
-                )
+                values = self._shared_overrides_for_chart(chart)
                 flags = self._chart_image_flags(chart, values)
+                if namespace in {
+                    PAYER_NAMESPACE,
+                    PAYEE_NAMESPACE,
+                } and chart.parent.name.startswith("mock-"):
+                    flags.extend(
+                        (
+                            "--set-string",
+                            "env.AGENTVAULT_HTTP_BASE_URL=http://127.0.0.1:8080",
+                        )
+                    )
                 flags += [item for path in values for item in ("--values", str(path))]
                 self._run(
                     ["helm", "lint", "--namespace", namespace, str(chart), *flags]
@@ -1482,17 +1499,6 @@ class E2ES00InfrastructureVerifier:
 
         def _component_chart(self, component: str) -> Path:
             return Project.component_chart(component)
-
-        @staticmethod
-        def _shared_overrides_for_chart(chart: Path) -> tuple[Path, ...]:
-            if chart.resolve() == AGENTVAULT_CHART.resolve():
-                return (AGENTVAULT_VALUES,)
-            component = chart.parent.name
-            if component.startswith("mock-payee-marketpulse-"):
-                return (MARKETPULSE_SHARED_VALUES,)
-            if component.startswith("mock-payer-quantstream-service-"):
-                return (QUANTSTREAM_SHARED_VALUES,)
-            return ()
 
         def _install_dependencies(self, role: str, *, include_solana: bool) -> None:
             if role not in {"payer", "payee"}:

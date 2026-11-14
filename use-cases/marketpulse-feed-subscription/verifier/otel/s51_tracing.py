@@ -70,22 +70,13 @@ class E2ES51TracingVerifier:
                                 r'trace[._]producer_span_id["\s:=]+([0-9a-f]{16})', line
                             )
                         )
-                transports = set()
-                for line in logs.splitlines():
-                    if trace_id in line:
-                        transports.update(
-                            re.findall(
-                                r"agentvault\.transport\.http\.request",
-                                line,
-                            )
-                        )
                 try:
-                    for transport in transports:
-                        E2ES51TracingVerifier.validate_parents(
-                            spans, producers, transport
-                        )
-                    if not transports:
-                        raise RuntimeError("trace has no correlated transport")
+                    if not any(
+                        trace_id in line and "agentvault.transport.http.request" in line
+                        for line in logs.splitlines()
+                    ):
+                        raise RuntimeError("trace has no correlated HTTP request")
+                    E2ES51TracingVerifier.validate_parents(spans, producers)
                 except RuntimeError:
                     # A child batch can reach Jaeger before its server span.
                     # Keep polling the same identity until the whole graph arrives.
@@ -104,14 +95,10 @@ class E2ES51TracingVerifier:
         return json.dumps({"sample_rate": 1.0, "traces": found}, sort_keys=True)
 
     @staticmethod
-    def validate_parents(
-        spans: list[dict], producers: set[str], transport: str
-    ) -> None:
+    def validate_parents(spans: list[dict], producers: set[str]) -> None:
         ids = {span["spanID"] for span in spans}
         consumers = [
-            span
-            for span in spans
-            if span.get("operationName") == f"{transport}.server.request"
+            span for span in spans if span.get("operationName") == "http.server.request"
         ]
         if not producers or not consumers:
             raise RuntimeError(
