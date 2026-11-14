@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    future::{ready, Future},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -74,8 +75,11 @@ where
 {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> std::result::Result<Self, Self::Rejection> {
-        parts.extensions.get::<Self>().cloned().ok_or(StatusCode::UNAUTHORIZED)
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
+        ready(parts.extensions.get::<Self>().cloned().ok_or(StatusCode::UNAUTHORIZED))
     }
 }
 

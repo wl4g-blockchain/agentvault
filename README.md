@@ -41,7 +41,7 @@ Read the [architecture white paper](docs/index.md) for flows, invariants, table 
 src/          Rust service: apm, cache, cmd, config, controller, handler,
               model, protocol, storage, utils
 migrations/   matching PostgreSQL and SQLite 001_init DDL/DML
-src/adapters/ Rust, Go, Python, TypeScript, and Java SDKs plus shared transport proto
+src/sdk/ Rust, Go, Python, TypeScript, and Java SDKs plus shared transport proto
 web/          AgentVault operations dashboard
 deploy/       Grafana, Docker, and Helm deployment assets
 use-cases/    real MarketPulse/QuantStream multi-process payment E2E
@@ -61,23 +61,29 @@ make test
 make build
 ```
 
-The Makefile checks `target/` before every build and runs `cargo clean` if it exceeds 10 GiB.
+`make build` builds the release binary and every supported client SDK: Rust,
+Go, Python (wheel), TypeScript (JavaScript and declarations), and Java (JAR).
+Use `make build-sdks` to omit the server binary, or invoke an individual
+SDK target such as `make build-sdk-typescript`.
+
+The Makefile checks both Rust `target/` directories before every build and runs
+`cargo clean` if either exceeds 10 GiB.
 
 SDK checks:
 
 ```bash
-(cd src/adapters/rust && cargo test --locked)
-(cd src/adapters/golang && go test ./...)
-(cd src/adapters/python && PYTHONPATH=. python3 -m unittest -v $(find tests -type f -name '*_test.py' | sort | sed 's#/#.#g;s#\.py$##'))
-(cd src/adapters/typescript && npm ci && npm test && npm run build)
-(cd src/adapters/java && mvn test)
+(cd src/sdk/rust && cargo test --locked)
+(cd src/sdk/golang && go test ./...)
+(cd src/sdk/python && PYTHONPATH=. python3 -m unittest -v $(find tests -type f -name '*_test.py' | sort | sed 's#/#.#g;s#\.py$##'))
+(cd src/sdk/typescript && npm ci && npm test && npm run build)
+(cd src/sdk/java && mvn test)
 ```
 
 Dashboard checks:
 
 ```bash
 (cd web && npm ci && npm test && npm run build)
-(cd use-cases/marketpulse-feed-subscription/e2e && \
+(cd use-cases/marketpulse-feed-subscription && \
   python3 runner.py -s web --e2e-sdk-scope full \
   --matrix-evidence-run <completed-matrix-run>)
 ```
@@ -122,7 +128,7 @@ The checked-in service configuration is safe by default: both `agentvault.payer.
 
 ## Real E2E
 
-`use-cases/marketpulse-feed-subscription/e2e/` builds two business systems:
+`use-cases/marketpulse-feed-subscription/` builds two business systems:
 
 - MarketPulse Payee: a free previous-day MCP news tool and a paid real-time tool.
 - QuantStream Payer: equivalent Rust, Go, Python, TypeScript, and Java ingestion services plus an administrator approval UI.
@@ -132,18 +138,18 @@ The x402 SDK matrix uses PostgreSQL, authenticated EMQX ACLs, the official x402 
 The five SDK protocol providers use x402 v2 for both HTTP (`PAYMENT-REQUIRED`, with compatible JSON-body parsing and conflict rejection) and MCP JSON-RPC (`structuredContent`/text challenges plus protocol-owned `_meta` credentials and receipts). MPP likewise supports HTTP and MCP through the official paymentauth wire types; a challenged payment header never overwrites an unrelated application Bearer token. Protocol-owned credential metadata is removed before the protected business handler runs.
 
 ```bash
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s structure
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s infrastructure
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payer
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s payee
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s full \
+python3 use-cases/marketpulse-feed-subscription/runner.py -s structure
+python3 use-cases/marketpulse-feed-subscription/runner.py -s infrastructure
+python3 use-cases/marketpulse-feed-subscription/runner.py -s payer
+python3 use-cases/marketpulse-feed-subscription/runner.py -s payee
+python3 use-cases/marketpulse-feed-subscription/runner.py -s full \
   --payer-language rust --payee-language rust
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s mpp-tempo
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s x402-solana
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix # simple: 8 cases
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py -s matrix \
+python3 use-cases/marketpulse-feed-subscription/runner.py -s mpp-tempo
+python3 use-cases/marketpulse-feed-subscription/runner.py -s x402-solana
+python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix # simple: 8 cases
+python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix \
   --e2e-sdk-scope full # full: 50 cases
-python3 use-cases/marketpulse-feed-subscription/e2e/runner.py --cleanup
+python3 use-cases/marketpulse-feed-subscription/runner.py --cleanup
 ```
 
 The x402 EVM language matrix, x402 Solana payment gate, and MPP Tempo charge gate produce separate immutable reports so one chain profile cannot mask another.

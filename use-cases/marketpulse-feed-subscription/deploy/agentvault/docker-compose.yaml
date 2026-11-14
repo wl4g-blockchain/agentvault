@@ -1,0 +1,15 @@
+services:
+  agentvault:
+    image: ${E2E_AGENTVAULT_IMAGE:?required}
+    platform: ${E2E_IMAGE_PLATFORM:?required}
+    build:
+      context: ../../../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BUILDKIT_SYNTAX: ${BUILDKIT_SYNTAX:?required}
+        RUST_BUILDER_IMAGE: ${E2E_AGENTVAULT_BUILD_IMAGE:?required}
+        RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:?required}
+    command: ["--config", "/etc/agentvault/e2e.yaml", "serve"]
+    volumes:
+      - ${E2E_AGENTVAULT_CONFIG_PATH:?required}:/etc/agentvault/e2e.yaml:ro
+    ports: ["${E2E_AGENTVAULT_PORT:-38080}:8080", "${E2E_AGENTVAULT_MGMT_PORT:-39091}:9091"]

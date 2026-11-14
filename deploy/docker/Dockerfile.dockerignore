@@ -1,0 +1,14 @@
+# This file applies only to deploy/docker/Dockerfile. Server builds retain the
+# shared Proto contracts but do not send independently built SDKs or the Web
+# application to the Docker daemon.
+.git
+target
+web
+use-cases
+src/sdk/golang
+src/sdk/java
+src/sdk/python
+src/sdk/rust
+src/sdk/tests
+src/sdk/typescript
+src/sdk/README.md

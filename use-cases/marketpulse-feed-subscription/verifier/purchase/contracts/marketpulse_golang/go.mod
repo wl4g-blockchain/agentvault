@@ -1,0 +1,47 @@
+module github.com/wl4g-blockchain/agentvault/use-cases/marketpulse-feed-subscription/verifier/purchase/contracts/marketpulse_golang
+
+go 1.26.0
+
+require (
+	github.com/a2aproject/a2a-go v0.3.15
+	github.com/gin-gonic/gin v1.12.0
+	github.com/wl4g-blockchain/agentvault/src/sdk/golang v0.0.0
+	github.com/wl4g-blockchain/agentvault/use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-golang-service/source v0.0.0
+)
+
+require (
+	github.com/eclipse/paho.mqtt.golang v1.5.0 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/gin-contrib/sse v1.1.0 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mattn/go-sqlite3 v1.14.24 // indirect
+	github.com/modelcontextprotocol/go-sdk v1.3.0 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/tempoxyz/mpp-go v0.2.0 // indirect
+	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/x402-foundation/x402/go/v2 v2.28.0 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
+	google.golang.org/grpc v1.76.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
+
+replace github.com/wl4g-blockchain/agentvault/use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-golang-service/source => ../../../../deploy/mock-payee-marketpulse-golang-service/source
+
+replace github.com/wl4g-blockchain/agentvault/src/sdk/golang => ../../../../../../src/sdk/golang

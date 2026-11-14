@@ -149,7 +149,7 @@ cache/
 ## 7. 多语言客户端 SDK
 
 ```text
-src/adapters/
+src/sdk/
 ├── config/config.(go|rs|py|ts)
 ├── model/{base,<domain-a>,<domain-b>}
 ├── <domain-a>/{<domain-a>,[ecosystem]}

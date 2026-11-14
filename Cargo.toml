@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Process-isolated EOA custody and AI-agent payment infrastructure"
-rust-version = "1.95"
+rust-version = "1.99.1"
 
 [lib]
 name = "agentvault"

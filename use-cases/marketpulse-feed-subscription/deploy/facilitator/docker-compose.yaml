@@ -1,0 +1,12 @@
+services:
+  facilitator:
+    image: ${E2E_FACILITATOR_IMAGE:?required}
+    platform: ${E2E_IMAGE_PLATFORM:?required}
+    ports: ["127.0.0.1:${E2E_FACILITATOR_PORT:-38085}:8085"]
+    volumes: ["./config.json:/app/config.json:ro"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8085/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped

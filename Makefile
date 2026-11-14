@@ -1,11 +1,21 @@
-.PHONY: help image-source guard-target-size lock clean build test e2e check fmt fmt-check lint verify image image-push image-remove
+.PHONY: help image-source guard-target-size guard-sdk-rust-target-size lock clean \
+	build build-root build-sdks build-sdk-rust build-sdk-go build-sdk-python \
+	build-sdk-typescript build-sdk-java test e2e check fmt fmt-check lint verify \
+	image image-push image-remove
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 CARGO ?= cargo
 DOCKER ?= docker
+GO ?= go
+MAVEN ?= mvn
+NPM ?= npm
+PYTHON ?= python3
 CARGO_BUILD_JOBS ?= 4
+RUST_VERSION ?= 1.99.1
+RUST_BUILDER_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/rust:$(RUST_VERSION)-slim
+RUNTIME_IMAGE ?= debian:trixie-slim
 E2E_LEVEL ?= full
 E2E_PAYER_LANGUAGE ?= rust
 E2E_PAYEE_LANGUAGE ?= rust
@@ -14,6 +24,11 @@ VERSION ?= $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
 IMAGE ?= ghcr.io/wl4g-blockchain/agentvault:$(VERSION)
 PLATFORM ?= linux/amd64
 DOCKER_BUILD_ARGS ?=
+SDK_RUST_DIR := src/sdk/rust
+SDK_GO_DIR := src/sdk/golang
+SDK_PYTHON_DIR := src/sdk/python
+SDK_TYPESCRIPT_DIR := src/sdk/typescript
+SDK_JAVA_DIR := src/sdk/java
 
 # Registry reachability is probed only for targets that consume container
 # images. Local formatting, compilation, and unit tests never make this
@@ -46,24 +61,19 @@ $(error AGENTVAULT_E2E_IMAGE_SOURCE must be aliyun or global)
 endif
 export AGENTVAULT_E2E_IMAGE_SOURCE
 
-ifeq ($(IMAGE_SOURCE),aliyun)
-BUILDER_IMAGE ?= docker.io/library/rust:1.95.0-bookworm
-RUNTIME_IMAGE ?= registry.cn-shenzhen.aliyuncs.com/wl4g/authguard-runtime:nonroot
-else
-BUILDER_IMAGE ?= docker.io/library/rust:1.95.0-bookworm
-RUNTIME_IMAGE ?= gcr.io/distroless/cc-debian12:nonroot
-endif
+BUILDER_IMAGE ?= $(RUST_BUILDER_IMAGE)
 
 BUILD_PROXY := $(or $(HTTPS_PROXY),$(https_proxy),$(HTTP_PROXY),$(http_proxy))
 ifneq ($(strip $(BUILD_PROXY)),)
-DOCKER_BUILD_ARGS += --network=host --build-arg HTTPS_PROXY=$(BUILD_PROXY) --build-arg HTTP_PROXY=$(BUILD_PROXY)
+DOCKER_BUILD_ARGS += --build-arg HTTPS_PROXY=$(BUILD_PROXY) --build-arg HTTP_PROXY=$(BUILD_PROXY)
 endif
 
 help:
 	@printf '%s\n' \
 		'AgentVault — enterprise AI-agent payment infrastructure' \
 		'' \
-		'  make build       Build the release agentvault binary' \
+		'  make build       Build the release binary and every client SDK' \
+		'  make build-sdks Build every client SDK without the binary' \
 		'  make test        Run unit and binary tests' \
 		'  make e2e         Run the real Docker payment E2E (default: full rust)' \
 		'  make check       Check every Rust target' \
@@ -80,15 +90,25 @@ image-source:
 	@echo "IN_CN_GFW=$(IN_CN_GFW)"
 	@echo "IMAGE_SOURCE=$(IMAGE_SOURCE)"
 	@echo "AGENTVAULT_E2E_IMAGE_SOURCE=$(AGENTVAULT_E2E_IMAGE_SOURCE)"
+	@echo "RUST_VERSION=$(RUST_VERSION)"
 	@echo "BUILDER_IMAGE=$(BUILDER_IMAGE)"
 	@echo "RUNTIME_IMAGE=$(RUNTIME_IMAGE)"
 
 # Protect shared development hosts from unbounded incremental artifacts.
 guard-target-size:
 	@size_kb=$$(du -sk target 2>/dev/null | cut -f1); \
-	  if [ "$${size_kb:-0}" -gt 10485760 ]; then \
-	    echo 'target/ exceeds 10 GiB; cleaning before Rust build'; \
+	  if [ "$${size_kb:-0}" -gt 20971520 ]; then \
+	    echo 'target/ exceeds 20 GiB; cleaning before Rust build'; \
 	    $(CARGO) clean; \
+	  fi
+
+# The Rust SDK is an independent crate, so Cargo writes to a separate target/
+# directory that needs the same shared-host safeguard as the root crate.
+guard-sdk-rust-target-size:
+	@size_kb=$$(du -sk '$(SDK_RUST_DIR)/target' 2>/dev/null | cut -f1); \
+	  if [ "$${size_kb:-0}" -gt 20971520 ]; then \
+	    echo '$(SDK_RUST_DIR)/target exceeds 20 GiB; cleaning before Rust SDK build'; \
+	    cd '$(SDK_RUST_DIR)' && $(CARGO) clean; \
 	  fi
 
 lock:
@@ -97,15 +117,45 @@ lock:
 clean:
 	$(CARGO) clean
 
-build: guard-target-size
+build:
+	$(MAKE) build-root
+	$(MAKE) build-sdks
+
+build-root: guard-target-size
 	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) build --release --locked
+
+# Keep each SDK independently invocable while the aggregate target remains
+# intentionally sequential: cross-language dependency resolution is memory- and
+# network-intensive on shared development hosts.
+build-sdks:
+	$(MAKE) build-sdk-rust
+	$(MAKE) build-sdk-go
+	$(MAKE) build-sdk-python
+	$(MAKE) build-sdk-typescript
+	$(MAKE) build-sdk-java
+
+build-sdk-rust: guard-sdk-rust-target-size
+	cd '$(SDK_RUST_DIR)' && CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) build --release --locked
+
+build-sdk-go:
+	cd '$(SDK_GO_DIR)' && $(GO) build ./...
+
+build-sdk-python:
+	cd '$(SDK_PYTHON_DIR)' && $(PYTHON) -m pip wheel --disable-pip-version-check \
+		--no-deps --no-build-isolation --wheel-dir dist .
+
+build-sdk-typescript:
+	cd '$(SDK_TYPESCRIPT_DIR)' && $(NPM) ci && $(NPM) run build
+
+build-sdk-java:
+	$(MAVEN) -B -f '$(SDK_JAVA_DIR)/pom.xml' -DskipTests package
 
 test: guard-target-size
 	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) test --lib --bins --locked
 
 e2e: guard-target-size
 	timeout --signal=TERM --kill-after=2m $(E2E_TIMEOUT) \
-		python3 use-cases/marketpulse-feed-subscription/e2e/runner.py \
+		python3 use-cases/marketpulse-feed-subscription/runner.py \
 		--scenario $(E2E_LEVEL) \
 		--payer-language $(E2E_PAYER_LANGUAGE) \
 		--payee-language $(E2E_PAYEE_LANGUAGE) \
@@ -129,8 +179,8 @@ image: guard-target-size
 	$(DOCKER) buildx build --load \
 		--platform '$(PLATFORM)' \
 		--tag '$(IMAGE)' \
-		--file Dockerfile \
-		--build-arg BUILDER_IMAGE='$(BUILDER_IMAGE)' \
+		--file deploy/docker/Dockerfile \
+		--build-arg RUST_BUILDER_IMAGE='$(BUILDER_IMAGE)' \
 		--build-arg RUNTIME_IMAGE='$(RUNTIME_IMAGE)' \
 		$(DOCKER_BUILD_ARGS) .
 

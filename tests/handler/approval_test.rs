@@ -7,11 +7,13 @@ async fn handler_queries_its_configured_approval_repository() {
     let provider = crate::storage::StorageFactory::new().create(&config).await.unwrap();
     let handler = ApprovalHandler::new(provider.clone().ports().approvals);
     assert!(handler.get("absent").await.unwrap().is_none());
-    assert!(handler
-        .list_pending("absent", 1, PageRequest::default())
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+    assert_eq!(
+        handler
+            .list_pending("absent", 1, PageRequest::default())
+            .await
+            .unwrap()
+            .items,
+        Vec::<ApprovalRequest>::new()
+    );
     provider.close().await.unwrap();
 }
