@@ -410,6 +410,9 @@ class E2ES00InfrastructureVerifier:
                 )
             return name
 
+        def _read_agentvault_config(self) -> dict[str, Any]:
+            return yaml.safe_load(self.agentvault_config.read_text())
+
         def _render_agentvault_config(self) -> str:
             image_flags = self._chart_image_flags(
                 AGENTVAULT_CHART, (AGENTVAULT_VALUES,)
@@ -1588,6 +1591,19 @@ class E2ES00InfrastructureVerifier:
                         },
                     }
                 )
+
+        def _read_agentvault_config(self) -> dict[str, Any]:
+            config_map = json.loads(
+                self._kubectl(
+                    "get",
+                    "configmap",
+                    "agentvault-config",
+                    "--namespace",
+                    AGENTVAULT_NAMESPACE,
+                    "--output=json",
+                )
+            )
+            return yaml.safe_load(config_map["data"]["agentvault.yaml"])
 
         def _install_agentvault(self) -> None:
             self._ensure_cluster_image(self.images["agentvault"])

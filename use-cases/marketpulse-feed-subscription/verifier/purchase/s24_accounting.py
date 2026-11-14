@@ -14,7 +14,6 @@ import json
 import re
 import time
 
-import yaml
 from typing import Any
 
 from verifier.infra.s00_infrastructure import (
@@ -253,7 +252,7 @@ class E2ES24AccountingVerifier:
 
         def _assert_durable_invariants(self, payer: str, payee: str) -> str:
             identity = payer_identity(payer)
-            config = yaml.safe_load(self.agentvault_config.read_text())
+            config = self._read_agentvault_config()
             # HTTP identity is authoritative only when AuthGuard is enabled.
             # The standalone matrix deliberately uses the explicit open mode.
             approver = (

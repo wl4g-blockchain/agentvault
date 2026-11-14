@@ -94,6 +94,35 @@ class LifecycleTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 E2ES20PurchaseVerifier.init(context)
 
+    def test_runtime_configuration_comes_from_the_deployed_backend(self):
+        import json
+        from verifier.purchase.s20_purchase import E2ES20PurchaseVerifier as Purchase
+
+        config_text = "server: {authguard: {enabled: false}}"
+        expected = {"server": {"authguard": {"enabled": False}}}
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = object.__new__(Purchase.DockerRuntime)
+            runtime.agentvault_config = Path(directory) / "agentvault.yaml"
+            runtime.agentvault_config.write_text(config_text)
+            self.assertEqual(runtime._read_agentvault_config(), expected)
+        runtime = object.__new__(Purchase.KubernetesRuntime)
+        runtime._kubectl = Mock(
+            return_value=json.dumps(
+                {
+                    "data": {"agentvault.yaml": config_text},
+                }
+            )
+        )
+        self.assertEqual(runtime._read_agentvault_config(), expected)
+        runtime._kubectl.assert_called_once_with(
+            "get",
+            "configmap",
+            "agentvault-config",
+            "--namespace",
+            "e2e-agentvault-system",
+            "--output=json",
+        )
+
     def test_structure_rejects_unowned_functions_in_module_branches(self):
         import ast
 
