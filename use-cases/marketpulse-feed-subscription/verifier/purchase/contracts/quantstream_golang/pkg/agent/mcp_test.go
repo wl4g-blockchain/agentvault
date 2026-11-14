@@ -8,7 +8,7 @@ import (
 )
 
 func TestMCPHelperRequiresExplicitRuntimeConfiguration(t *testing.T) {
-	t.Setenv("AGENTVAULT_MQTT_PORT", "")
+	t.Setenv("AGENTVAULT_HTTP_BASE_URL", "")
 	helper, err := agent.NewMCPHelperFromEnv(context.Background())
 	if err == nil || helper != nil {
 		t.Fatalf("missing runtime configuration was accepted: helper=%v err=%v", helper, err)

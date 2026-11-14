@@ -22,7 +22,7 @@ AgentVault ── Scenario / Policy / Approval / Signer / Settlement / Ledger
 External x402 Facilitator / MPP Provider / fixed RPC endpoints
 ```
 
-AgentVault does not implement login, OAuth2/OIDC, sessions, or an IAM policy engine. The standard Docker and Helm deployments put every HTTP payment and Admin API behind AuthGuard. An operator may explicitly disable that integration, in which case HTTP is open by design. MQTT is independent and uses broker authentication, deny-by-default topic ACLs, and durable Client/Scenario mappings. Approval decisions use a separately authenticated administrator topic whose client and approver principal are verified against the SQL Scenario/Approver mapping; payloads cannot claim either identity.
+AgentVault does not implement login, OAuth2/OIDC, sessions, or an IAM policy engine. The standard Docker and Helm deployments put every HTTP payment and Admin API behind AuthGuard. An operator may explicitly disable that integration, in which case HTTP is open by design. SDK and browser callers use standard HTTP through that boundary. Approval decisions are HTTP operations checked against durable Scenario/Approver mappings; request bodies cannot claim either identity.
 
 The resource hierarchy is:
 
@@ -124,7 +124,7 @@ docker compose --env-file deploy/docker/.env \
 
 For an intentionally open trusted network, use `docker-compose.open.yaml`. Helm provides the same default-on AuthGuard dependency under `deploy/helm/agentvault/`.
 
-The checked-in service configuration is safe by default: both `agentvault.payer.enabled` and `agentvault.payee.enabled` are false. Production must provide SQL, Wallet KEKs, direction-specific adapters/Providers, the shared chain registry, and optional authenticated MQTT settings through operator-owned configuration and secret references.
+The checked-in service configuration is safe by default: both `agentvault.payer.enabled` and `agentvault.payee.enabled` are false. Production must provide SQL, Wallet KEKs, direction-specific adapters/Providers, the shared chain registry, and HTTP gateway access settings through operator-owned configuration and secret references.
 
 ## Real E2E
 
@@ -133,7 +133,7 @@ The checked-in service configuration is safe by default: both `agentvault.payer.
 - MarketPulse Payee: a free previous-day MCP news tool and a paid real-time tool.
 - QuantStream Payer: equivalent Rust, Go, Python, TypeScript, and Java ingestion services plus an administrator approval UI.
 
-The x402 SDK matrix uses PostgreSQL, authenticated EMQX ACLs, the official x402 Facilitator, Anvil/E2EUSDC, AgentVault, the Payee, and one SDK process. It verifies 402 retry, MQTT/gRPC signing, daily-limit approval, one-time grant consumption, EVM settlement, receipt/Ledger/transaction binding, exact facilitator gas accounting, and delivery recovery. An explicit x402 Solana gate runs the pinned upstream client/facilitator against a real local validator and proves exact SPL and lamport-fee conservation. A separate MPP gate uses the digest-pinned official Tempo localnet and an HTTP settlement boundary backed by the official MPP Rust SDK to verify a Vault-signed type-0x76 charge, verify/settle, lost-response recovery, one broadcast, receipt, and pathUSD conservation including gas.
+The x402 SDK matrix uses PostgreSQL, the official x402 Facilitator, Anvil/E2EUSDC, AgentVault, the Payee, and one SDK process. It verifies 402 retry, HTTP authorization and signing, daily-limit approval, one-time grant consumption, EVM settlement, receipt/Ledger/transaction binding, exact facilitator gas accounting, and delivery recovery. An explicit x402 Solana gate runs the pinned upstream client/facilitator against a real local validator and proves exact SPL and lamport-fee conservation. A separate MPP gate uses the digest-pinned official Tempo localnet and an HTTP settlement boundary backed by the official MPP Rust SDK to verify a Vault-signed type-0x76 charge, verify/settle, lost-response recovery, one broadcast, receipt, and pathUSD conservation including gas.
 
 The five SDK protocol providers use x402 v2 for both HTTP (`PAYMENT-REQUIRED`, with compatible JSON-body parsing and conflict rejection) and MCP JSON-RPC (`structuredContent`/text challenges plus protocol-owned `_meta` credentials and receipts). MPP likewise supports HTTP and MCP through the official paymentauth wire types; a challenged payment header never overwrites an unrelated application Bearer token. Protocol-owned credential metadata is removed before the protected business handler runs.
 
@@ -157,3 +157,21 @@ The x402 EVM language matrix, x402 Solana payment gate, and MPP Tempo charge gat
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+The Rust server is a Cargo workspace with `common`, `protocol`, `payer`, `payee`
+and `cmd` crates. Shared configuration is defined in
+`src/common/src/config/config.rs`; SQL adapters compose `base_sqlite.rs` or
+`base_postgres.rs`. Each payment direction owns its handlers, HTTP routes and
+service startup, with common APM and lifecycle components.
+
+With an operator-configured YAML and secrets, start the services independently:
+
+```sh
+agentvault --config /etc/agentvault/payer.yaml serve --role payer
+agentvault --config /etc/agentvault/payee.yaml serve --role payee
+```
+
+Use distinct API/management ports when both processes run on the same host.
+`serve` also supports the combined HTTP edge used by the isolated E2E stack.
+The payee-only startup path does not load wallet custody keys; reconciliation
+workers claim only their configured payment direction.

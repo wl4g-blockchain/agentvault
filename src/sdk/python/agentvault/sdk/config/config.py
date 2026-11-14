@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import re
 from dataclasses import dataclass
 
@@ -12,19 +11,14 @@ class _ProtocolNames:
     @staticmethod
     def validate(protocols: tuple[str, ...]) -> None:
         if (
-            not protocols or len(set(protocols)) != len(protocols)
-            or any(not isinstance(protocol, str) or not _PROTOCOL.fullmatch(protocol) for protocol in protocols)
+            not protocols
+            or len(set(protocols)) != len(protocols)
+            or any(
+                not isinstance(protocol, str) or not _PROTOCOL.fullmatch(protocol)
+                for protocol in protocols
+            )
         ):
             raise ValueError("payment protocols must be unique safe lowercase names")
-
-
-def _loopback(host: str) -> bool:
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 @dataclass(frozen=True)
@@ -40,12 +34,15 @@ class PayerConfig:
         if not isinstance(self.scenario_id, str) or not self.scenario_id.strip():
             raise ValueError("scenario_id cannot be blank")
         if (
-            self.approval_timeout <= 0 or self.approval_poll_interval <= 0
+            self.approval_timeout <= 0
+            or self.approval_poll_interval <= 0
             or self.approval_poll_interval > self.approval_timeout
             or not 0 <= self.delivery_retries <= 3
             or self.max_challenge_bytes <= 0
         ):
-            raise ValueError("payer middleware retry, timeout, or challenge limits are invalid")
+            raise ValueError(
+                "payer middleware retry, timeout, or challenge limits are invalid"
+            )
         self._validate_protocols()
 
     def _validate_protocols(self) -> None:
@@ -64,73 +61,42 @@ class PayeeConfig:
 
 
 @dataclass(frozen=True, repr=False)
-class GrpcConfig:
-    endpoint: str
-    tls: bool = True
+class HttpConfig:
+    base_url: str
     authguard_bearer: str | None = None
-    timeout: float = 30.0
-    max_message_bytes: int = 2 * 1024 * 1024
-
-    def __post_init__(self) -> None:
-        host, separator, port = self.endpoint.rpartition(":")
-        if (
-            not separator or not host or not port.isdigit() or not 0 < int(port) <= 65535
-            or self.timeout <= 0 or self.max_message_bytes <= 0
-            or (not self.tls and not _loopback(host.strip("[]")))
-            or (
-                self.authguard_bearer is not None
-                and (not self.authguard_bearer.strip() or any(ord(character) < 0x20 for character in self.authguard_bearer))
-            )
-        ):
-            raise ValueError("invalid or unsafe AgentVault gRPC configuration")
-
-    def __repr__(self) -> str:
-        edge = "<redacted>" if self.authguard_bearer else "disabled"
-        return f"GrpcConfig(endpoint={self.endpoint!r}, tls={self.tls}, authguard_bearer={edge})"
-
-
-@dataclass(frozen=True, repr=False)
-class MqttConfig:
-    host: str
-    port: int
-    tls: bool
-    username: str
-    password: str
-    connection_prefix: str
-    vault_client_id: str
     timeout: float = 30.0
     max_response_bytes: int = 2 * 1024 * 1024
 
     def __post_init__(self) -> None:
+        from urllib.parse import urlsplit
+
+        url = urlsplit(self.base_url)
         if (
-            not self.host.strip() or not 0 < self.port <= 65535 or self.timeout <= 0
-            or self.max_response_bytes <= 0 or not _IDENTIFIER.fullmatch(self.username)
-            or not self.password or not _IDENTIFIER.fullmatch(self.connection_prefix)
-            or not _IDENTIFIER.fullmatch(self.vault_client_id)
-            or (not self.tls and not _loopback(self.host))
+            url.scheme not in ("http", "https")
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in ("", "/")
+            or self.timeout <= 0
+            or self.max_response_bytes <= 0
+            or (
+                self.authguard_bearer is not None
+                and any(ord(c) < 32 or ord(c) == 127 for c in self.authguard_bearer)
+            )
         ):
-            raise ValueError("invalid or unsafe AgentVault MQTT configuration")
+            raise ValueError("invalid AgentVault HTTP configuration")
 
     def __repr__(self) -> str:
-        return (
-            f"MqttConfig(host={self.host!r}, port={self.port}, tls={self.tls}, "
-            f"username=<redacted>, password=<redacted>, connection_prefix={self.connection_prefix!r}, "
-            f"vault_client_id={self.vault_client_id!r})"
-        )
+        return f"HttpConfig(base_url={self.base_url!r}, authguard_bearer=<redacted>)"
 
 
 @dataclass(frozen=True)
 class VaultTransportConfig:
     provider: str
-    grpc: GrpcConfig | None = None
-    mqtt: MqttConfig | None = None
+    http: HttpConfig
 
     def __post_init__(self) -> None:
-        if self.provider == "grpc":
-            valid = self.grpc is not None and self.mqtt is None
-        elif self.provider == "mqtt":
-            valid = self.mqtt is not None and self.grpc is None
-        else:
-            valid = False
-        if not valid:
-            raise ValueError("transport provider requires exactly one matching configuration block")
+        if self.provider != "http" or not isinstance(self.http, HttpConfig):
+            raise ValueError("transport provider must be http")

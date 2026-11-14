@@ -8,7 +8,7 @@ import (
 )
 
 func TestIngestionJobFailsClosedWithoutVaultConfiguration(t *testing.T) {
-	t.Setenv("AGENTVAULT_MQTT_PORT", "")
+	t.Setenv("AGENTVAULT_HTTP_BASE_URL", "")
 	ingestion, err := job.NewFromEnv(context.Background())
 	if err == nil || ingestion != nil {
 		t.Fatalf("missing Vault configuration was accepted: job=%v err=%v", ingestion, err)

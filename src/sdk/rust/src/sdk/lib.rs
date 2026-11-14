@@ -40,15 +40,13 @@ mod protocol_x402;
 mod transport_core;
 #[path = "transport/factory.rs"]
 mod transport_factory;
-#[path = "transport/grpc.rs"]
-mod transport_grpc;
-#[path = "transport/mqtt.rs"]
-mod transport_mqtt;
+#[path = "transport/http.rs"]
+mod transport_http;
 
 pub use a2a_types;
 pub(crate) use agentvault::paths;
 pub use agentvault::AgentVault;
-pub use config::{GrpcConfig, MqttConfig, PayeeConfig, PayerConfig};
+pub use config::{HttpConfig, PayeeConfig, PayerConfig};
 pub use model_a2a::A2aCall;
 pub use model_approval::*;
 pub use model_base::*;
@@ -70,7 +68,6 @@ pub use transport_core::{
     HttpMethod, TransportError, TransportErrorKind, TransportRequest, TransportResponse, VaultTransport,
 };
 pub use transport_factory::{ConfiguredVaultTransport, VaultTransportConfig, VaultTransportFactory};
-pub use transport_grpc::GrpcVaultTransport;
-pub use transport_mqtt::MqttVaultTransport;
+pub use transport_http::HttpVaultTransport;
 
 pub(crate) use transport_core::ApiClient;

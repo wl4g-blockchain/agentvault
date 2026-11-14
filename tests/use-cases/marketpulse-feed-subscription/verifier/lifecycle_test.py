@@ -58,8 +58,8 @@ class LifecycleTest(unittest.TestCase):
 
     @patch.object(E2ES30MatrixVerifier.SdkMatrixJournal, "_verify_financial_evidence")
     def test_matrix_scope_and_resume_integrity(self, recheck):
-        self.assertEqual(len(Project.matrix_cases("simple")), 8)
-        self.assertEqual(len(Project.matrix_cases("full")), 50)
+        self.assertEqual(len(Project.matrix_cases("simple")), 4)
+        self.assertEqual(len(Project.matrix_cases("full")), 25)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             journal = E2ES30MatrixVerifier.SdkMatrixJournal(root, "simple", "docker")
@@ -171,12 +171,11 @@ class LifecycleTest(unittest.TestCase):
             side_effect=lambda *args, **kwargs: events.append("contracts")
         )
         runtime._runtime_forwards = Mock(return_value=nullcontext())
-        runtime._bootstrap_emqx = Mock(side_effect=lambda: events.append("acl"))
         runtime._kubectl = Mock(
             side_effect=lambda *args, **kwargs: events.append(args[1])
         )
         runtime._initialize_base()
-        self.assertEqual(events, ["contracts", "acl", "restart", "status"])
+        self.assertEqual(events, ["contracts", "restart", "status"])
 
     @patch.object(E2ES30MatrixVerifier.SdkMatrixJournal, "_verify_financial_evidence")
     def test_matrix_deployment_preserves_fully_restored_evidence(self, recheck):
@@ -297,12 +296,12 @@ class LifecycleTest(unittest.TestCase):
         for cls in (Purchase.DockerRuntime, Purchase.KubernetesRuntime):
             self.assertTrue(callable(cls._facilitator_capabilities))
 
-    def test_docker_workers_isolate_every_host_port_including_grpc(self):
+    def test_docker_workers_isolate_every_host_port_including_http(self):
         from verifier.infra.s00_infrastructure import DEFAULTS
         from verifier.purchase.s20_purchase import E2ES20PurchaseVerifier
 
         ports = [name for name in DEFAULTS if name.endswith("_PORT")]
-        for overrides in ({}, {"E2E_AGENTVAULT_GRPC_PORT": "46000"}):
+        for overrides in ({}, {"E2E_AGENTVAULT_PORT": "46000"}):
             with (
                 self.subTest(overrides=overrides),
                 patch.dict("os.environ", overrides, clear=True),

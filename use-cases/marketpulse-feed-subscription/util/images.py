@@ -20,7 +20,6 @@ class E2EImagesDefinitions:
     ARM64 = "arm64"
     DEFAULT_PLATFORM = "linux/amd64"
     # OTP 25's perf JIT mode avoids Rosetta's NIF-loading failure at startup.
-    EMQX_ROSETTA_ERL_FLAGS = "+JPperf true"
     DOCKER_HUB = "docker.io"
     ALIYUN = "registry.cn-shenzhen.aliyuncs.com/wl4g"
     SOLANA_VERSION = "3.1.14"
@@ -57,7 +56,6 @@ class E2EImagesDefinitions:
         "web-runtime": f"{DOCKER_HUB}/nginxinc/nginx-unprivileged:1.27-alpine",
         "maven": f"{DOCKER_HUB}/library/maven:3.9.9-eclipse-temurin-17",
         "postgres": f"{DOCKER_HUB}/pgvector/pgvector:pg16",
-        "emqx": f"{DOCKER_HUB}/emqx/emqx:5.5.0",
         "jaeger": f"{DOCKER_HUB}/jaegertracing/all-in-one:1.76.0",
         "anvil": "ghcr.io/foundry-rs/foundry:v1.7.1",
         "solana": f"{DOCKER_HUB}/anzaxyz/agave:v{SOLANA_VERSION}",
@@ -87,7 +85,6 @@ class E2EImagesDefinitions:
         "node": f"{ALIYUN}/node:22-alpine",
         "maven": f"{ALIYUN}/maven:3.9.9-eclipse-temurin-17",
         "postgres": f"{ALIYUN}/pgvector_pgvector:pg16",
-        "emqx": f"{ALIYUN}/emqx_emqx:5.5.0",
         "jaeger": f"{ALIYUN}/jaegertracing_all-in-one:1.76.0",
         "anvil": f"{ALIYUN}/foundry_anvil:1.7.1",
         "solana": f"{ALIYUN}/anza_solana:{SOLANA_VERSION}",
@@ -104,7 +101,6 @@ class E2EImagesDefinitions:
             key: f"E2E_{key.upper().replace('-', '_')}_IMAGE"
             for key in (
                 "postgres",
-                "emqx",
                 "jaeger",
                 "anvil",
                 "solana",
@@ -132,7 +128,6 @@ class E2EImagesDefinitions:
             name: name
             for name in (
                 "postgres",
-                "emqx",
                 "jaeger",
                 "anvil",
                 "solana",
@@ -156,7 +151,7 @@ class E2EImagesDefinitions:
     BUILD_ENV = {
         **{
             f"E2E_{name.upper()}_IMAGE": name
-            for name in ("postgres", "emqx", "jaeger", "anvil", "tempo", "facilitator")
+            for name in ("postgres", "jaeger", "anvil", "tempo", "facilitator")
         },
         "BUILDKIT_SYNTAX": "dockerfile",
         "E2E_EVM_IMAGE": "anvil",
@@ -272,13 +267,6 @@ class E2EImagesDefinitions:
             f"{prefix}.pullPolicy": "Never",
         }
 
-    @staticmethod
-    def runtime_environment(
-        component: str | None, environment: Mapping[str, str]
-    ) -> dict[str, str]:
-        flags = environment.get("E2E_EMQX_ERL_FLAGS", "")
-        return {"ERL_FLAGS": flags} if component == "emqx" and flags else {}
-
     @classmethod
     def selected(cls, key: str, environment: Mapping[str, str]) -> str:
         """Resolve a matrix default independently of a previous projected value."""
@@ -301,14 +289,6 @@ class E2EImagesDefinitions:
                 "E2E components require linux/amd64; macOS Solana is the linux/arm64 exception"
             )
         environment["E2E_IMAGE_PLATFORM"] = environment["DOCKER_DEFAULT_PLATFORM"]
-        emulated = (
-            sys.platform == "darwin"
-            and platform.machine().lower() in {"arm64", "aarch64"}
-            and environment["DOCKER_DEFAULT_PLATFORM"] == cls.DEFAULT_PLATFORM
-        )
-        environment.setdefault(
-            "E2E_EMQX_ERL_FLAGS", cls.EMQX_ROSETTA_ERL_FLAGS if emulated else ""
-        )
         environment.setdefault(
             "E2E_SOLANA_PLATFORM", cls.image_platform("solana", environment)
         )
@@ -451,7 +431,6 @@ class E2EImagesDefinitions:
             "DOCKER_DEFAULT_PLATFORM",
             "E2E_IMAGE_PLATFORM",
             "E2E_SOLANA_PLATFORM",
-            "E2E_EMQX_ERL_FLAGS",
         }
         print("\n".join(f"{name}={environment[name]}" for name in sorted(variables)))
 

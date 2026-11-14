@@ -14,32 +14,11 @@ export function approvalDecisionBody(approval, decision) {
     run_id: normalized.runId,
     approval_id: normalized.approvalId,
     decision,
-    reason: "QuantStream administrator decision"
+    reason: "QuantStream administrator decision",
   };
-  if (decision === "approve") body.approved_amount = decimalAmount(normalized.requestedAmount);
+  if (decision === "approve")
+    body.approved_amount = decimalAmount(normalized.requestedAmount);
   return body;
-}
-
-export function mqttConnectionOptions(clientId, username, password) {
-  return {
-    clientId: `quantstream-admin-${requiredIdentifier(clientId, "client id")}`,
-    username: requiredText(username, "MQTT username"),
-    password: requiredText(password, "MQTT password"),
-    clean: false,
-    reconnectPeriod: 1_000,
-    connectTimeout: 5_000
-  };
-}
-
-export function approvalTopics(clientId, approverPrincipal) {
-  const client = requiredIdentifier(clientId, "client id");
-  const approver = requiredIdentifier(approverPrincipal, "approver principal");
-  const root = `agentvault/v1/clients/${client}`;
-  return {
-    required: `${root}/approvals/required`,
-    decision: `${root}/approvers/${approver}/decisions`,
-    resultPrefix: `${root}/approvers/${approver}/results/`
-  };
 }
 
 export class ApprovalQueue {
@@ -51,7 +30,9 @@ export class ApprovalQueue {
   }
 
   snapshot() {
-    return [...this.items.values()].sort((left, right) => left.approvalId.localeCompare(right.approvalId));
+    return [...this.items.values()].sort((left, right) =>
+      left.approvalId.localeCompare(right.approvalId),
+    );
   }
 
   get(approvalId) {
@@ -66,7 +47,8 @@ export class ApprovalQueue {
     const approval = normalizeApproval(raw, this.scenarioId);
     const existing = this.items.get(approval.approvalId);
     if (existing) {
-      if (!sameApproval(existing, approval)) throw new Error("approval notification changed immutable fields");
+      if (!sameApproval(existing, approval))
+        throw new Error("approval notification changed immutable fields");
       return false;
     }
     this.items.set(approval.approvalId, approval);
@@ -82,23 +64,31 @@ export class ApprovalQueue {
   }
 
   replaceFromAuthority(rawItems, startedAtRevision) {
-    if (!Number.isSafeInteger(startedAtRevision) || startedAtRevision < 0 || startedAtRevision > this.revision) {
+    if (
+      !Number.isSafeInteger(startedAtRevision) ||
+      startedAtRevision < 0 ||
+      startedAtRevision > this.revision
+    ) {
       throw new Error("invalid approval reconciliation revision");
     }
     const authoritative = new Map();
     for (const raw of rawItems) {
       const approval = normalizeApproval(raw, this.scenarioId);
       const existing = authoritative.get(approval.approvalId);
-      if (existing && !sameApproval(existing, approval)) throw new Error("authority returned conflicting approvals");
+      if (existing && !sameApproval(existing, approval))
+        throw new Error("authority returned conflicting approvals");
       authoritative.set(approval.approvalId, approval);
     }
     for (const operation of this.operations) {
       if (operation.revision <= startedAtRevision) continue;
-      if (operation.type === "upsert") authoritative.set(operation.approval.approvalId, operation.approval);
+      if (operation.type === "upsert")
+        authoritative.set(operation.approval.approvalId, operation.approval);
       else authoritative.delete(operation.approvalId);
     }
     this.items = authoritative;
-    this.operations = this.operations.filter((operation) => operation.revision > startedAtRevision);
+    this.operations = this.operations.filter(
+      (operation) => operation.revision > startedAtRevision,
+    );
   }
 
   record(operation) {
@@ -113,14 +103,23 @@ export async function loadPendingApprovals({
   authguardBearer = "",
   fetchImpl = fetch,
   timeoutMs = 5_000,
-  pageSize = DEFAULT_PAGE_SIZE
+  pageSize = DEFAULT_PAGE_SIZE,
 }) {
   const scenario = requiredIdentifier(scenarioId, "scenario id");
-  if (authguardBearer && /[\r\n]/.test(authguardBearer)) throw new Error("AuthGuard bearer credential is invalid");
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000) {
+  if (authguardBearer && /[\r\n]/.test(authguardBearer))
+    throw new Error("AuthGuard bearer credential is invalid");
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > 60_000
+  ) {
     throw new Error("approval API timeout is invalid");
   }
-  if (!Number.isSafeInteger(pageSize) || pageSize <= 0 || pageSize > DEFAULT_PAGE_SIZE) {
+  if (
+    !Number.isSafeInteger(pageSize) ||
+    pageSize <= 0 ||
+    pageSize > DEFAULT_PAGE_SIZE
+  ) {
     throw new Error("approval API page size is invalid");
   }
 
@@ -136,11 +135,19 @@ export async function loadPendingApprovals({
       headers,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`AgentVault pending approval query failed (${response.status})`);
+    if (!response.ok)
+      throw new Error(
+        `AgentVault pending approval query failed (${response.status})`,
+      );
     const page = await boundedJson(response, MAX_PAGE_BYTES);
-    if (!page || !Array.isArray(page.items) || !Number.isSafeInteger(page.total) || page.total < 0) {
+    if (
+      !page ||
+      !Array.isArray(page.items) ||
+      !Number.isSafeInteger(page.total) ||
+      page.total < 0
+    ) {
       throw new Error("AgentVault returned an invalid approval page");
     }
     total = page.total;
@@ -150,31 +157,42 @@ export async function loadPendingApprovals({
     for (const raw of page.items) {
       const approval = normalizeApproval(raw, scenario);
       const existing = approvals.get(approval.approvalId);
-      if (existing && !sameApproval(existing, approval)) throw new Error("AgentVault returned conflicting approvals");
+      if (existing && !sameApproval(existing, approval))
+        throw new Error("AgentVault returned conflicting approvals");
       approvals.set(approval.approvalId, approval);
     }
     offset += page.items.length;
-    if (approvals.size > 10_000 || offset > 10_000) throw new Error("AgentVault approval queue is unexpectedly large");
+    if (approvals.size > 10_000 || offset > 10_000)
+      throw new Error("AgentVault approval queue is unexpectedly large");
   }
   return [...approvals.values()];
 }
 
 export function normalizeApproval(raw, expectedScenarioId) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("approval is invalid");
-  if (raw.type !== undefined && (raw.type !== "payment.approval_required" || raw.version !== 1)) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new Error("approval is invalid");
+  if (
+    raw.type !== undefined &&
+    (raw.type !== "payment.approval_required" || raw.version !== 1)
+  ) {
     throw new Error("approval notification contract is invalid");
   }
-  const scenarioId = requiredIdentifier(raw.scenarioId ?? raw.scenario_id ?? expectedScenarioId, "scenario id");
-  if (scenarioId !== expectedScenarioId) throw new Error("approval belongs to another scenario");
+  const scenarioId = requiredIdentifier(
+    raw.scenarioId ?? raw.scenario_id ?? expectedScenarioId,
+    "scenario id",
+  );
+  if (scenarioId !== expectedScenarioId)
+    throw new Error("approval belongs to another scenario");
   const expiresAt = raw.expiresAt ?? raw.expires_at;
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) throw new Error("approval expiry is invalid");
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0)
+    throw new Error("approval expiry is invalid");
   return {
     approvalId: requiredIdentifier(raw.approvalId ?? raw.id, "approval id"),
     intentId: requiredIdentifier(raw.intentId ?? raw.intent_id, "intent id"),
     runId: requiredIdentifier(raw.runId ?? raw.run_id, "run id"),
     scenarioId,
     requestedAmount: decimalAmount(raw.requestedAmount ?? raw.requested_amount),
-    expiresAt
+    expiresAt,
   };
 }
 
@@ -191,10 +209,17 @@ function approvalPageUrl(baseUrl, scenarioId, offset, limit) {
 function trustedBaseUrl(value) {
   const url = new URL(requiredText(value, "AgentVault URL"));
   const loopback = url.hostname === "localhost" || isLoopbackIp(url.hostname);
-  if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password) {
-    throw new Error("AgentVault URL must use HTTPS or loopback HTTP without embedded credentials");
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    url.username ||
+    url.password
+  ) {
+    throw new Error(
+      "AgentVault URL must use HTTPS or loopback HTTP without embedded credentials",
+    );
   }
-  if (url.search || url.hash) throw new Error("AgentVault URL cannot contain a query or fragment");
+  if (url.search || url.hash)
+    throw new Error("AgentVault URL cannot contain a query or fragment");
   if (!url.pathname.endsWith("/")) url.pathname += "/";
   return url;
 }
@@ -211,7 +236,8 @@ async function boundedJson(response, limit) {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     const length = Number.parseInt(contentLength, 10);
-    if (!Number.isSafeInteger(length) || length < 0 || length > limit) throw new Error("approval API response is too large");
+    if (!Number.isSafeInteger(length) || length < 0 || length > limit)
+      throw new Error("approval API response is too large");
   }
   if (!response.body) throw new Error("approval API response has no body");
   const reader = response.body.getReader();
@@ -241,28 +267,72 @@ async function boundedJson(response, limit) {
 }
 
 function decimalAmount(value) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error("approval amount is invalid");
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))
+    throw new Error("approval amount is invalid");
   const amount = BigInt(value);
-  if (amount <= 0n || amount > MAX_AMOUNT) throw new Error("approval amount is invalid");
+  if (amount <= 0n || amount > MAX_AMOUNT)
+    throw new Error("approval amount is invalid");
   return value;
 }
 
 function requiredIdentifier(value, field) {
   const text = requiredText(value, field);
-  if (text.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(text)) throw new Error(`${field} is invalid`);
+  if (text.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(text))
+    throw new Error(`${field} is invalid`);
   return text;
 }
 
 function requiredText(value, field) {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${field} is required`);
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`${field} is required`);
   return value;
 }
 
 function sameApproval(left, right) {
-  return left.approvalId === right.approvalId
-    && left.intentId === right.intentId
-    && left.runId === right.runId
-    && left.scenarioId === right.scenarioId
-    && left.requestedAmount === right.requestedAmount
-    && left.expiresAt === right.expiresAt;
+  return (
+    left.approvalId === right.approvalId &&
+    left.intentId === right.intentId &&
+    left.runId === right.runId &&
+    left.scenarioId === right.scenarioId &&
+    left.requestedAmount === right.requestedAmount &&
+    left.expiresAt === right.expiresAt
+  );
+}
+
+export async function submitApprovalDecision({
+  baseUrl,
+  approval,
+  decision,
+  reason,
+  authguardBearer = "",
+  traceparent,
+  timeoutMs = 5000,
+  fetchImpl = fetch,
+}) {
+  const url = new URL(
+    `approvals/${encodeURIComponent(approval.approvalId)}/decision`,
+    trustedBaseUrl(baseUrl),
+  );
+  if (authguardBearer && /[\r\n]/.test(authguardBearer))
+    throw new Error("AuthGuard bearer credential is invalid");
+  const headers = {
+    accept: "application/json",
+    "content-type": "application/json",
+  };
+  if (authguardBearer) headers.authorization = `Bearer ${authguardBearer}`;
+  if (traceparent) headers.traceparent = traceparent;
+  const body = approvalDecisionBody(approval, decision);
+  if (typeof reason === "string" && reason.trim())
+    body.reason = reason.slice(0, 512);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return {
+    status: response.status,
+    body: await boundedJson(response, MAX_PAGE_BYTES),
+  };
 }

@@ -27,7 +27,6 @@ class E2EOtherDefinitions:
     DEPLOY_COMPONENTS = (
         "agentvault",
         "anvil",
-        "emqx",
         "evm",
         "facilitator",
         "mock-mpp-tempo-service",
@@ -55,7 +54,7 @@ class E2EOtherDefinitions:
     LANGUAGES = ("rust", "go", "python", "typescript", "java")
     SDK_SCOPES = ("simple", "full")
     SIMPLE_LANGUAGES = ("rust", "go")
-    TRANSPORTS = ("mqtt", "grpc")
+    TRANSPORTS = ("http",)
 
     @classmethod
     def component_chart(cls, component: str) -> Path:

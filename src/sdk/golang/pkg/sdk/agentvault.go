@@ -76,18 +76,11 @@ type TransportRequest = transport.TransportRequest
 type TransportResponse = transport.TransportResponse
 type Method = transport.Method
 type APIError = transport.APIError
-type MqttVaultTransport = transport.MqttVaultTransport
-type MqttConfig = config.MqttConfig
-type GrpcVaultTransport = transport.GrpcVaultTransport
-type GrpcConfig = config.GrpcConfig
 type VaultTransportConfig = config.VaultTransportConfig
 type TransportProvider = config.TransportProvider
 type VaultTransportFactory = transport.VaultTransportFactory
 
-const (
-	TransportProviderGrpc = config.TransportProviderGrpc
-	TransportProviderMqtt = config.TransportProviderMqtt
-)
+const ()
 
 const (
 	MethodGet  = transport.MethodGet
@@ -95,8 +88,6 @@ const (
 )
 
 var ErrRunConflict = transport.ErrRunConflict
-var NewMqttVaultTransport = transport.NewMqttVaultTransport
-var NewGrpcVaultTransport = transport.NewGrpcVaultTransport
 var NewVaultTransportFactory = transport.NewVaultTransportFactory
 
 type OperationContext = model.OperationContext
@@ -223,3 +214,10 @@ func (vault *AgentVault) GetApprovalStatus(ctx context.Context, scenarioID, appr
 	}
 	return &result, nil
 }
+
+type HttpConfig = config.HttpConfig
+type HttpVaultTransport = transport.HttpVaultTransport
+
+const TransportProviderHttp = config.TransportProviderHttp
+
+var NewHttpVaultTransport = transport.NewHttpVaultTransport

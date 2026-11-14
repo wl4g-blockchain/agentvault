@@ -162,7 +162,7 @@ e2e: guard-target-size
 		--timeout $(E2E_TIMEOUT)
 
 check: guard-target-size
-	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) check --all-targets --locked
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) check --workspace --all-targets --locked
 
 fmt:
 	$(CARGO) fmt --all
@@ -171,7 +171,7 @@ fmt-check:
 	$(CARGO) fmt --all -- --check
 
 lint: guard-target-size
-	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) clippy --all-targets --locked -- -D warnings
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) $(CARGO) clippy --workspace --all-targets --locked -- -D warnings
 
 verify: fmt-check lint test e2e build
 

@@ -2,7 +2,7 @@
 
 ## Functionality and execution
 
-The case verifies QuantStream payers buying MarketPulse news through AgentVault. It includes five SDK languages (Rust, Go, Python, TypeScript, Java), both MQTT and gRPC control planes, x402/EVM on Anvil, x402/Solana with SPL tokens, MPP/Tempo charge and recovery, A2A boundaries, and Chromium dashboard journeys. A full isolated matrix contains 50 cases: 5 payers × 5 payees × 2 transports. The default simple scope contains 8 cases.
+The case verifies QuantStream payers buying MarketPulse news through AgentVault. It includes five SDK languages (Rust, Go, Python, TypeScript, Java), both HTTP control planes, x402/EVM on Anvil, x402/Solana with SPL tokens, MPP/Tempo charge and recovery, A2A boundaries, and Chromium dashboard journeys. A full isolated matrix contains 25 cases: 5 payers × 5 payees × 2 transports. The default simple scope contains 4 cases.
 
 Deployment assets are grouped horizontally by service. Mock production sources and dependency manifests live in `deploy/<service>/source/`; native contracts are owned by their vertical scenarios under `verifier/<scenario>/contracts/`; SDK dependencies remain in the repository's `src/sdk/`. AgentVault's Dockerfile and Dockerfile.dockerignore link to production assets. Its component directory contains only those links, config/ overlays and docker-compose.yaml; Helm uses the repository's deploy/helm/agentvault directly. Middleware packages use upstream images and need no copied upstream source. Shared Helm overlays are configuration bundles, not additional workloads.
 
@@ -108,13 +108,13 @@ Review these facts together:
 5. For Anvil, independently fetch `eth_getTransactionReceipt` and `eth_call balanceOf`; confirm chain 31337 and the expected ERC-20/method. For Solana, fetch `getGenesisHash`, confirmed `getTransaction`, `getTokenAccountBalance` and `getBlockTime`: bind mint, ATA, token amount and fee payer. For Tempo, verify chain 1337, actual charge receipt, pathUSD balance and Token Gas separately.
 6. Web screenshots demonstrate browser behavior. Matrix views consume recorded evidence; controlled UI API routes do not independently prove live settlement. A2A SDK boundary tests also need the payment scenarios for real-chain claims.
 
-The retained stack's 15 merchants use gRPC; `manual-payment --transport` selects the payer control plane. Do not label its 300 profile/message/transport/language combinations as every possible two-sided control-plane combination. Challenge inspection, Ready Pods and SDK unit tests cannot establish completed purchase coverage.
+The retained stack's 15 merchants and five payer services use standard HTTP. Do not label its 150 profile/message/transport/language combinations as every possible two-sided control-plane combination. Challenge inspection, Ready Pods and SDK unit tests cannot establish completed purchase coverage.
 
 Reproduction examples (with retained services):
 
 ```bash
 python "$CASE/runner.py" run --deployer kubernetes --scenario manual-payment \
-  --payer-language python --payee-language java --payment-profile evm --transport grpc
+  --payer-language python --payee-language java --payment-profile evm --transport http
 kubectl -n e2e-agentvault-system get pods
 kubectl -n e2e-agentvault-payment-system get jobs,pvc
 kubectl -n e2e-agentvault-system port-forward service/agentvault-management 19091:9091

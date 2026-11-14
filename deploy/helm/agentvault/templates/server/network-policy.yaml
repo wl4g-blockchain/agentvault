@@ -21,23 +21,12 @@ spec:
           podSelector:
             matchLabels: {{ toYaml $backend.networkPolicy.envoyPodSelector | nindent 14 }}
       ports: [{ protocol: TCP, port: {{ $backend.service.apiPort }} }]
-    {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
-    - from:
-        - namespaceSelector:
-            matchLabels: {{ toYaml $backend.networkPolicy.envoyNamespaceSelector | nindent 14 }}
-          podSelector:
-            matchLabels: {{ toYaml $backend.networkPolicy.envoyPodSelector | nindent 14 }}
-      ports: [{ protocol: TCP, port: {{ $backend.service.grpcPort }} }]
-    {{- end }}
     {{- else }}
     # Disabling the AuthGuard dependency is an explicit open-edge decision.
     # Permit the externally exposed data-plane Service while keeping the
     # management listener constrained by the rules below.
     - ports:
         - { protocol: TCP, port: {{ $backend.service.apiPort }} }
-        {{- if eq (include "agentvault.grpcEnabled" .) "true" }}
-        - { protocol: TCP, port: {{ $backend.service.grpcPort }} }
-        {{- end }}
     {{- end }}
     - from:
         - namespaceSelector:

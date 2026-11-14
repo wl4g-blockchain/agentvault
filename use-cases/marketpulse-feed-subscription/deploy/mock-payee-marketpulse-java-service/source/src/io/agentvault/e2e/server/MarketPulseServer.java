@@ -1,13 +1,12 @@
 package io.agentvault.e2e.server;
 
+import com.wl4g.agentvault.sdk.AgentVault;
+import com.wl4g.agentvault.sdk.config.Config.HttpConfig;
+import com.wl4g.agentvault.sdk.config.Config.VaultTransportConfig;
+import com.wl4g.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
 import io.a2a.server.tasks.TaskStore;
 import io.agentvault.e2e.handler.FeedHandler;
 import io.agentvault.e2e.storage.FeedSqliteRepository;
-import com.wl4g.agentvault.sdk.AgentVault;
-import com.wl4g.agentvault.sdk.config.Config.GrpcConfig;
-import com.wl4g.agentvault.sdk.config.Config.MqttConfig;
-import com.wl4g.agentvault.sdk.config.Config.VaultTransportConfig;
-import com.wl4g.agentvault.sdk.payee.SpringInterceptorPayeeMiddleware;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.util.List;
@@ -22,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** Owns the Spring listener configuration, MCP endpoint and SDK middleware. */
 @Configuration(proxyBeanMethods = false)
 public class MarketPulseServer {
+
     public static void configureListener() {
         String bind = required("MARKETPULSE_BIND");
         System.setProperty("server.address", bindHost(bind));
@@ -34,19 +34,32 @@ public class MarketPulseServer {
     }
 
     @Bean
-    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(AgentVault vault, FeedSqliteRepository taskStore) {
+    FilterRegistrationBean<SpringInterceptorPayeeMiddleware> payeeMiddleware(
+        AgentVault vault,
+        FeedSqliteRepository taskStore
+    ) {
         var payee = vault.payee();
         var route = SpringInterceptorPayeeMiddleware.Route.mcpToolWithProtocol(
-                "/mcp",
-                "marketpulse.realtime_news",
-                required("MARKETPULSE_SCENARIO_ID"),
-                required("MARKETPULSE_PRICE_ID"),
-                required("MARKETPULSE_RESOURCE_URL"),
-                required("MARKETPULSE_ORIGIN"), System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402"));
-        var a2a = SpringInterceptorPayeeMiddleware.Route.a2a("/a2a", required("MARKETPULSE_SCENARIO_ID"),
-                System.getenv().getOrDefault("MARKETPULSE_A2A_PRICE_ID", required("MARKETPULSE_PRICE_ID")),
-                System.getenv().getOrDefault("MARKETPULSE_A2A_RESOURCE_URL", required("MARKETPULSE_RESOURCE_URL").replaceFirst("/mcp$", "/a2a")),
-                required("MARKETPULSE_ORIGIN"), System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402"), taskStore);
+            "/mcp",
+            "marketpulse.realtime_news",
+            required("MARKETPULSE_SCENARIO_ID"),
+            required("MARKETPULSE_PRICE_ID"),
+            required("MARKETPULSE_RESOURCE_URL"),
+            required("MARKETPULSE_ORIGIN"),
+            System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402")
+        );
+        var a2a = SpringInterceptorPayeeMiddleware.Route.a2a(
+            "/a2a",
+            required("MARKETPULSE_SCENARIO_ID"),
+            System.getenv().getOrDefault("MARKETPULSE_A2A_PRICE_ID", required("MARKETPULSE_PRICE_ID")),
+            System.getenv().getOrDefault(
+                "MARKETPULSE_A2A_RESOURCE_URL",
+                required("MARKETPULSE_RESOURCE_URL").replaceFirst("/mcp$", "/a2a")
+            ),
+            required("MARKETPULSE_ORIGIN"),
+            System.getenv().getOrDefault("MARKETPULSE_PAYMENT_PROTOCOL", "x402"),
+            taskStore
+        );
         var registration = new FilterRegistrationBean<>(payee.spring(List.of(route, a2a)));
         registration.setOrder(-100);
         registration.addUrlPatterns("/mcp", "/a2a");
@@ -55,28 +68,16 @@ public class MarketPulseServer {
 
     @Bean(destroyMethod = "close")
     AgentVault payeeVault() {
-        String transport = System.getenv().getOrDefault("AGENTVAULT_TRANSPORT", "mqtt").trim().toLowerCase();
-        if ("mqtt".equals(transport)) {
-            return AgentVault.fromConfig(VaultTransportConfig.mqtt(new MqttConfig(
-                    required("AGENTVAULT_MQTT_HOST"),
-                    integer("AGENTVAULT_MQTT_PORT"),
-                    bool("AGENTVAULT_MQTT_TLS"),
-                    required("AGENTVAULT_MQTT_USERNAME"),
-                    required("AGENTVAULT_MQTT_PASSWORD"),
-                    "marketpulse-java",
-                    required("AGENTVAULT_MQTT_CLIENT_ID"),
-                    Duration.ofSeconds(integer("AGENTVAULT_MQTT_TIMEOUT_SECONDS")),
-                    2 * 1024 * 1024)));
-        }
-        if ("grpc".equals(transport)) {
-            return AgentVault.fromConfig(VaultTransportConfig.grpc(new GrpcConfig(
-                    required("AGENTVAULT_GRPC_ENDPOINT"),
-                    bool("AGENTVAULT_GRPC_TLS"),
-                    null,
-                    Duration.ofSeconds(integer("AGENTVAULT_GRPC_TIMEOUT_SECONDS")),
-                    2 * 1024 * 1024)));
-        }
-        throw new IllegalStateException("AGENTVAULT_TRANSPORT must be mqtt or grpc");
+        return AgentVault.fromConfig(
+            VaultTransportConfig.http(
+                new HttpConfig(
+                    required("AGENTVAULT_HTTP_BASE_URL"),
+                    System.getenv("AGENTVAULT_AUTHGUARD_BEARER"),
+                    Duration.ofSeconds(integer("AGENTVAULT_HTTP_TIMEOUT_SECONDS")),
+                    2 * 1024 * 1024
+                )
+            )
+        );
     }
 
     public static String required(String name) {
@@ -109,12 +110,15 @@ public class MarketPulseServer {
         int separator = bind.lastIndexOf(':');
         if (separator <= 0) throw new IllegalArgumentException("MARKETPULSE_BIND must be host:port");
         int port = Integer.parseInt(bind.substring(separator + 1));
-        if (port <= 0 || port > 65535) throw new IllegalArgumentException("MARKETPULSE_BIND port is out of range");
+        if (port <= 0 || port > 65535) throw new IllegalArgumentException(
+            "MARKETPULSE_BIND port is out of range"
+        );
         return port;
     }
 
     @RestController
     public static final class McpEndpoint {
+
         private final FeedHandler handler;
 
         public McpEndpoint(FeedHandler handler) {

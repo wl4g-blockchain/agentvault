@@ -24,9 +24,6 @@ agentvault:
       AGENTVAULT__AGENTVAULT__PAYER__X402__ENABLED: "true"
       AGENTVAULT__AGENTVAULT__PAYEE__ENABLED: "true"
       AGENTVAULT__AGENTVAULT__PAYEE__X402__ENABLED: "true"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__ENABLED: "true"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__GRPC__HOST: "0.0.0.0"
-      AGENTVAULT__AGENTVAULT__TRANSPORT__MQTT__ENABLED: "true"
     extraContainers:
       - name: local-envoy-cm
         image: ""
@@ -223,28 +220,5 @@ agentvault:
         enabled: true
         interval: 2s
         batch_size: 1000
-      transport:
-        grpc:
-          enabled: true
-          host: 0.0.0.0
-          port: 50051
-          max_message_bytes: 2097152
-          request_timeout: 15s
-        mqtt:
-          enabled: true
-          host: 127.0.0.1
-          port: 1883
-          client_id: agentvault-e2e
-          consumer_group: agentvault-e2e
-          topic_prefix: agentvault/v1/clients
-          qos: 1
-          tls: false
-          username: agentvault-vault
-          password:
-            file: ""
-            env: HELPER_SECRET_MQTT_PASSWORD
-          request_timeout: 15s
-          reconnect_delay: 1s
-
 authguard:
   enabled: false

@@ -281,42 +281,22 @@
   },
   "matrix": [
     {
-      "transport": "grpc",
+      "transport": "http",
       "protocol": "x402",
       "role": "payer"
     },
     {
-      "transport": "grpc",
-      "protocol": "x402",
-      "role": "payee"
-    },
-    {
-      "transport": "grpc",
-      "protocol": "mpp",
-      "role": "payer"
-    },
-    {
-      "transport": "grpc",
-      "protocol": "mpp",
-      "role": "payee"
-    },
-    {
-      "transport": "mqtt",
-      "protocol": "x402",
-      "role": "payer"
-    },
-    {
-      "transport": "mqtt",
+      "transport": "http",
       "protocol": "x402",
       "role": "payee"
     },
     {
-      "transport": "mqtt",
+      "transport": "http",
       "protocol": "mpp",
       "role": "payer"
     },
     {
-      "transport": "mqtt",
+      "transport": "http",
       "protocol": "mpp",
       "role": "payee"
     }

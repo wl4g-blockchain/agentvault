@@ -28,8 +28,11 @@ class E2ES25ChargeRecoveryVerifier:
                 [
                     "cargo",
                     "test",
+                    "--package",
+                    "agentvault-protocol",
+                    "--lib",
                     "--locked",
-                    "protocol::mpp::tests::live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers",
+                    "mpp::tests::live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers",
                     "--",
                     "--ignored",
                     "--exact",
@@ -59,7 +62,7 @@ class E2ES25ChargeRecoveryVerifier:
 
         def verify_mpp_tempo(self) -> str:
             return self._run_live_rust_test(
-                "protocol::mpp::tests::live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers"
+                "mpp::tests::live_tempo_vault_handlers_recover_once_and_reconcile_both_ledgers"
             )
 
         def mpp_tempo(self):

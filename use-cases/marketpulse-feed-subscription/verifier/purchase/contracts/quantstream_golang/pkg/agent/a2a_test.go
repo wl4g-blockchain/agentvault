@@ -44,7 +44,7 @@ func TestA2ASelectionRejectsBusinessResultWithoutPaymentEvidence(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": call["id"], "result": result})
 	}))
 	defer server.Close()
-	for key, value := range map[string]string{"AGENTVAULT_MQTT_TIMEOUT_SECONDS": "2", "AGENTVAULT_APPROVAL_TIMEOUT_SECONDS": "2", "QUANTSTREAM_SCENARIO_ID": "scenario-1", "MARKETPULSE_URL": server.URL + "/mcp", "MARKETPULSE_MESSAGE_PROTOCOL": "a2a", "AGENTVAULT_TRANSPORT": "grpc", "AGENTVAULT_GRPC_ENDPOINT": "127.0.0.1:1", "AGENTVAULT_GRPC_TLS": "false"} {
+	for key, value := range map[string]string{"AGENTVAULT_HTTP_TIMEOUT_SECONDS": "2", "AGENTVAULT_APPROVAL_TIMEOUT_SECONDS": "2", "QUANTSTREAM_SCENARIO_ID": "scenario-1", "MARKETPULSE_URL": server.URL + "/mcp", "MARKETPULSE_MESSAGE_PROTOCOL": "a2a", "AGENTVAULT_TRANSPORT": "http", "AGENTVAULT_HTTP_BASE_URL": "http://127.0.0.1:1"} {
 		t.Setenv(key, value)
 	}
 	helper, err := agent.NewMCPHelperFromEnv(context.Background())

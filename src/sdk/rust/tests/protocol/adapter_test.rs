@@ -58,16 +58,7 @@ fn shared_fixture_covers_both_transports_protocols_and_roles() {
         registry.merchant_evidence_header_names(),
         ["payment-response", "payment-receipt"]
     );
-    let expected = BTreeSet::from([
-        "grpc/x402/payer",
-        "grpc/x402/payee",
-        "grpc/mpp/payer",
-        "grpc/mpp/payee",
-        "mqtt/x402/payer",
-        "mqtt/x402/payee",
-        "mqtt/mpp/payer",
-        "mqtt/mpp/payee",
-    ]);
+    let expected = BTreeSet::from(["http/x402/payer", "http/x402/payee", "http/mpp/payer", "http/mpp/payee"]);
     let matrix = fixture["matrix"].as_array().expect("matrix");
     let actual = matrix
         .iter()
@@ -80,7 +71,7 @@ fn shared_fixture_covers_both_transports_protocols_and_roles() {
             )
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(matrix.len(), 8);
+    assert_eq!(matrix.len(), 4);
     assert_eq!(actual, expected.into_iter().map(str::to_owned).collect());
 }
 
@@ -137,16 +128,7 @@ fn shared_mcp_fixture_uses_protocol_native_models() {
         ["x402/payment-response", "org.paymentauth/receipt"]
     );
 
-    let expected = BTreeSet::from([
-        "grpc/x402/payer",
-        "grpc/x402/payee",
-        "grpc/mpp/payer",
-        "grpc/mpp/payee",
-        "mqtt/x402/payer",
-        "mqtt/x402/payee",
-        "mqtt/mpp/payer",
-        "mqtt/mpp/payee",
-    ]);
+    let expected = BTreeSet::from(["http/x402/payer", "http/x402/payee", "http/mpp/payer", "http/mpp/payee"]);
     let matrix = fixture["matrix"].as_array().expect("MCP matrix");
     let actual = matrix
         .iter()
@@ -159,7 +141,7 @@ fn shared_mcp_fixture_uses_protocol_native_models() {
             )
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(matrix.len(), 8);
+    assert_eq!(matrix.len(), 4);
     assert_eq!(actual, expected.into_iter().map(str::to_owned).collect());
 }
 

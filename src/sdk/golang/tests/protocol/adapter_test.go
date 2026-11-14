@@ -90,10 +90,8 @@ func TestSharedProtocolHTTPFixture(t *testing.T) {
 		t.Fatalf("unexpected evidence header ownership: %s", got)
 	}
 	expected := map[string]struct{}{
-		"grpc/x402/payer": {}, "grpc/x402/payee": {},
-		"grpc/mpp/payer": {}, "grpc/mpp/payee": {},
-		"mqtt/x402/payer": {}, "mqtt/x402/payee": {},
-		"mqtt/mpp/payer": {}, "mqtt/mpp/payee": {},
+		"http/x402/payer": {}, "http/x402/payee": {},
+		"http/mpp/payer": {}, "http/mpp/payee": {},
 	}
 	seen := make(map[string]struct{}, len(fixture.Matrix))
 	for _, row := range fixture.Matrix {
@@ -259,14 +257,14 @@ func TestSharedA2AContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string]bool{}
-	for _, transport := range []string{"grpc", "mqtt"} {
+	for _, transport := range []string{"http"} {
 		for _, name := range []string{"x402", "mpp"} {
 			for _, role := range []string{"payer", "payee"} {
 				expected[transport+"/"+name+"/"+role] = true
 			}
 		}
 	}
-	if len(fixture.Matrix) != 8 {
+	if len(fixture.Matrix) != 4 {
 		t.Fatal("incomplete fixture matrix")
 	}
 	for _, row := range fixture.Matrix {

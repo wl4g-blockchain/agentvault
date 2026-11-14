@@ -75,7 +75,7 @@ class E2ES51TracingVerifier:
                     if trace_id in line:
                         transports.update(
                             re.findall(
-                                r"agentvault\.transport\.(grpc|mqtt|http)\.request",
+                                r"agentvault\.transport\.http\.request",
                                 line,
                             )
                         )
