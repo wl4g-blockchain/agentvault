@@ -1,9 +1,9 @@
 use super::SettlementCoordinator;
-use crate::{
-    model::{PaymentIntent, ReconciliationEvidence, ReconciliationProviderObservation},
-    Result,
-};
-pub use agentvault_common::model::settlement::ProviderReconciliationRequest;
+use crate::model::PaymentIntent;
+use crate::storage::reconciliation::ReconciliationEvidence;
+use crate::storage::reconciliation::ReconciliationProviderObservation;
+use crate::Result;
+pub use agentvault_common::storage::reconciliation::ProviderReconciliationRequest;
 pub use agentvault_common::storage::reconciliation::VerifyOnlyProviderEvidence;
 use agentvault_common::{
     storage::reconciliation::ProviderEvidence, storage::reconciliation::ReconciliationEvidenceSource,

@@ -1,13 +1,12 @@
 use crate::{
     storage::approval::sqlite::ApprovalSqliteRepository as ApprovalRepository,
     storage::base_sqlite::dynamic_sqlite as dynamic_query, storage::base_sqlite::SqliteRepository as BaseRepository,
-    storage::event::sqlite::EventSqliteRepository as EventRepository,
+    storage::codec::SqliteAmountCodec as AmountCodec, storage::event::sqlite::EventSqliteRepository as EventRepository,
     storage::ledger::sqlite::LedgerSqliteRepository as LedgerRepository,
     storage::outbox::sqlite::OutboxSqliteRepository as OutboxRepository,
     storage::policy::sqlite::PolicySqliteRepository as PolicyRepository,
     storage::scenario::sqlite::ScenarioSqliteRepository as ScenarioRepository,
     storage::wallet::sqlite::WalletSqliteRepository as WalletRepository,
-    util::storage::SqliteAmountCodec as AmountCodec,
 };
 use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection, SqlitePool as Pool};
 
@@ -20,7 +19,7 @@ impl PaymentSqliteRepository {
     }
 }
 
-crate::storage::payment::transactions::payment_repository!(PaymentSqliteRepository, "", "", "", "", "", "", "");
+crate::storage::payment::r#macro::payment_repository!(PaymentSqliteRepository, "", "", "", "", "", "", "");
 
 #[cfg(test)]
 #[path = "../../../tests/storage/payment/sqlite_test.rs"]

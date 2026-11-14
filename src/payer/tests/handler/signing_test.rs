@@ -23,7 +23,7 @@ use crate::storage::WalletPaymentSignature;
 use crate::util::aead::UuidNonceCodec;
 use crate::util::aead::WALLET_KEY_ENCRYPTION_SCHEME;
 use crate::util::secure_material::Aes256GcmMaterialProtector;
-use agentvault_common::model::protocol::PaymentProtocol;
+use agentvault_protocol::PaymentProtocol;
 use agentvault_protocol::ProtocolSettlement;
 use agentvault_protocol::ProtocolSigningRequest;
 use agentvault_protocol::ProtocolValidation;

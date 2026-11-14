@@ -1,15 +1,20 @@
 use super::{PriceResolver, SettlementCoordinator};
-use crate::{
-    apm::AgentVaultMetrics,
-    model::payment_api::{
-        CreateChallengeRequest, PaymentVerification, ResolvePriceRequest, SettlePaymentRequest, SettledPaymentResponse,
-        VerifyPaymentRequest,
-    },
-    model::{IssuePaymentChallenge, PaymentChallenge, PaymentPrice, SettleIncomingPayment, VerifyIncomingPayment},
-    storage::IPriceRepository,
-    Error, Result,
-};
-use agentvault_common::util::scenario::ScenarioHandler;
+use crate::apm::AgentVaultMetrics;
+use crate::handler::dto::CreateChallengeRequest;
+use crate::handler::dto::PaymentVerification;
+use crate::handler::dto::ResolvePriceRequest;
+use crate::handler::dto::SettlePaymentRequest;
+use crate::handler::dto::SettledPaymentResponse;
+use crate::handler::dto::VerifyPaymentRequest;
+use crate::handler::settlement::IssuePaymentChallenge;
+use crate::handler::settlement::SettleIncomingPayment;
+use crate::handler::settlement::VerifyIncomingPayment;
+use crate::model::PaymentChallenge;
+use crate::model::PaymentPrice;
+use crate::storage::IPriceRepository;
+use crate::Error;
+use crate::Result;
+use agentvault_common::handler::scenario::ScenarioHandler;
 use std::sync::Arc;
 pub struct PayeeApi {
     pub scenarios: Arc<ScenarioHandler>,

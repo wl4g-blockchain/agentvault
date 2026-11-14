@@ -1,9 +1,8 @@
 use crate::{
     storage::base_sqlite::dynamic_sqlite as dynamic_query, storage::base_sqlite::SqliteRepository as BaseRepository,
-    storage::event::sqlite::EventSqliteRepository as EventRepository,
+    storage::codec::SqliteAmountCodec as AmountCodec, storage::event::sqlite::EventSqliteRepository as EventRepository,
     storage::outbox::sqlite::OutboxSqliteRepository as OutboxRepository,
     storage::payment::sqlite::PaymentSqliteRepository as PaymentRepository,
-    util::storage::SqliteAmountCodec as AmountCodec,
 };
 use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection};
 
@@ -19,7 +18,7 @@ impl ApprovalSqliteRepository {
     }
 }
 
-crate::storage::approval::transactions::approval_repository!(ApprovalSqliteRepository, "", "", "", "", "", "", "");
+crate::storage::approval::r#macro::approval_repository!(ApprovalSqliteRepository, "", "", "", "", "", "", "");
 
 #[cfg(test)]
 #[path = "../../../tests/storage/approval/sqlite_test.rs"]

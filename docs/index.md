@@ -107,7 +107,7 @@ Controllers                       Application / Domain                  Adapters
 ```text
 src/
 ├── sdk/      # Rust/Go/Python/TypeScript/Java HTTP SDK 与共享身份协议资产
-├── common/   # 独立 crate；apm/cache/config/model/util/storage
+├── common/   # 独立 crate；基础组件、共享权限处理、表域模型、存储和资源导入
 ├── protocol/ # 独立 crate；x402 EVM/Solana 与 MPP Tempo
 ├── payer/    # 独立 crate；handler/routes/server.rs
 ├── payee/    # 独立 crate；handler/routes/server.rs
@@ -117,13 +117,15 @@ src/
 Go、Rust、Python、TypeScript 测试统一放在组件的 `tests/` 下；Java 按其组件
 约定放在 `test/` 下。测试目录镜像源码相对路径，命名为 `<module>_test.*`
 （Java 使用 `<Module>Test.java`）。源码目录不再混入测试文件；结构门禁同时拒绝
-缺失测试和孤儿测试。服务端 `model/domain/<domain>.rs` 只定义权威持久化实体，
-`model/<domain>.rs` 只在实体无法直接复用时定义 DTO/命令/结果和值对象；
-`handler/<domain>.rs` 不定义可跨边界复用的业务模型。
+缺失测试和孤儿测试。`common/src/model/<domain>.rs` 按持久化表域组织实体、关联值对象和命令；不再保留重复的 `model/domain/` 层。付款与收款的 HTTP DTO 分别由各自 `handler/dto.rs` 定义，协议适配器、链 RPC 和链上收据观察由 `protocol` crate 定义。
 
-领域 Handler 统一注入 `Arc<dyn I<Domain>Repository>`，仅保留 `approval/client/scenario/policy/wallet/ledger/price/intent/event` 九个领域，单文件不超过 250 行。Ledger 与 Event 只追加和查询；跨表预留、签名、审批消费及结算仍通过原子的领域 Repository 操作完成。`utils/storage.rs` 只提供精确金额和枚举编解码，不执行 SQL；共享事务实现归回 `storage/<domain>`。
+payer 专属的 Client 管理、钱包余额查询与同步归 `payer/src/handler/`；两个服务共享的 Scenario 权限处理归 `common/src/handler/scenario.rs`。`common/src/util/` 只保留时钟、加密原语、SecretRef、HTTP 身份及进程生命周期等通用能力。金额与状态 SQL 编解码归 `common/src/storage/codec.rs`；资源解析与导入归 `common/src/resource/`。
 
-`controller/api.rs` 注册业务 HTTP 路由及独立的管理路由，后者由 `apm::ManagementServer` 绑定 `mgmt.host/port`；业务写路由不会出现在管理监听器。`GrpcController`、`MqttController` 仅监听/订阅并调用专用通信组件，认证上下文由 `controller/principal_context.rs` 处理。Unix socket 控制器及 `agentvault.transport.local` 配置已移除，旧配置会明确报错。
+每个 `storage/<domain>/` 仅允许 `mod.rs`、`postgres.rs`、`sqlite.rs` 和必要的 `macro.rs`。两个 SQL 驱动的同构事务共用领域宏，并保留各自的基础仓库、锁语义和原子提交。所有自行维护的 `src` 源码（包括测试）单文件不超过 1024 行有效代码。
+
+配置结构、默认值与加载集中在 `common/src/config/config.rs`，跨字段和条件校验由 `config/validation.rs` 执行。加载器遍历 Serde 配置树，按 `AGENTVAULT__...` 路径通用覆盖（包括含冒号的 map key 和数组索引）；SecretRef 环境变量通过遍历序列化配置树发现，支持 map 与序列，避免把秘密内容反序列化进配置。
+
+payer/payee 的 `routes/api.rs` 注册标准 HTTP API，管理监听器由 `ApmComponent` 启动，仅暴露健康检查和可观测接口。业务 gRPC/MQTT 通信路径已移除；AuthGuard 内部身份解析与 OTLP 基础设施集成独立于业务通信。
 
 资源定价的唯一实体为 `PaymentPrice`，解析和管理路由分别为 `/prices/resolve` 和 `/admin/prices`，导入 kind 仅支持 `Price`。支付 DTO、Intent 以及 A2A Task scope 统一使用 `price_id`；旧命名、路由和字段不会被接受。
 
@@ -224,7 +226,7 @@ Facilitator/Provider 始终是进程外依赖。HTTP adapter 固定 Base URL 和
 仅负责连接池、通用参数绑定、外部传入的 Schema 迁移与事务边界，不引用支付表名、支付状态或领域仓储。
 `repository_entity!` 直接包裹唯一 Entity 声明，在编译期生成列元数据（含 `sqlx(rename/flatten/json)` 映射），
 行解码复用 SQLx `FromRow`；默认 CRUD 使用预编译参数绑定，不通过 Serde/JSON 反射实体。JSON 序列化只用于实际 JSON 列。
-金额与支付/钱包状态编解码由 `utils/storage.rs` 提供；支付 Schema 清单与升级计划位于 `storage/schema.rs` 的 `PaymentStorageSchema`。
+金额与支付/钱包状态编解码由 `common/src/storage/codec.rs` 提供；支付 Schema 清单与升级计划位于 `storage/schema.rs` 的 `PaymentStorageSchema`。
 领域仓储调用编解码工具，基类不反向依赖业务工具或 Schema 清单。空字符串、false、0 与带类型的 SQL NULL 均按原值持久化。
 实际领域实现位于 `storage/<domain>/{postgres,sqlite}.rs`，通过组合基础 Repository 共享连接池；
 `StoragePorts` 只向 handler 暴露领域接口，不暴露通用写接口。

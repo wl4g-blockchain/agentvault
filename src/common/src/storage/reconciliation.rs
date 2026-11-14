@@ -1,7 +1,6 @@
 use super::reconciliation_posting::ReconciliationPosting;
 use crate::{
-    model::ConfirmedSettlement, model::PaymentDirection, model::PaymentEvent, model::PaymentEventType,
-    model::PaymentIntent, model::PaymentStatus, model::ReconciliationEvidence, model::ReconciliationRun,
+    model::PaymentDirection, model::PaymentEvent, model::PaymentEventType, model::PaymentIntent, model::PaymentStatus,
     model::ReservationStatus, storage::IIntentRepository, storage::OutboxMessage, storage::OutboxStatus,
     storage::PaymentProgressWrite, storage::ReconciliationLeaseRequest, storage::SettlementWrite,
     util::clock::SystemUnixClock, util::clock::UnixClock, Error, Result,
@@ -419,10 +418,6 @@ pub trait ReconciliationEvidenceSource: Send + Sync {
     async fn lookup(&self, intent: &PaymentIntent, observed_at: i64) -> Result<ReconciliationEvidence>;
 }
 
-use crate::{
-    model::settlement::ExternalSettlementProvider, model::settlement::ProviderReconciliationRequest,
-    model::SettlementOperation, model::SettlementProviderResult,
-};
 use async_trait::async_trait;
 /// Evidence adapter for providers whose verification endpoint can report a
 /// previously confirmed settlement. It deliberately invokes `Verify` only;
@@ -483,7 +478,7 @@ impl ProviderEvidence {
         if !result.settled {
             if intent.status == PaymentStatus::Submitted {
                 return Ok(ReconciliationEvidence::Verified {
-                    verification_ref: crate::model::settlement::SettlementEvidence::verification_ref(
+                    verification_ref: crate::storage::reconciliation::SettlementEvidence::verification_ref(
                         &intent.id, &result,
                     )?,
                 });
@@ -635,3 +630,301 @@ impl ReconciliationJob {
         self
     }
 }
+
+mod reconciliation_model {
+    use crate::model::{payment_recipients_match, Amount, AssetIdentity, PaymentIntent};
+    use crate::{Error, Result};
+
+    use crate::storage::reconciliation::SettlementProviderResult;
+
+    /// Confirmed financial fact returned by a trusted provider or RPC adapter.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct ConfirmedSettlement {
+        pub authority: String,
+        pub asset: AssetIdentity,
+        pub recipient: String,
+        pub payer: Option<String>,
+        pub settled_amount: Amount,
+        pub posting_key: String,
+        pub tx_hash: Option<String>,
+        pub settlement_ref: Option<String>,
+        pub effect_ref: Option<String>,
+        pub confirmations: u64,
+        pub minimum_confirmations: u64,
+        pub effective_at: i64,
+    }
+
+    impl ConfirmedSettlement {
+        ///
+        /// # Errors
+        /// Returns a settlement error when evidence does not match the durable payment intent.
+        pub fn validate_for(&self, intent: &PaymentIntent, observed_at: i64) -> Result<()> {
+            if self.authority.trim().is_empty() {
+                return Err(Error::Settlement("settlement evidence authority is empty".to_owned()));
+            }
+            if self.posting_key.trim().is_empty() {
+                return Err(Error::Settlement("settlement evidence posting key is empty".to_owned()));
+            }
+            let expected_posting_key = crate::model::PaymentLedgerEntry::settlement_posting_key(
+                &self.authority,
+                &intent.asset.network,
+                self.tx_hash.as_deref(),
+                self.settlement_ref.as_deref(),
+                self.effect_ref.as_deref(),
+            )
+            .map_err(|field| Error::Settlement(format!("invalid settlement posting evidence: {field}")))?;
+            if self.posting_key != expected_posting_key {
+                return Err(Error::Settlement(
+                    "settlement evidence posting key is not canonical".to_owned(),
+                ));
+            }
+            if self.settled_amount != intent.amount {
+                return Err(Error::Settlement(
+                    "settlement evidence amount does not match the exact payment intent".to_owned(),
+                ));
+            }
+            if self.asset != intent.asset
+                || !payment_recipients_match(&intent.asset.network, &self.recipient, &intent.recipient)
+                || self.confirmations < self.minimum_confirmations
+            {
+                return Err(Error::Settlement(
+                    "settlement evidence asset, recipient, or confirmations do not match the intent".to_owned(),
+                ));
+            }
+            if self.tx_hash.as_deref().is_none_or(|value| value.trim().is_empty())
+                && self
+                    .settlement_ref
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(Error::Settlement(
+                    "settlement evidence has no transaction or provider reference".to_owned(),
+                ));
+            }
+            crate::model::PaymentLedgerEntry::validate_trusted_effective_time(
+                intent.created_at,
+                self.effective_at,
+                observed_at,
+            )?;
+            if intent
+                .tx_hash
+                .as_deref()
+                .is_some_and(|expected| self.tx_hash.as_deref() != Some(expected))
+            {
+                return Err(Error::Settlement(
+                    "settlement evidence transaction conflicts with the payment intent".to_owned(),
+                ));
+            }
+            if intent
+                .settlement_ref
+                .as_deref()
+                .is_some_and(|expected| self.settlement_ref.as_deref() != Some(expected))
+            {
+                return Err(Error::Settlement(
+                    "settlement evidence reference conflicts with the payment intent".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum ReconciliationEvidence {
+        Confirmed(Box<ConfirmedSettlement>),
+        Verified { verification_ref: String },
+        Pending,
+        Expired { reason: String },
+        Unknown { reason: String },
+        Unavailable { reason: String },
+    }
+
+    /// Trusted provider observation plus the operator-owned evidence authority.
+    /// This crate-private value joins settlement recovery to reconciliation and
+    /// is never serialized as a transport DTO.
+    pub enum ReconciliationProviderObservation {
+        Observed {
+            authority: String,
+            minimum_confirmations: u64,
+            result: Box<SettlementProviderResult>,
+            effective_at: Option<i64>,
+        },
+        Expired {
+            reason: String,
+        },
+    }
+
+    /// Summary for one bounded reconciliation pass.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct ReconciliationRun {
+        pub claimed: u32,
+        pub settled: u32,
+        pub verified: u32,
+        pub expired: u32,
+        pub pending: u32,
+        pub unknown: u32,
+        pub unavailable: u32,
+        pub provider_errors: u32,
+        pub skipped: u32,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/model/reconciliation_test.rs"
+        ));
+    }
+}
+pub use reconciliation_model::*;
+
+mod settlement_model {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+
+    use crate::model::{payment_recipients_match, Amount, AssetIdentity, PaymentIntent};
+    use crate::{Error, Result};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SettlementOperation {
+        Verify,
+        Settle,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SettlementProviderRequest {
+        pub protocol: String,
+        pub run_id: String,
+        pub payment_payload: Value,
+        pub payment_requirements: Value,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SettlementProviderResult {
+        #[serde(default)]
+        pub valid: bool,
+        #[serde(default)]
+        pub settled: bool,
+        #[serde(default)]
+        pub payer: Option<String>,
+        #[serde(default)]
+        pub transaction: Option<String>,
+        #[serde(default)]
+        pub settlement_ref: Option<String>,
+        #[serde(default)]
+        pub effect_ref: Option<String>,
+        #[serde(default)]
+        pub invalid_reason: Option<String>,
+        #[serde(default)]
+        pub asset: Option<AssetIdentity>,
+        #[serde(default)]
+        pub amount: Option<Amount>,
+        #[serde(default)]
+        pub recipient: Option<String>,
+        #[serde(default)]
+        pub confirmations: Option<u64>,
+        #[serde(default)]
+        pub extensions: BTreeMap<String, Value>,
+    }
+
+    impl SettlementProviderResult {
+        ///
+        /// # Errors
+        /// Returns a settlement error for mismatched assets, recipients, amounts or confirmation depth.
+        pub fn validate_confirmed_for(&self, intent: &PaymentIntent, minimum_confirmations: u64) -> Result<()> {
+            let asset_matches = self
+                .asset
+                .as_ref()
+                .is_some_and(|asset| asset_identity_matches(asset, &intent.asset));
+            let recipient_matches = self
+                .recipient
+                .as_deref()
+                .is_some_and(|recipient| payment_recipients_match(&intent.asset.network, recipient, &intent.recipient));
+            let confirmations_match =
+                minimum_confirmations == 0 || self.confirmations.is_some_and(|value| value >= minimum_confirmations);
+            if !self.valid
+                || !self.settled
+                || !asset_matches
+                || self.amount != Some(intent.amount)
+                || !recipient_matches
+                || !confirmations_match
+                || (self.transaction.as_deref().is_none_or(str::is_empty)
+                    && self.settlement_ref.as_deref().is_none_or(str::is_empty))
+            {
+                return Err(Error::Settlement(
+                    "provider settlement evidence does not match the payment intent".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn asset_identity_matches(observed: &AssetIdentity, expected: &AssetIdentity) -> bool {
+        observed.network == expected.network
+            && observed.asset.eq_ignore_ascii_case(&expected.asset)
+            && observed.decimals == expected.decimals
+            && match (&observed.token_contract, &expected.token_contract) {
+                (Some(observed), Some(expected)) => observed.eq_ignore_ascii_case(expected),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    #[async_trait::async_trait]
+    pub trait ExternalSettlementProvider: Send + Sync {
+        async fn execute(
+            &self,
+            operation: SettlementOperation,
+            request: &SettlementProviderRequest,
+        ) -> Result<SettlementProviderResult>;
+    }
+
+    /// Builds a read-only provider verification request from durable state.
+    /// Returning `None` explicitly declares that this provider cannot safely
+    /// recover this intent through a query API.
+    pub trait ProviderReconciliationRequest: Send + Sync {
+        fn authority(&self) -> &str;
+
+        fn minimum_confirmations(&self) -> u64 {
+            1
+        }
+
+        /// Reconstructs the provider-specific verification request exclusively
+        /// from durable data.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when durable protocol data is incomplete or corrupt.
+        fn build(&self, intent: &PaymentIntent) -> Result<Option<SettlementProviderRequest>>;
+    }
+
+    pub struct SettlementEvidence;
+    impl SettlementEvidence {
+        ///
+        /// # Errors
+        /// Returns the validation, cryptographic or storage failure from the requested operation.
+        pub fn hash(value: &serde_json::Value) -> Result<String> {
+            use sha2::{Digest as _, Sha256};
+            let encoded = serde_json::to_vec(value)?;
+            let mut hash = Sha256::new();
+            hash.update(b"agentvault.settlement-evidence.v1");
+            hash.update(u64::try_from(encoded.len()).unwrap_or(u64::MAX).to_be_bytes());
+            hash.update(encoded);
+            Ok(hex::encode(hash.finalize()))
+        }
+        ///
+        /// # Errors
+        /// Returns a serialization error if the provider observation cannot be encoded.
+        pub fn verification_ref(intent_id: &str, result: &SettlementProviderResult) -> Result<String> {
+            Self::hash(&serde_json::json!({"intent_id":intent_id,"operation":"verify","result":result}))
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/model/settlement_test.rs"));
+    }
+}
+pub use settlement_model::*;

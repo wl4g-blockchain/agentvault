@@ -219,6 +219,6 @@ impl OutboxPostgresRepository {
 #[path = "../../../tests/storage/outbox/postgres_test.rs"]
 mod tests;
 
-use crate::util::storage::PaymentStorageCodec;
+use crate::storage::codec::PaymentStorageCodec;
 
 use crate::storage::outbox::OutboxStorageRules;

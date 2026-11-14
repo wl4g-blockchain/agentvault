@@ -1,16 +1,16 @@
 //! Signing persistence contract.
 
 use crate::{
-    model::protocol::ProtocolSigningRequest, model::PaymentChallenge, model::PaymentClient, model::PaymentEvent,
-    model::PaymentIntent, model::PaymentPolicy, model::PaymentScenario, storage::EncryptedWalletKeyVersion,
+    model::PaymentChallenge, model::PaymentClient, model::PaymentEvent, model::PaymentIntent, model::PaymentPolicy,
+    model::PaymentScenario, model::ProtocolSigningRequest, storage::EncryptedWalletKeyVersion,
     storage::IdempotentWrite, storage::OutboxMessage, storage::PaymentWallet,
     util::secure_material::SealedSensitiveMaterial, Result,
 };
 use async_trait::async_trait;
 
+pub(crate) mod r#macro;
 pub mod postgres;
 pub mod sqlite;
-pub(crate) mod transactions;
 
 /// Principal-owned identity common to both a new signature and a durable
 /// signed-payment replay.

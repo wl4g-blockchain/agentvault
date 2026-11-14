@@ -12,3 +12,6 @@ pub use util::Result;
 pub(crate) mod authguard_access_wire {
     tonic::include_proto!("authguard.access.v1");
 }
+
+pub mod handler;
+pub mod resource;

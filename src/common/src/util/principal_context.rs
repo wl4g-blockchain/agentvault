@@ -1,3 +1,4 @@
+pub const UNRESTRICTED_PRINCIPAL: &str = "agentvault:internal:unrestricted";
 use std::{fmt, future::ready, future::Future, sync::Arc, time::SystemTime, time::UNIX_EPOCH};
 
 use axum::{extract::FromRequestParts, http::request::Parts, http::HeaderMap, http::StatusCode};
@@ -11,8 +12,8 @@ use tonic::{metadata::MetadataValue, transport::Channel, transport::Endpoint, Co
 use crate::{
     apm::inject_current_trace_context,
     authguard_access_wire::access_context_service_client::AccessContextServiceClient,
-    config::AuthGuardIntegrationConfig, config::AuthGuardScopeResolverConfig, model::scenario::UNRESTRICTED_PRINCIPAL,
-    util::secret::SecretReader, Error, Result,
+    config::AuthGuardIntegrationConfig, config::AuthGuardScopeResolverConfig, util::secret::SecretReader, Error,
+    Result,
 };
 
 const ACCESS_CONTEXT_HEADER: &str = "x-authguard-context";

@@ -29,12 +29,17 @@ pub use signing::OutboundSigningDependencies;
 pub mod wallet;
 pub use wallet::WalletHandler;
 pub mod wallet_import;
-use agentvault_common::{
-    model::scenario::UNRESTRICTED_PRINCIPAL,
-    model::{AccessContext, ReceiptObservation, TransferQuery},
-    util::balance::WalletBalanceSource,
-    util::receipt::ReceiptSource,
-    util::scenario::ScenarioHandler,
-};
+use crate::handler::balance::WalletBalanceSource;
+use agentvault_common::handler::scenario::ScenarioHandler;
+use agentvault_common::model::AccessContext;
+use agentvault_common::model::ReceiptObservation;
+use agentvault_common::model::TransferQuery;
+use agentvault_common::util::principal_context::UNRESTRICTED_PRINCIPAL;
+use agentvault_protocol::receipt::ReceiptSource;
 use agentvault_protocol::ProtocolRegistry;
 pub use wallet_import::WalletImportService;
+
+pub mod balance;
+pub mod client;
+
+pub mod dto;

@@ -7,9 +7,9 @@ use crate::{
 };
 use async_trait::async_trait;
 
+pub(crate) mod r#macro;
 pub mod postgres;
 pub mod sqlite;
-pub(crate) mod transactions;
 
 /// Atomic approval decision. Only JWT metadata and its AEAD envelope cross
 /// this boundary; the plaintext compact token is never persisted or returned.

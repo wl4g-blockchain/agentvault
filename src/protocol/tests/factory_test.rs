@@ -1,3 +1,4 @@
+use crate::PaymentCredentialProjection;
 use std::sync::Arc;
 
 use crate::x402::X402Adapter;
@@ -37,7 +38,7 @@ fn factory_builds_isolated_registry_and_rejects_duplicates() {
         .is_err());
 }
 
-use crate::model::{payment_api::PaymentCredentialDto, PaymentCredential};
+use crate::model::{PaymentCredential, PaymentCredentialDto};
 use serde_json::{json, Value};
 #[test]
 fn http_credential_debug_and_delivery_never_expose_nested_secrets() {

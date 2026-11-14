@@ -1,12 +1,12 @@
 use crate::{
     storage::base_postgres::dynamic_postgres as dynamic_query,
-    storage::base_postgres::PostgresRepository as BaseRepository, util::storage::PostgresAmountCodec as AmountCodec,
+    storage::base_postgres::PostgresRepository as BaseRepository, storage::codec::PostgresAmountCodec as AmountCodec,
 };
 use sqlx::{postgres::PgRow as DbRow, PgConnection as Connection, PgPool as Pool};
 
 // Policy repository; transaction rules shared across SQLx drivers.
 
-type AmountValue = crate::util::storage::PgAmount;
+type AmountValue = crate::storage::codec::PgAmount;
 type JsonValue = serde_json::Value;
 
 impl PolicyPostgresRepository {
@@ -28,7 +28,7 @@ impl PolicyPostgresRepository {
     }
 }
 
-crate::storage::policy::transactions::policy_repository!(
+crate::storage::policy::r#macro::policy_repository!(
     PolicyPostgresRepository,
     " FOR UPDATE",
     " FOR SHARE",

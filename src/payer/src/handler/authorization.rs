@@ -10,7 +10,7 @@ use crate::{
     storage::IPolicyRepository, storage::IdempotentWrite, storage::OutboxMessage, storage::OutboxStatus,
     storage::PageRequest, Error, Result,
 };
-use agentvault_common::util::validation::PaymentValidation;
+use agentvault_common::model::payment::PaymentValidation;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;

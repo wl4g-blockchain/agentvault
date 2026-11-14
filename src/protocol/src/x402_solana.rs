@@ -432,7 +432,7 @@ impl X402Solana {
                 .fee_payer
                 .parse::<SolanaAddress>()
                 .map_err(|_| Error::Config("x402 Solana fee payer is invalid".to_owned()))?;
-            let rpc = crate::util::solana_rpc::SolanaRpcClient::build(
+            let rpc = crate::rpc::solana::SolanaRpcClient::build(
                 &config.rpc_url,
                 config.rpc_timeout,
                 config.rpc_max_response_bytes,

@@ -335,7 +335,7 @@ async fn browser_public_key_encryption_reaches_kek_encrypted_sql() {
         .unwrap();
     assert_eq!(
         wallet.address,
-        crate::util::crypto::WalletCrypto::address(&[11_u8; 32]).unwrap()
+        crate::model::wallet::WalletCrypto::address(&[11_u8; 32]).unwrap()
     );
     let versions = crate::storage::IRepository::ports(storage.clone())
         .wallets

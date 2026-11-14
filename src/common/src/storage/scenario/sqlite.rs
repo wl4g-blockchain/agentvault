@@ -22,7 +22,7 @@ impl IScenarioRepository for ScenarioSqliteRepository {
         self.base
             .entity_register(scenario)
             .await
-            .map_err(crate::util::storage::PaymentStorageCodec::domain_error)
+            .map_err(crate::storage::codec::PaymentStorageCodec::domain_error)
     }
 
     async fn register_with_policy(

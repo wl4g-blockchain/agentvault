@@ -3,9 +3,9 @@
 use crate::{model::PaymentPolicy, storage::Page, storage::PageRequest, Result};
 use async_trait::async_trait;
 
+pub(crate) mod r#macro;
 pub mod postgres;
 pub mod sqlite;
-pub(crate) mod transactions;
 
 #[async_trait]
 pub trait IPolicyRepository: Send + Sync {

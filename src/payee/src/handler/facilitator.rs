@@ -539,7 +539,7 @@ impl X402FacilitatorProvider {
 #[path = "../../tests/handler/facilitator_test.rs"]
 mod tests;
 
-use crate::model::protocol::ProtocolWire;
+use crate::protocol::ProtocolWire;
 impl X402FacilitatorProvider {
     fn parse_verify_response(response: &[u8]) -> Result<OfficialVerifyResponse> {
         let wire = ProtocolWire::strict_variant_wire(
