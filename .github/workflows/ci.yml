@@ -231,7 +231,6 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check \
             --requirement use-cases/marketpulse-feed-subscription/requirements.txt
-          python3 -m playwright install --with-deps chromium
           python3 -m pip install --disable-pip-version-check --editable 'src/sdk/python[test]'
           for suite in tests/agentvault tests/agentvault/config tests/agentvault/model \
             tests/agentvault/payer tests/agentvault/payee tests/agentvault/protocol \
@@ -495,8 +494,10 @@ jobs:
         run: |
           docker pull "${E2E_AGENTVAULT_IMAGE}"
           docker pull "${E2E_AGENTVAULT_WEB_IMAGE}"
-          revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${E2E_AGENTVAULT_IMAGE}")
-          test "${revision}" = "${HEAD_SHA}"
+          for image in "${E2E_AGENTVAULT_IMAGE}" "${E2E_AGENTVAULT_WEB_IMAGE}"; do
+            revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${image}")
+            test "${revision}" = "${HEAD_SHA}"
+          done
 
       - name: Create an isolated pinned K3s cluster
         run: |

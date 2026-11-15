@@ -16,7 +16,9 @@ from verifier.infra.s00_infrastructure import (
     AGENTVAULT_CHART,
     AGENTVAULT_NAMESPACE,
     AGENTVAULT_VALUES,
+    PAYEE_ADDRESS,
     RUNTIME_ROOT,
+    TOKEN_CONTRACT,
 )
 from verifier.infra.s00_infrastructure import (
     E2ES00InfrastructureVerifier as Infra,
@@ -182,6 +184,7 @@ class E2ES41LiveWalletVerifier:
             self.screenshots.append(name)
 
         def reads(self, page: Page) -> None:
+            identity = payer_identity(self.context.payer_language)
             self.visit(page, "/")
             expect(
                 page.get_by_role("heading", name="Payments with a memory.")
@@ -210,14 +213,29 @@ class E2ES41LiveWalletVerifier:
             expect(page.get_by_test_id("balance-conservation")).to_have_attribute(
                 "data-conserved", "true"
             )
+            page.get_by_test_id("balance-scenario").fill(identity.scenario_id)
+            page.get_by_test_id("balance-wallet").fill(identity.primary_wallet_id)
+            page.get_by_label("Token contract", exact=True).fill(TOKEN_CONTRACT)
+            page.get_by_role("button", name="Calculate balance").click()
+            expect(page.get_by_test_id("wallet-balance")).to_contain_text(
+                identity.primary_wallet_id
+            )
+            expect(page.locator(".error-banner")).to_have_count(0)
             self.capture(page, "balances")
             self.visit(page, "/approvals")
             expect(
                 page.get_by_role("heading", name="One decision. One grant.")
             ).to_be_visible()
+            page.get_by_label("Scenario ID", exact=True).fill(identity.scenario_id)
+            page.get_by_label("Business run ID", exact=True).fill(self.context.run_id)
+            with page.expect_response(
+                lambda r: "/api/v1/approvals?" in r.url
+            ) as pending:
+                page.get_by_role("button", name="Load pending").click()
+            assert pending.value.status == 200
+            expect(page.locator(".error-banner")).to_have_count(0)
             self.capture(page, "approvals")
             self.visit(page, "/clients")
-            identity = payer_identity(self.context.payer_language)
             page.get_by_test_id("client-list").get_by_role("button").filter(
                 has_text=identity.client_id
             ).click()
@@ -247,6 +265,11 @@ class E2ES41LiveWalletVerifier:
             page.get_by_label("Initial Policy ID", exact=True).fill(
                 "policy-browser-" + self.context.run_id
             )
+            page.get_by_label("Allowed recipients", exact=True).fill(PAYEE_ADDRESS)
+            page.get_by_label("Allowed origins", exact=True).fill(
+                self.runtime._url("E2E_MARKETPULSE_PORT")
+            )
+            page.get_by_label("Token contract", exact=True).fill(TOKEN_CONTRACT)
             selector = page.get_by_test_id("wallet-selector")
             selector.locator("summary").click()
             for selected in (wallet_id, identity.primary_wallet_id):
