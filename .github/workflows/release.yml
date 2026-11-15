@@ -214,6 +214,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
+      - name: Configure shared build images
+        env:
+          E2E_IMAGE_NETWORK: NON_GFW
+        run: python3 use-cases/marketpulse-feed-subscription/util/images.py >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -231,8 +236,8 @@ jobs:
           file: web/Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
-            NODE_IMAGE=registry.cn-shenzhen.aliyuncs.com/wl4g/node:22-alpine
-            WEB_IMAGE=docker.io/nginxinc/nginx-unprivileged:1.27-alpine
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            WEB_IMAGE=${{ env.WEB_IMAGE }}
           labels: |
             org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}

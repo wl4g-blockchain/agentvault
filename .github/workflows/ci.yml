@@ -10,8 +10,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web-arm64:
+    name: Verify web image (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Configure shared build images
+        env:
+          E2E_IMAGE_NETWORK: NON_GFW
+        run: python3 use-cases/marketpulse-feed-subscription/util/images.py >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build native arm64 web image
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: agentvault-web:ci-arm64
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            WEB_IMAGE=${{ env.WEB_IMAGE }}
+          cache-from: type=gha,scope=agentvault-web-arm64
+          cache-to: type=gha,mode=max,scope=agentvault-web-arm64,ignore-error=true
+
+      - name: Verify native runtime and generated assets
+        run: |
+          docker run --rm --platform linux/arm64 \
+            --entrypoint sh agentvault-web:ci-arm64 -ec \
+            'test "$(uname -m)" = aarch64 && test -s /usr/share/nginx/html/index.html && nginx -t'
+
   build-and-test:
     name: Build and test
+    needs: web-arm64
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
