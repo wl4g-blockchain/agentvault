@@ -45,6 +45,18 @@ class LayoutImagesTest(unittest.TestCase):
             services = json.loads(rendered)["services"]
             for name in ("postgres", "redis", "jaeger"):
                 self.assertIn("agentvault-" + name, services)
+            postgres = services["agentvault-postgres"]
+            self.assertEqual(
+                postgres["image"],
+                "registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3",
+            )
+            self.assertTrue(
+                any(
+                    volume.get("source") == "agentvault-postgres-data"
+                    and volume["target"] == "/bitnami/postgresql"
+                    for volume in postgres["volumes"]
+                )
+            )
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "external.env"
             config.write_text(

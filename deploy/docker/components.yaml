@@ -46,4 +46,3 @@ services:
     build: { context: ../../web, dockerfile: Dockerfile }
     expose: [8080]
     restart: unless-stopped
-
