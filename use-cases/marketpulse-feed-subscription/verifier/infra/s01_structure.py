@@ -1420,6 +1420,7 @@ class E2ES01StructureVerifier:
                 "Dockerfile.dockerignore",
                 "config",
                 "docker-compose.yaml",
+                "web",
             }:
                 raise RuntimeError(
                     "project deployment wrapper may contain only production Docker links, config/ and docker-compose.yaml"
@@ -1432,6 +1433,15 @@ class E2ES01StructureVerifier:
                     != Project.REPOSITORY_ROOT / "deploy/docker" / name
                 ):
                     raise RuntimeError(f"project must link the production {name}")
+            for name, target in (
+                ("Dockerfile", "Dockerfile"),
+                ("Dockerfile.dockerignore", ".dockerignore"),
+            ):
+                path = project / "web" / name
+                if not path.is_symlink() or path.resolve() != (
+                    Project.REPOSITORY_ROOT / "web" / target
+                ):
+                    raise RuntimeError(f"project must link the production Web {name}")
             if (
                 Project.AGENTVAULT_CHART
                 != Project.REPOSITORY_ROOT / "deploy/helm/agentvault"

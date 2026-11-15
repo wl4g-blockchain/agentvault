@@ -35,6 +35,7 @@ class E2EImagesDefinitions:
     }
     LOCAL_IMAGES = {
         "agentvault": "localhost/agentvault-e2e:local",
+        "agentvault-web": "localhost/agentvault-web-e2e:local",
         "admin-ui": "localhost/quantstream-admin-ui-e2e:local",
         **{
             f"payee-{language}": f"localhost/marketpulse-{name}-e2e:local"
@@ -113,6 +114,7 @@ class E2EImagesDefinitions:
             )
         },
         "agentvault": "E2E_AGENTVAULT_IMAGE",
+        "agentvault-web": "E2E_AGENTVAULT_WEB_IMAGE",
         "admin-ui": "E2E_QUANTSTREAM_UI_IMAGE",
         **{
             f"payee-{language}": f"E2E_MARKETPULSE_{name.upper()}_IMAGE"

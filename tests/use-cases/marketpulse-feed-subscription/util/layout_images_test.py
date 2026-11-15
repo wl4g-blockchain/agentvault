@@ -15,7 +15,13 @@ class LayoutImagesTest(unittest.TestCase):
         directory = Project.AGENTVAULT_ROOT
         self.assertEqual(
             {p.name for p in directory.iterdir()},
-            {"Dockerfile", "Dockerfile.dockerignore", "config", "docker-compose.yaml"},
+            {
+                "Dockerfile",
+                "Dockerfile.dockerignore",
+                "config",
+                "docker-compose.yaml",
+                "web",
+            },
         )
         for name in ("Dockerfile", "Dockerfile.dockerignore"):
             self.assertTrue((directory / name).is_symlink())
@@ -27,6 +33,15 @@ class LayoutImagesTest(unittest.TestCase):
             Project.component_chart("agentvault"),
             Project.REPOSITORY_ROOT / "deploy/helm/agentvault",
         )
+        for name, target in (
+            ("Dockerfile", "Dockerfile"),
+            ("Dockerfile.dockerignore", ".dockerignore"),
+        ):
+            self.assertTrue((directory / "web" / name).is_symlink())
+            self.assertEqual(
+                (directory / "web" / name).resolve(),
+                Project.REPOSITORY_ROOT / "web" / target,
+            )
 
     def test_all_network_matrix_dependencies_have_explicit_correct_origins(self):
         for host in Images.MATRIX[Images.IN_GFW]:

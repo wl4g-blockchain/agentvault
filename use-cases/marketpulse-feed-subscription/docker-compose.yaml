@@ -72,6 +72,11 @@ x-agentvault-build: &agentvault-build
     RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:?required}
 
 services:
+  agentvault-web:
+    extends:
+      file: ./deploy/agentvault/docker-compose.yaml
+      service: agentvault-web
+
   # Network namespace anchor and EVM node. Host bindings for colocated E2E
   # processes live here because Compose forbids ports with network_mode.
   anvil:

@@ -27,6 +27,21 @@ spec:
           imagePullPolicy: {{ $frontend.image.pullPolicy }}
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+          livenessProbe:
+            httpGet: { path: /, port: http }
+          volumeMounts:
+            - { name: runtime, mountPath: /tmp }
+            {{- with $frontend.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml $frontend.resources | nindent 12 }}
+      volumes:
+        - name: runtime
+          emptyDir: { sizeLimit: 32Mi }
+        {{- with $frontend.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 {{- end }}

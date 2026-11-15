@@ -102,6 +102,8 @@ agentvault:
   frontend:
     enabled: true
     replicaCount: 2
+    extraVolumes: []
+    extraVolumeMounts: []
     image:
       repository: ghcr.io/wl4g-blockchain/agentvault-web
       tag: ""
