@@ -4,7 +4,7 @@
 
 验证 QuantStream 通过 AgentVault 购买 MarketPulse 新闻：覆盖 Rust、Go、Python、TypeScript、Java 五语言 SDK，HTTP 控制面，Anvil 上的 x402/EVM、Solana SPL 实付、MPP/Tempo charge 与交付恢复、A2A 边界和 Chromium Dashboard。完整隔离矩阵为 5×5×1=25 组，默认 simple 为 2×2×1=4 组。
 
-`deploy/` 按服务水平拆分，mock 的生产源码和依赖清单放在各自 `source/`，原生契约测试迁入所属纵向场景的 `contracts/`；SDK 仍引用仓库 `src/sdk/`。AgentVault 的 Dockerfile、Dockerfile.dockerignore 链接到正式部署文件；该组件根目录只保留两条链接、config/ 和 docker-compose.yaml。Helm 直接使用仓库 deploy/helm/agentvault，E2E 叠加配置放在 config/。中间件使用上游镜像，无须复制上游源码；shared-helm 目录仅保存共享叠加配置。
+`deploy/` 按服务水平拆分，mock 的生产源码和依赖清单放在各自 `source/`，原生契约测试迁入所属纵向场景的 `contracts/`；SDK 仍引用仓库 `src/sdk/`。AgentVault 后端与 web/ 下的 Dockerfile 链接到正式部署文件；Helm 直接复用 deploy/helm/agentvault。PG、Jaeger 直接复用 deploy/helm/{postgres,jaeger} 及 deploy/docker/middleware/，use case 不保留独立中间件部署目录，只在 deploy/agentvault/config/ 保存 E2E 叠加配置。正式部署默认开启 PG、Redis、Jaeger，支持关闭并使用外部连接；shared-helm 目录仅保存共享叠加配置。
 
 `verifier/` 按场景纵向拆分，每个 `E2ES<NN><Description>Verifier` 由 runner 按 `deploy(context) → init(context) → verify(context)` 调用，可选阶段无需额外操作；失败也会关闭临时转发。部署通用能力放在 `util/`，支付业务编排及断言放在对应场景。共享上下文、身份、资源 fixture 与运行契约统一在 `verifier/context.py`。
 
@@ -26,7 +26,7 @@ marketpulse-feed-subscription/
 ├── docker-compose.yaml
 ├── deploy/
 │   ├── agentvault/{Dockerfile->production,Dockerfile.dockerignore->production,config/,docker-compose.yaml}
-│   ├── <middleware>/{Dockerfile,docker-compose.yaml,helm/}
+│   ├── <case-fixture>/{Dockerfile,docker-compose.yaml,helm/}
 │   ├── evm/{source/{src/,artifacts/,*.sh},Dockerfile,docker-compose.yaml,helm/}
 │   ├── <mock-service>/{source/,Dockerfile,docker-compose.yaml,helm/}
 │   ├── mock-payee-marketpulse-shared-helm/{e2e-envoy.configmap.yaml,e2e-values.yaml}

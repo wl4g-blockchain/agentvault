@@ -77,6 +77,8 @@ agentvault:
       AGENTVAULT__MGMT__HOST: "0.0.0.0"
       AGENTVAULT__MGMT__PORT: "{{ .Values.agentvault.backend.service.managementPort }}"
       AGENTVAULT__LOGGING__MODE: "JSON"
+      AGENTVAULT__MGMT__OTEL__ENABLED: "true"
+      AGENTVAULT__MGMT__OTEL__ENDPOINT: "http://{{ .Release.Name }}-jaeger:4317"
       AGENTVAULT__STORAGE__PROVIDER: "postgres"
       AGENTVAULT__STORAGE__POSTGRES__MAX_CONNECTIONS: "32"
       AGENTVAULT__CACHE__PROVIDER: "redis"
@@ -124,6 +126,15 @@ agentvault:
   # etc/agentvault.yaml embedded in the runtime image; use this only for
   # complex maps/lists that cannot be expressed as scalar ENV overrides.
   agentvault-config: ""
+
+# Each middleware can be disabled when its connection points to an external service.
+# PostgreSQL/Redis credentials are read from the pre-created runtime Secret.
+postgres:
+  enabled: true
+redis:
+  enabled: true
+jaeger:
+  enabled: true
 
 # AuthGuard dependency middleware. This subtree is passed directly to the
 # AuthGuard dependency chart without translating its native values.

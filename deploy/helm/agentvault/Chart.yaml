@@ -6,6 +6,18 @@ version: 0.1.0
 appVersion: "0.1.0"
 keywords: [agent, payment, x402, mpp, wallet]
 dependencies:
+  - name: postgres
+    version: 0.1.0
+    repository: file://../postgres
+    condition: postgres.enabled
+  - name: redis
+    version: 0.1.0
+    repository: file://../redis
+    condition: redis.enabled
+  - name: jaeger
+    version: 0.1.0
+    repository: file://../jaeger
+    condition: jaeger.enabled
   - name: authguard
     version: 1.0.1
     repository: oci://ghcr.io/wl4g/charts

@@ -1423,7 +1423,7 @@ class E2ES01StructureVerifier:
                 "web",
             }:
                 raise RuntimeError(
-                    "project deployment wrapper may contain only production Docker links, config/ and docker-compose.yaml"
+                    "project deployment wrapper may contain only production backend/Web links, config/ and docker-compose.yaml"
                 )
             for name in ("Dockerfile", "Dockerfile.dockerignore"):
                 path = project / name
@@ -1451,6 +1451,18 @@ class E2ES01StructureVerifier:
                 )
             for component in Project.DEPLOY_COMPONENTS:
                 base = Project.DEPLOY_ROOT / component
+                if component in Project.PRODUCTION_MIDDLEWARE:
+                    if base.exists():
+                        raise RuntimeError(
+                            f"middleware must reuse production deployment: {base}"
+                        )
+                    if not (
+                        Project.component_chart(component) / "Chart.yaml"
+                    ).is_file():
+                        raise RuntimeError(
+                            f"missing production middleware chart: {component}"
+                        )
+                    continue
                 assets = (
                     ("Dockerfile", "docker-compose.yaml")
                     if component == "agentvault"
@@ -1974,6 +1986,16 @@ class E2ES01StructureVerifier:
                 )
             for namespace, components in E2E_NAMESPACE_GROUPS.items():
                 for component in components:
+                    if component in Project.PRODUCTION_MIDDLEWARE:
+                        # Production charts use the release namespace; their E2E
+                        # placement and names live exclusively in runner overrides.
+                        chart_root = Project.component_chart(component)
+                        template = (chart_root / "templates/resources.yaml").read_text()
+                        if "namespace: {{ .Release.Namespace }}" not in template:
+                            errors.append(
+                                f"production {component} must honor its release namespace"
+                            )
+                        continue
                     chart_root = Project.E2E_ROOT / "deploy" / component / "helm"
                     chart = (chart_root / "Chart.yaml").read_text(encoding="utf-8")
                     annotation = f"agentvault.io/e2e-namespace: {namespace}"

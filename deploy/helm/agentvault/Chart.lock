@@ -1,6 +1,15 @@
 dependencies:
+- name: postgres
+  repository: file://../postgres
+  version: 0.1.0
+- name: redis
+  repository: file://../redis
+  version: 0.1.0
+- name: jaeger
+  repository: file://../jaeger
+  version: 0.1.0
 - name: authguard
   repository: oci://ghcr.io/wl4g/charts
   version: 1.0.1
-digest: sha256:3f3af92047b5f25a3e697e516a3e526be82d3a68056797b627a227d7bafadf7a
-generated: "2026-09-24T14:43:26.769216577+08:00"
+digest: sha256:496ed90beb28b8394427317f66f05d0b1a3a09cc47746f7a0cf01509bb05b301
+generated: "2026-11-15T23:36:43.522381+08:00"
