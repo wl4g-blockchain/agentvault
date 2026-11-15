@@ -4,7 +4,7 @@ use super::{
     PaymentLedgerEntry, PaymentPrice, PaymentReceipt, PaymentStatus, ReservationStatus, Result, SettleIncomingPayment,
     SettledIncomingPayment, SettlementProviderResult, Uuid, Value, VerifyIncomingPayment, X402Evm,
 };
-use agentvault_common::util::validation::PaymentValidation;
+use agentvault_common::model::payment::PaymentValidation;
 
 pub(crate) struct SettlementFacts;
 
@@ -282,11 +282,11 @@ impl SettlementFacts {
     }
 
     pub(crate) fn evidence_hash(value: &Value) -> Result<String> {
-        crate::model::settlement::SettlementEvidence::hash(value)
+        crate::storage::reconciliation::SettlementEvidence::hash(value)
     }
 
     pub(crate) fn provider_verification_ref(intent_id: &str, result: &SettlementProviderResult) -> Result<String> {
-        crate::model::settlement::SettlementEvidence::verification_ref(intent_id, result)
+        crate::storage::reconciliation::SettlementEvidence::verification_ref(intent_id, result)
     }
 
     pub(crate) fn next_timestamp(previous: i64, now: i64) -> i64 {

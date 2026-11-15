@@ -1,13 +1,15 @@
 use super::{provider_http::FixedHttpJsonTransport, provider_http::ProviderHttpEndpoint};
-use crate::{
-    model::SettlementOperation, model::SettlementProviderRequest, model::SettlementProviderResult, Error, Result,
-};
+use crate::storage::reconciliation::SettlementOperation;
+use crate::storage::reconciliation::SettlementProviderRequest;
+use crate::storage::reconciliation::SettlementProviderResult;
+use crate::Error;
+use crate::Result;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use std::{collections::BTreeMap, collections::HashMap, sync::Arc, time::Duration};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 256 * 1024;
-pub use agentvault_common::model::settlement::ExternalSettlementProvider;
+pub use agentvault_common::storage::reconciliation::ExternalSettlementProvider;
 
 /// Fixed protocol-to-provider routing. Challenge content cannot select or
 /// override a provider endpoint.

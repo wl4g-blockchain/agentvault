@@ -1,9 +1,9 @@
 //! Durable payment persistence ports and SQL adapters.
-//!
-//! `storage` owns database-agnostic contracts, while `postgres` and `sqlite`
-//! own dialect-specific prepared SQL. Correctness-sensitive mutations remain
-//! explicit aggregate transactions; no generic row-update escape hatch is
-//! exposed to handlers.
+//
+// `storage` owns database-agnostic contracts, while `postgres` and `sqlite`
+// own dialect-specific prepared SQL. Correctness-sensitive mutations remain
+// explicit aggregate transactions; no generic row-update escape hatch is
+// exposed to handlers.
 
 pub mod base_postgres;
 pub mod base_sqlite;
@@ -63,4 +63,9 @@ pub use query::*;
 
 pub mod reconciliation;
 pub mod reconciliation_posting;
-pub mod resource;
+
+pub mod codec;
+
+pub use reconciliation::{
+    ConfirmedSettlement, ReconciliationEvidence, ReconciliationProviderObservation, ReconciliationRun,
+};

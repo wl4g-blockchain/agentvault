@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use crate::model::Amount;
 use crate::model::AssetIdentity;
 use crate::model::PaymentDirection;
-use crate::model::SettlementProviderResult;
+use crate::storage::reconciliation::SettlementProviderResult;
 use crate::storage::AuthorizationRecord;
 use crate::storage::AuthorizationWrite;
 use crate::storage::BudgetSnapshot;
@@ -21,10 +21,10 @@ use crate::storage::ReconciliationClaim;
 use crate::storage::VerificationWrite;
 
 use super::*;
-use crate::model::settlement::ExternalSettlementProvider;
-use crate::model::settlement::ProviderReconciliationRequest;
-use crate::model::SettlementOperation;
-use crate::model::SettlementProviderRequest;
+use crate::storage::reconciliation::ExternalSettlementProvider;
+use crate::storage::reconciliation::ProviderReconciliationRequest;
+use crate::storage::reconciliation::SettlementOperation;
+use crate::storage::reconciliation::SettlementProviderRequest;
 use crate::storage::reconciliation::VerifyOnlyProviderEvidence;
 use async_trait::async_trait;
 
@@ -717,7 +717,7 @@ mod scheduling {
     use super::*;
     use crate::config::StorageConfig;
     use crate::model::PaymentIntent;
-    use crate::model::ReconciliationEvidence;
+    use crate::storage::reconciliation::ReconciliationEvidence;
     use crate::Error;
     use async_trait::async_trait;
     struct BrokenClock;

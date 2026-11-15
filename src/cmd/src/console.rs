@@ -17,7 +17,7 @@ use crate::{
     storage::LedgerQuery, storage::PageRequest, storage::PaymentQuery, storage::StorageFactory, storage::StoragePorts,
     AgentVaultServer, AppConfig,
 };
-use agentvault_common::storage::resource::ResourceImporter;
+use agentvault_common::resource::ResourceImporter;
 
 #[derive(Debug, Parser)]
 #[command(name = "agentvault", version, about = "AgentVault payment infrastructure")]

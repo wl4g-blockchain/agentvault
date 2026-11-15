@@ -7,6 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+tracing.workspace = true
+solana-rpc-client.workspace = true
+solana-transaction-status-client-types.workspace = true
 alloy.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true

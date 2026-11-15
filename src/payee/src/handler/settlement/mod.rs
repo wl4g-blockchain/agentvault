@@ -2,21 +2,48 @@ use super::{
     AccessContext, EvmAuthorizationObservation, EvmAuthorizationQuery, EvmAuthorizationSource, ProtocolRegistry,
     ScenarioHandler,
 };
-use crate::{
-    handler::provider::SettlementProviderRegistry, model::wallet::is_evm_payment_network, model::Amount,
-    model::IncomingVerification, model::IssuePaymentChallenge, model::LedgerEntryType, model::PaymentChallenge,
-    model::PaymentCredential, model::PaymentDirection, model::PaymentEvent, model::PaymentEventType,
-    model::PaymentIntent, model::PaymentLedgerEntry, model::PaymentPolicy, model::PaymentPrice, model::PaymentReceipt,
-    model::PaymentStatus, model::PolicyDecision, model::PolicyEngine, model::PolicyEvaluation,
-    model::ReconciliationProviderObservation, model::ReservationStatus, model::SettleIncomingPayment,
-    model::SettledIncomingPayment, model::SettlementOperation, model::SettlementProviderRequest,
-    model::SettlementProviderResult, model::VerifyIncomingPayment, model::WalletBudget,
-    storage::ChallengeIssuanceGuard, storage::ChallengeWrite, storage::IEventRepository, storage::IIntentRepository,
-    storage::IPolicyRepository, storage::IPriceRepository, storage::IWalletRepository, storage::IdempotentWrite,
-    storage::OutboxMessage, storage::OutboxStatus, storage::PaymentProgressWrite, storage::PaymentWallet,
-    storage::SettlementWrite, storage::VerificationWrite, util::secure_material::SealedSensitiveMaterial,
-    util::secure_material::SensitiveMaterialProtector, Error, Result,
-};
+use crate::handler::provider::SettlementProviderRegistry;
+use crate::model::wallet::is_evm_payment_network;
+use crate::model::Amount;
+use crate::model::LedgerEntryType;
+use crate::model::PaymentChallenge;
+use crate::model::PaymentCredential;
+use crate::model::PaymentDirection;
+use crate::model::PaymentEvent;
+use crate::model::PaymentEventType;
+use crate::model::PaymentIntent;
+use crate::model::PaymentLedgerEntry;
+use crate::model::PaymentPolicy;
+use crate::model::PaymentPrice;
+use crate::model::PaymentReceipt;
+use crate::model::PaymentStatus;
+use crate::model::PolicyDecision;
+use crate::model::PolicyEngine;
+use crate::model::PolicyEvaluation;
+use crate::model::ReservationStatus;
+use crate::model::WalletBudget;
+use crate::storage::reconciliation::ReconciliationProviderObservation;
+use crate::storage::reconciliation::SettlementOperation;
+use crate::storage::reconciliation::SettlementProviderRequest;
+use crate::storage::reconciliation::SettlementProviderResult;
+use crate::storage::ChallengeIssuanceGuard;
+use crate::storage::ChallengeWrite;
+use crate::storage::IEventRepository;
+use crate::storage::IIntentRepository;
+use crate::storage::IPolicyRepository;
+use crate::storage::IPriceRepository;
+use crate::storage::IWalletRepository;
+use crate::storage::IdempotentWrite;
+use crate::storage::OutboxMessage;
+use crate::storage::OutboxStatus;
+use crate::storage::PaymentProgressWrite;
+use crate::storage::PaymentWallet;
+use crate::storage::SettlementWrite;
+use crate::storage::VerificationWrite;
+use crate::util::secure_material::SealedSensitiveMaterial;
+use crate::util::secure_material::SensitiveMaterialProtector;
+use crate::Error;
+use crate::Result;
 use agentvault_protocol::x402::X402Evm;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
@@ -101,3 +128,44 @@ impl SettlementCoordinator {
 #[cfg(test)]
 #[path = "../../../tests/handler/settlement/mod_test.rs"]
 pub(crate) mod tests;
+
+mod command {
+    use crate::model::{PaymentCredential, PaymentIntent, PaymentReceipt};
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct SettledIncomingPayment {
+        pub intent: PaymentIntent,
+        pub receipt: PaymentReceipt,
+    }
+    #[derive(Clone, Debug)]
+    pub struct VerifyIncomingPayment {
+        pub scenario_id: String,
+        pub run_id: String,
+        pub challenge_hash: String,
+        pub request_hash: String,
+        pub credential: PaymentCredential,
+    }
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct IncomingVerification {
+        pub intent: PaymentIntent,
+        pub valid: bool,
+        pub verification_ref: Option<String>,
+    }
+    #[derive(Clone, Debug)]
+    pub struct SettleIncomingPayment {
+        pub scenario_id: String,
+        pub run_id: String,
+        pub intent_id: String,
+        pub verification_ref: String,
+    }
+    #[derive(Clone, Debug)]
+    pub struct IssuePaymentChallenge {
+        pub scenario_id: String,
+        pub run_id: String,
+        pub price_id: String,
+        pub resource: String,
+        pub origin: String,
+        pub protocol: String,
+        pub request_hash: String,
+    }
+}
+pub use command::*;

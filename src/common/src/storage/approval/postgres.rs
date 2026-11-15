@@ -1,16 +1,15 @@
 use crate::{
     storage::base_postgres::dynamic_postgres as dynamic_query,
-    storage::base_postgres::PostgresRepository as BaseRepository,
+    storage::base_postgres::PostgresRepository as BaseRepository, storage::codec::PostgresAmountCodec as AmountCodec,
     storage::event::postgres::EventPostgresRepository as EventRepository,
     storage::outbox::postgres::OutboxPostgresRepository as OutboxRepository,
     storage::payment::postgres::PaymentPostgresRepository as PaymentRepository,
-    util::storage::PostgresAmountCodec as AmountCodec,
 };
 use sqlx::{postgres::PgRow as DbRow, PgConnection as Connection};
 
 // Approval repository; transaction rules shared across SQLx drivers.
 
-type AmountValue = crate::util::storage::PgAmount;
+type AmountValue = crate::storage::codec::PgAmount;
 type JsonValue = serde_json::Value;
 
 impl ApprovalPostgresRepository {
@@ -25,7 +24,7 @@ impl ApprovalPostgresRepository {
     }
 }
 
-crate::storage::approval::transactions::approval_repository!(
+crate::storage::approval::r#macro::approval_repository!(
     ApprovalPostgresRepository,
     " FOR UPDATE",
     " FOR SHARE",

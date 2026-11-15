@@ -1,14 +1,13 @@
 use crate::{
     storage::approval::postgres::ApprovalPostgresRepository as ApprovalRepository,
     storage::base_postgres::dynamic_postgres as dynamic_query,
-    storage::base_postgres::PostgresRepository as BaseRepository,
+    storage::base_postgres::PostgresRepository as BaseRepository, storage::codec::PostgresAmountCodec as AmountCodec,
     storage::event::postgres::EventPostgresRepository as EventRepository,
     storage::ledger::postgres::LedgerPostgresRepository as LedgerRepository,
     storage::outbox::postgres::OutboxPostgresRepository as OutboxRepository,
     storage::policy::postgres::PolicyPostgresRepository as PolicyRepository,
     storage::scenario::postgres::ScenarioPostgresRepository as ScenarioRepository,
     storage::wallet::postgres::WalletPostgresRepository as WalletRepository,
-    util::storage::PostgresAmountCodec as AmountCodec,
 };
 use sqlx::{postgres::PgRow as DbRow, PgConnection as Connection, PgPool as Pool};
 
@@ -26,7 +25,7 @@ impl PaymentPostgresRepository {
     }
 }
 
-crate::storage::payment::transactions::payment_repository!(
+crate::storage::payment::r#macro::payment_repository!(
     PaymentPostgresRepository,
     " FOR UPDATE",
     " FOR SHARE",

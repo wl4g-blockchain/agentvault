@@ -1,4 +1,3 @@
-use crate::model::protocol::ProtocolSigningRequest;
 use crate::model::Amount;
 use crate::model::AssetIdentity;
 use crate::model::PaymentChallenge;
@@ -11,6 +10,7 @@ use crate::model::PaymentPolicy;
 use crate::model::PaymentPrice;
 use crate::model::PaymentScenario;
 use crate::model::PaymentStatus;
+use crate::model::ProtocolSigningRequest;
 use crate::model::ReservationStatus;
 use crate::storage::base_postgres::PostgresRepository;
 use crate::storage::payment::postgres::PaymentPostgresRepository;

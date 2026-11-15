@@ -8,7 +8,7 @@ use sqlx::PgConnection as Connection;
 
 // Signing repository; transaction rules shared across SQLx drivers.
 
-crate::storage::signing::transactions::signing_repository!(
+crate::storage::signing::r#macro::signing_repository!(
     SigningPostgresRepository,
     " FOR UPDATE",
     " FOR SHARE",

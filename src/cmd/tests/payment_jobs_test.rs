@@ -16,8 +16,8 @@ impl ReconciliationEvidenceSource for PendingEvidence {
         &self,
         _intent: &crate::model::PaymentIntent,
         _at: i64,
-    ) -> crate::Result<crate::model::ReconciliationEvidence> {
-        Ok(crate::model::ReconciliationEvidence::Pending)
+    ) -> crate::Result<crate::storage::reconciliation::ReconciliationEvidence> {
+        Ok(crate::storage::reconciliation::ReconciliationEvidence::Pending)
     }
 }
 #[tokio::test]

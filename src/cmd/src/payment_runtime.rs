@@ -9,11 +9,11 @@ use crate::{
     apm::ReadinessProbe,
     cache::CacheFactory,
     cache::ICache,
+    handler::scenario::ScenarioHandler,
     storage::{
         IApprovalRepository, IApproverRepository, IIntentRepository, IPolicyRepository, IPriceRepository,
         IWalletRepository, StorageFactory, StoragePorts, WalletKeyManager, WalletPaymentSigner,
     },
-    util::scenario::ScenarioHandler,
     util::secure_material::Aes256GcmMaterialProtector,
     util::secure_material::SensitiveMaterialProtector,
     AppConfig,

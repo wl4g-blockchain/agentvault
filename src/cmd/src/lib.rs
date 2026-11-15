@@ -24,3 +24,5 @@ mod routes_tests;
 #[cfg(test)]
 #[path = "../tests/mod_test.rs"]
 mod tests;
+
+pub use agentvault_common::handler;

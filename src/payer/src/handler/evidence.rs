@@ -14,7 +14,7 @@ use crate::{
     storage::OutboundEvidenceWrite, util::secure_material::SealedSensitiveMaterial,
     util::secure_material::SensitiveMaterialProtector, Error, Result,
 };
-use agentvault_common::util::validation::PaymentValidation;
+use agentvault_common::model::payment::PaymentValidation;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -473,7 +473,7 @@ impl agentvault_common::storage::reconciliation::ReconciliationEvidenceSource fo
         &self,
         intent: &crate::model::PaymentIntent,
         _observed_at: i64,
-    ) -> crate::Result<crate::model::ReconciliationEvidence> {
+    ) -> crate::Result<crate::storage::reconciliation::ReconciliationEvidence> {
         match self.reconciliation_observation(intent).await? {
             OutboundEvidenceObservation::Confirmed {
                 authority,
@@ -514,4 +514,5 @@ impl agentvault_common::storage::reconciliation::ReconciliationEvidenceSource fo
     }
 }
 
-use crate::{model::ConfirmedSettlement, model::ReconciliationEvidence};
+use crate::storage::reconciliation::ConfirmedSettlement;
+use crate::storage::reconciliation::ReconciliationEvidence;

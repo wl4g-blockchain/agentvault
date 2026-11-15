@@ -231,6 +231,6 @@ impl OutboxSqliteRepository {
 #[path = "../../../tests/storage/outbox/sqlite_test.rs"]
 mod tests;
 
-use crate::util::storage::PaymentStorageCodec;
+use crate::storage::codec::PaymentStorageCodec;
 
 use crate::storage::outbox::OutboxStorageRules;

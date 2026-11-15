@@ -148,7 +148,7 @@ python3 use-cases/marketpulse-feed-subscription/runner.py -s mpp-tempo
 python3 use-cases/marketpulse-feed-subscription/runner.py -s x402-solana
 python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix # simple: 8 cases
 python3 use-cases/marketpulse-feed-subscription/runner.py -s matrix \
-  --e2e-sdk-scope full # full: 50 cases
+  --e2e-sdk-scope full # full: 25 HTTP cases
 python3 use-cases/marketpulse-feed-subscription/runner.py --cleanup
 ```
 
@@ -160,7 +160,8 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 The Rust server is a Cargo workspace with `common`, `protocol`, `payer`, `payee`
 and `cmd` crates. Shared configuration is defined in
-`src/common/src/config/config.rs`; SQL adapters compose `base_sqlite.rs` or
+`src/common/src/config/config.rs`, with conditional checks in `config/validation.rs`.
+Environment overrides follow the serialized configuration tree without a field-path list; SQL adapters compose `base_sqlite.rs` or
 `base_postgres.rs`. Each payment direction owns its handlers, HTTP routes and
 service startup, with common APM and lifecycle components.
 

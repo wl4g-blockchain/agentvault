@@ -1,13 +1,16 @@
-//! Authenticated payment API shared by HTTP and message transports.
+//! Authenticated payer payment API.
 //!
 //! Each transport uses the same typed projection and application orchestration.
 
+use super::dto::PaymentCredentialProjection;
 use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use reqwest::Url;
 
 use crate::apm::AgentVaultMetrics;
 
+use crate::handler::balance::WalletBalanceSource;
+use crate::handler::client::PayClientHandler;
 use crate::{
     handler::approval::ApprovalPrincipalAuthorizer, handler::approval::ApprovalWorkflow, handler::event::EventHandler,
     handler::evidence::MerchantEvidenceRecorder, handler::intent::IntentHandler, handler::ledger::LedgerHandler,
@@ -21,17 +24,14 @@ use crate::{
     storage::ILedgerRepository, storage::IPolicyRepository, storage::IPriceRepository, storage::IWalletRepository,
     storage::LedgerQuery, storage::PageRequest, storage::PaymentQuery, Error, Result,
 };
-use agentvault_common::{
-    util::balance::WalletBalanceSource, util::client::PayClientHandler, util::scenario::ScenarioHandler,
-};
+use agentvault_common::handler::scenario::ScenarioHandler;
 use agentvault_protocol::ProtocolRegistry;
 
 use crate::{
-    model::payment_api::ApprovalPage, model::payment_api::AuthorizePaymentRequest,
-    model::payment_api::AuthorizePaymentResponse, model::payment_api::BalanceQuery, model::payment_api::PaymentBalance,
-    model::payment_api::PaymentCredentialDto, model::payment_api::ReportOutboundResponseRequest,
-    model::payment_api::ReportOutboundResponseResponse, model::payment_api::SubmitApprovalDecisionRequest,
-    model::payment_api::PAGE_SIZE,
+    handler::dto::ApprovalPage, handler::dto::AuthorizePaymentRequest, handler::dto::AuthorizePaymentResponse,
+    handler::dto::BalanceQuery, handler::dto::PaymentBalance, handler::dto::PaymentCredentialDto,
+    handler::dto::ReportOutboundResponseRequest, handler::dto::ReportOutboundResponseResponse,
+    handler::dto::SubmitApprovalDecisionRequest, handler::dto::PAGE_SIZE,
 };
 
 /// Dependencies for the transport-neutral payment application façade.

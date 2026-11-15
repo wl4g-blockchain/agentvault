@@ -527,3 +527,51 @@ fn permits_explicit_loopback_development_provider() {
 
     ConfigValidation::validate_external_provider("agentvault.payee.x402.facilitator", &provider).unwrap();
 }
+
+#[test]
+fn nested_maps_and_secret_sequences_need_no_configuration_key_inventory() {
+    let file = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        r"
+cache:
+  redis:
+    urls:
+      - env: AGENTVAULT__DYNAMIC_REDIS_SEED
+agentvault:
+  chains:
+    eip155:1:
+      rpc:
+        endpoint: https://rpc.example
+        secret_headers:
+          x-api-key:
+            source:
+              env: AGENTVAULT__DYNAMIC_RPC_CREDENTIAL
+",
+    )
+    .unwrap();
+    let source = [
+        ("AGENTVAULT__DYNAMIC_REDIS_SEED", "must-not-enter-the-config-tree"),
+        ("AGENTVAULT__DYNAMIC_RPC_CREDENTIAL", "must-not-enter-the-config-tree"),
+        ("AGENTVAULT__AGENTVAULT__CHAINS__EIP155:1__RPC__TIMEOUT", "7s"),
+        ("AGENTVAULT__CACHE__REDIS__URLS__0__FILE", "/run/secrets/redis"),
+        ("AGENTVAULT__AGENTVAULT__PAYER__X402__ASSETS__0__NETWORK", "eip155:1"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .collect();
+    let config = AppConfig::load_with_environment(file.path(), source).unwrap();
+    assert_eq!(config.agentvault.chains["eip155:1"].rpc.timeout, Duration::from_secs(7));
+    assert_eq!(config.cache.redis.urls[0].env, "AGENTVAULT__DYNAMIC_REDIS_SEED");
+    assert_eq!(config.cache.redis.urls[0].file, "/run/secrets/redis");
+    assert_eq!(config.agentvault.payer.x402.assets[0].network, "eip155:1");
+    let serialized = serde_json::to_string(&config).unwrap();
+    assert!(!serialized.contains("must-not-enter-the-config-tree"));
+    let oversized = [(
+        "AGENTVAULT__CACHE__REDIS__URLS__9999999999__ENV".to_owned(),
+        "x".to_owned(),
+    )]
+    .into_iter()
+    .collect();
+    assert!(AppConfig::load_with_environment(file.path(), oversized).is_err());
+}

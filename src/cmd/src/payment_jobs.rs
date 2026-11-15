@@ -3,12 +3,15 @@ use crate::{
     model::AssetIdentity, storage::IApprovalRepository, storage::IIntentRepository, storage::IRepository,
     storage::IWalletBalanceRepository, storage::IWalletRepository,
 };
-use agentvault_common::{
-    storage::reconciliation::ReconciliationConfig as JobReconciliationConfig,
-    storage::reconciliation::ReconciliationEvidenceSource, storage::reconciliation::ReconciliationJob,
-    util::balance::WalletBalanceSource, util::balance::WalletBalanceSyncJob, util::balance::WalletBalanceSynchronizer,
-    util::runtime::RuntimeComponent, util::runtime::RuntimeResource, util::runtime::Shutdown,
-};
+use agentvault_common::storage::reconciliation::ReconciliationConfig as JobReconciliationConfig;
+use agentvault_common::storage::reconciliation::ReconciliationEvidenceSource;
+use agentvault_common::storage::reconciliation::ReconciliationJob;
+use agentvault_common::util::runtime::RuntimeComponent;
+use agentvault_common::util::runtime::RuntimeResource;
+use agentvault_common::util::runtime::Shutdown;
+use agentvault_payer::handler::balance::WalletBalanceSource;
+use agentvault_payer::handler::balance::WalletBalanceSyncJob;
+use agentvault_payer::handler::balance::WalletBalanceSynchronizer;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::sync::Arc;

@@ -1,14 +1,14 @@
 use crate::{
     storage::base_postgres::dynamic_postgres as dynamic_query,
-    storage::base_postgres::PostgresRepository as BaseRepository, util::storage::PostgresAmountCodec as AmountCodec,
+    storage::base_postgres::PostgresRepository as BaseRepository, storage::codec::PostgresAmountCodec as AmountCodec,
 };
 use sqlx::{postgres::PgRow as DbRow, PgConnection as Connection};
 
 // Wallet repository; transaction rules shared across SQLx drivers.
 
-type AmountValue = crate::util::storage::PgAmount;
+type AmountValue = crate::storage::codec::PgAmount;
 
-crate::storage::wallet::transactions::wallet_repository!(
+crate::storage::wallet::r#macro::wallet_repository!(
     WalletPostgresRepository,
     " FOR UPDATE",
     " FOR SHARE",
@@ -18,7 +18,7 @@ crate::storage::wallet::transactions::wallet_repository!(
     " FOR SHARE OF policy",
     " FOR SHARE OF c, s"
 );
-pub type PgWalletKeyRepository = crate::storage::wallet::key::WalletKeyRepository<WalletPostgresRepository>;
+pub type PgWalletKeyRepository = crate::storage::wallet::WalletKeyRepository<WalletPostgresRepository>;
 impl From<BaseRepository> for WalletPostgresRepository {
     fn from(base: BaseRepository) -> Self {
         Self::new(base)

@@ -1,5 +1,4 @@
 use crate::config::SqliteStorageConfig;
-use crate::model::protocol::ProtocolSigningRequest;
 use crate::model::Amount;
 use crate::model::AssetIdentity;
 use crate::model::PaymentChallenge;
@@ -11,6 +10,7 @@ use crate::model::PaymentIntent;
 use crate::model::PaymentPolicy;
 use crate::model::PaymentScenario;
 use crate::model::PaymentStatus;
+use crate::model::ProtocolSigningRequest;
 use crate::model::ReservationStatus;
 use crate::storage::base_sqlite::SqliteRepository;
 use crate::storage::payment::sqlite::PaymentSqliteRepository;

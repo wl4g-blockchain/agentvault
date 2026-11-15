@@ -1,9 +1,9 @@
 use crate::{
-    handler::PayeeApi,
-    model::payment_api::{
+    handler::dto::{
         CreateChallengeRequest, PaymentVerification, ResolvePriceRequest, SettlePaymentRequest, SettledPaymentResponse,
         VerifyPaymentRequest,
     },
+    handler::PayeeApi,
     model::{PaymentChallenge, PaymentPrice},
 };
 use agentvault_common::{

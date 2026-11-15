@@ -8,7 +8,7 @@ use sqlx::SqliteConnection as Connection;
 
 // Signing repository; transaction rules shared across SQLx drivers.
 
-crate::storage::signing::transactions::signing_repository!(SigningSqliteRepository, "", "", "", "", "", "", "");
+crate::storage::signing::r#macro::signing_repository!(SigningSqliteRepository, "", "", "", "", "", "", "");
 
 #[cfg(test)]
 #[path = "../../../tests/storage/signing/sqlite_test.rs"]

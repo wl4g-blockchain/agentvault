@@ -3,17 +3,22 @@ use crate::{
     config::SecretHeaderConfig, config::X402AssetConfig, storage::WalletKeyManager, util::secret::SecretReader,
     util::secure_material::Aes256GcmMaterialProtector, util::secure_material::SensitiveMaterialProtector, Error,
 };
-use agentvault_common::{
-    util::balance::EvmRpcBalanceSource, util::balance::SolanaRpcBalanceSource, util::balance::WalletBalanceRegistry,
-    util::balance::WalletBalanceSource, util::receipt::EvmAuthorizationSource, util::receipt::EvmRpcReceiptConfig,
-    util::receipt::EvmRpcReceiptSource, util::receipt::ReceiptRegistry, util::receipt::ReceiptSource,
-    util::receipt::SolanaRpcReceiptConfig, util::receipt::SolanaRpcReceiptSource,
-};
 use agentvault_payee::{
     handler::facilitator::X402FacilitatorProvider, handler::provider::SettlementProviderConfig,
     handler::provider::SettlementProviderRegistry,
 };
+use agentvault_payer::handler::balance::EvmRpcBalanceSource;
+use agentvault_payer::handler::balance::SolanaRpcBalanceSource;
+use agentvault_payer::handler::balance::WalletBalanceRegistry;
+use agentvault_payer::handler::balance::WalletBalanceSource;
 use agentvault_payer::handler::wallet_import::WalletImportService;
+use agentvault_protocol::receipt::EvmAuthorizationSource;
+use agentvault_protocol::receipt::EvmRpcReceiptConfig;
+use agentvault_protocol::receipt::EvmRpcReceiptSource;
+use agentvault_protocol::receipt::ReceiptRegistry;
+use agentvault_protocol::receipt::ReceiptSource;
+use agentvault_protocol::receipt::SolanaRpcReceiptConfig;
+use agentvault_protocol::receipt::SolanaRpcReceiptSource;
 use agentvault_protocol::{
     mpp::MppAdapter, mpp::MppAsset, x402::X402Adapter, x402::X402Asset, x402::X402SolanaConfig, PaymentProtocolFactory,
     ProtocolRegistry,

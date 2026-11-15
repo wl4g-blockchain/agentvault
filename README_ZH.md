@@ -132,7 +132,7 @@ x402 EVM 五语言矩阵、x402 Solana 支付门禁与 MPP Tempo charge 门禁�
 Apache-2.0，见 [LICENSE](LICENSE)。
 
 Rust 服务端采用 `common`、`protocol`、`payer`、`payee`、`cmd` 五个独立 crate。
-配置集中在 `src/common/src/config/config.rs`，领域仓库组合 `base_sqlite.rs` 或
+配置结构与默认值集中在 `src/common/src/config/config.rs`，条件及跨字段校验位于 `config/validation.rs`。环境覆盖按层次通用加载，秘密引用通过配置树遍历发现；领域仓库组合 `base_sqlite.rs` 或
 `base_postgres.rs`；付款与收款各自拥有 handler、HTTP routes 和服务入口，并统一调用
 `ApmComponent` 启动管理与可观测组件。
 

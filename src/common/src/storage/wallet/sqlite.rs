@@ -1,6 +1,6 @@
 use crate::{
     storage::base_sqlite::dynamic_sqlite as dynamic_query, storage::base_sqlite::SqliteRepository as BaseRepository,
-    util::storage::SqliteAmountCodec as AmountCodec,
+    storage::codec::SqliteAmountCodec as AmountCodec,
 };
 use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection};
 
@@ -8,8 +8,8 @@ use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection};
 
 type AmountValue = String;
 
-crate::storage::wallet::transactions::wallet_repository!(WalletSqliteRepository, "", "", "", "", "", "", "");
-pub type SqliteWalletKeyRepository = crate::storage::wallet::key::WalletKeyRepository<WalletSqliteRepository>;
+crate::storage::wallet::r#macro::wallet_repository!(WalletSqliteRepository, "", "", "", "", "", "", "");
+pub type SqliteWalletKeyRepository = crate::storage::wallet::WalletKeyRepository<WalletSqliteRepository>;
 impl From<BaseRepository> for WalletSqliteRepository {
     fn from(base: BaseRepository) -> Self {
         Self::new(base)

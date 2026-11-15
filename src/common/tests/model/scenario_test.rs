@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::principal_context::UNRESTRICTED_PRINCIPAL;
 
 #[test]
 fn unrestricted_marker_cannot_be_registered_as_a_client_principal() {

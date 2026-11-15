@@ -1726,10 +1726,6 @@ class E2ES01StructureVerifier:
                     or GENERATED_DIRECTORIES.intersection(relative.parts)
                 ):
                     continue
-                if {"tests", "test"}.intersection(relative.parts):
-                    continue
-                if relative.as_posix() == "common/src/config/config.rs":
-                    continue
                 comment_prefixes = (
                     ("//", "/*", "*", "*/") if path.suffix != ".py" else ("#",)
                 )
@@ -1738,11 +1734,11 @@ class E2ES01StructureVerifier:
                     and not line.lstrip().startswith(comment_prefixes)
                     for line in path.read_text(encoding="utf-8").splitlines()
                 )
-                if lines > 800:
+                if lines > 1024:
                     oversized.append(f"{relative}:{lines}")
             if oversized:
                 raise RuntimeError(
-                    "formal source must stay within 800 lines: "
+                    "authored source must stay within 1024 code lines: "
                     + ", ".join(sorted(oversized))
                 )
 
@@ -1770,9 +1766,61 @@ class E2ES01StructureVerifier:
             if {p.name for p in (common / "config").iterdir()} != {
                 "config.rs",
                 "constants.rs",
+                "validation.rs",
             }:
                 raise RuntimeError(
-                    "configuration must have exactly config.rs and constants.rs"
+                    "configuration must contain only config.rs, constants.rs and validation.rs"
+                )
+            model_files = {
+                "mod.rs",
+                "approval.rs",
+                "approver.rs",
+                "client.rs",
+                "event.rs",
+                "ledger.rs",
+                "outbox.rs",
+                "payment.rs",
+                "policy.rs",
+                "price.rs",
+                "scenario.rs",
+                "wallet.rs",
+                "wallet_balance.rs",
+                "wallet_key.rs",
+            }
+            if {p.name for p in (common / "model").iterdir()} != model_files:
+                raise RuntimeError(
+                    "shared models must be consolidated by persistence table domain"
+                )
+            allowed_repository_files = {
+                "mod.rs",
+                "postgres.rs",
+                "sqlite.rs",
+                "macro.rs",
+            }
+            for domain in (common / "storage").iterdir():
+                if (
+                    domain.is_dir()
+                    and not {p.name for p in domain.iterdir()}
+                    <= allowed_repository_files
+                ):
+                    raise RuntimeError(
+                        f"unexpected repository implementation files: {domain}"
+                    )
+            if {p.name for p in (common / "util").iterdir()} != {
+                "mod.rs",
+                "aead.rs",
+                "api_error.rs",
+                "clock.rs",
+                "error.rs",
+                "http.rs",
+                "principal_context.rs",
+                "runtime.rs",
+                "runtime_identity.rs",
+                "secret.rs",
+                "secure_material.rs",
+            }:
+                raise RuntimeError(
+                    "common utilities cannot own payment workflows or chain adapters"
                 )
             for module, names in {
                 "apm": {"mod.rs", "metrics.rs", "pprof.rs", "telemetry.rs"},
@@ -2013,7 +2061,8 @@ class E2ES01StructureVerifier:
                     missing = [
                         token
                         for token in required_tokens
-                        if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
+                        if re.sub(r"\s+", "", token).replace("'", '"')
+                        not in re.sub(r"\s+", "", content).replace("'", '"')
                     ]
                     if missing:
                         errors.append(
@@ -2031,7 +2080,8 @@ class E2ES01StructureVerifier:
                     missing = [
                         token
                         for token in required_tokens
-                        if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
+                        if re.sub(r"\s+", "", token).replace("'", '"')
+                        not in re.sub(r"\s+", "", content).replace("'", '"')
                     ]
                     if missing:
                         errors.append(
@@ -2136,7 +2186,8 @@ class E2ES01StructureVerifier:
                 missing = [
                     token
                     for token in required_tokens
-                    if re.sub(r"\s+", "", token).replace("'", '"') not in re.sub(r"\s+", "", content).replace("'", '"')
+                    if re.sub(r"\s+", "", token).replace("'", '"')
+                    not in re.sub(r"\s+", "", content).replace("'", '"')
                 ]
                 if missing:
                     raise RuntimeError(

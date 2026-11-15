@@ -7,7 +7,7 @@ use crate::{
     storage::IApprovalRepository, storage::IApproverRepository, storage::IIntentRepository, storage::OutboxMessage,
     storage::OutboxStatus, Error, Result,
 };
-use agentvault_common::util::validation::PaymentValidation;
+use agentvault_common::model::payment::PaymentValidation;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ impl StoredApprovalPrincipalAuthorizer {
 #[async_trait]
 impl ApprovalPrincipalAuthorizer for StoredApprovalPrincipalAuthorizer {
     async fn authorize_approver(&self, principal: &str, scenario_id: &str) -> Result<()> {
-        if principal == crate::model::scenario::UNRESTRICTED_PRINCIPAL {
+        if principal == crate::util::principal_context::UNRESTRICTED_PRINCIPAL {
             return Ok(());
         }
         if principal.trim().is_empty() || scenario_id.trim().is_empty() {

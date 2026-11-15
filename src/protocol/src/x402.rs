@@ -1,4 +1,4 @@
-use crate::model::protocol::ProtocolWire;
+use crate::ProtocolWire;
 // x402 v2 boundary for EVM EIP-3009 and Solana SPL `exact` payments.
 //
 // This module validates and translates the v2 wire DTO. EIP-3009 signing and

@@ -1,6 +1,6 @@
 use crate::{
     storage::base_sqlite::dynamic_sqlite as dynamic_query, storage::base_sqlite::SqliteRepository as BaseRepository,
-    util::storage::SqliteAmountCodec as AmountCodec,
+    storage::codec::SqliteAmountCodec as AmountCodec,
 };
 use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection, SqlitePool as Pool};
 
@@ -25,7 +25,7 @@ impl PolicySqliteRepository {
     }
 }
 
-crate::storage::policy::transactions::policy_repository!(PolicySqliteRepository, "", "", "", "", "", "", "");
+crate::storage::policy::r#macro::policy_repository!(PolicySqliteRepository, "", "", "", "", "", "", "");
 
 #[cfg(test)]
 #[path = "../../../tests/storage/policy/sqlite_test.rs"]

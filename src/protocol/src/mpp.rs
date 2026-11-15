@@ -1,4 +1,4 @@
-use crate::model::protocol::ProtocolWire;
+use crate::ProtocolWire;
 // MPP/Tempo `charge` adapter built on the official `mpp` Rust crate.
 
 use std::{collections::BTreeMap, num::NonZeroU64};

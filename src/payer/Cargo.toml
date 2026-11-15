@@ -7,6 +7,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+solana-client.workspace = true
+solana-pubkey.workspace = true
+x402-chain-solana.workspace = true
+x402-types.workspace = true
 anyhow.workspace = true
 aes-gcm.workspace = true
 async-trait.workspace = true

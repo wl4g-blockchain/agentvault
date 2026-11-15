@@ -1,15 +1,13 @@
 //! Axum extraction and routing for the shared payment API.
 use crate::{
-    handler::api::PayerApi, model::payment_api::AdminPageQuery, model::payment_api::ApprovalPage,
-    model::payment_api::ApprovalQuery, model::payment_api::AuthorizePaymentRequest,
-    model::payment_api::AuthorizePaymentResponse, model::payment_api::BalanceQuery,
-    model::payment_api::ClientPageQuery, model::payment_api::CreateScenarioRequest,
-    model::payment_api::LedgerListQuery, model::payment_api::PaymentBalance, model::payment_api::PaymentListQuery,
-    model::payment_api::ReportOutboundResponseRequest, model::payment_api::ReportOutboundResponseResponse,
-    model::payment_api::ScenarioPageQuery, model::payment_api::ScenarioQuery,
-    model::payment_api::SubmitApprovalDecisionRequest, model::price::CreatePriceRequest,
-    model::price::DeletePriceRequest, model::price::UpdatePriceRequest, model::ApprovalRequest, model::PaymentIntent,
-    model::PaymentLedgerEntry, model::PaymentPrice, model::PaymentReceipt, storage::IdempotentWrite, storage::Page,
+    handler::api::PayerApi, handler::dto::AdminPageQuery, handler::dto::ApprovalPage, handler::dto::ApprovalQuery,
+    handler::dto::AuthorizePaymentRequest, handler::dto::AuthorizePaymentResponse, handler::dto::BalanceQuery,
+    handler::dto::ClientPageQuery, handler::dto::CreateScenarioRequest, handler::dto::LedgerListQuery,
+    handler::dto::PaymentBalance, handler::dto::PaymentListQuery, handler::dto::ReportOutboundResponseRequest,
+    handler::dto::ReportOutboundResponseResponse, handler::dto::ScenarioPageQuery, handler::dto::ScenarioQuery,
+    handler::dto::SubmitApprovalDecisionRequest, model::price::CreatePriceRequest, model::price::DeletePriceRequest,
+    model::price::UpdatePriceRequest, model::ApprovalRequest, model::PaymentIntent, model::PaymentLedgerEntry,
+    model::PaymentPrice, model::PaymentReceipt, storage::IdempotentWrite, storage::Page,
     storage::ScenarioConfiguration, Error,
 };
 use agentvault_common::util::principal_context::CallerPrincipal;

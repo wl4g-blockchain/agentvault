@@ -17,7 +17,7 @@ impl IClientRepository for ClientSqliteRepository {
         self.base
             .entity_insert_returning(client)
             .await
-            .map_err(crate::util::storage::PaymentStorageCodec::domain_error)
+            .map_err(crate::storage::codec::PaymentStorageCodec::domain_error)
     }
     async fn get(&self, client_id: &str) -> Result<Option<PaymentClient>> {
         self.base.select_one(EntityQuery::new().eq("id", client_id)).await
