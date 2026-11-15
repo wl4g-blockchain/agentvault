@@ -15,6 +15,73 @@ from util.process import E2EProcessHelper as Process
 
 
 class LayoutImagesTest(unittest.TestCase):
+    def test_e2e_telemetry_env_uses_the_case_collector_route(self):
+        values = Project.AGENTVAULT_CONFIG / "e2e-values.yaml"
+        native = yaml.safe_load(
+            yaml.safe_load(values.read_text())["agentvault"]["agentvault-config"]
+        )
+        output = subprocess.check_output(
+            [
+                "helm",
+                "template",
+                "agentvault",
+                str(Project.AGENTVAULT_CHART),
+                "--namespace",
+                "e2e-agentvault-system",
+                "--values",
+                str(values),
+                "--show-only",
+                "templates/server/deployment.yaml",
+            ],
+            text=True,
+        )
+        deployment = yaml.safe_load(output)
+        container = next(
+            item
+            for item in deployment["spec"]["template"]["spec"]["containers"]
+            if item["name"] == "agentvault"
+        )
+        env = {item["name"]: item.get("value") for item in container["env"]}
+        self.assertEqual(
+            env["AGENTVAULT__MGMT__OTEL__ENDPOINT"], native["mgmt"]["otel"]["endpoint"]
+        )
+
+    def test_shared_network_services_do_not_set_container_port_options(self):
+        env = {
+            key: os.environ[key]
+            for key in ("PATH", "HOME", "DOCKER_CONFIG")
+            if key in os.environ
+        }
+        env["E2E_AGENTVAULT_CONFIG_PATH"] = str(
+            Project.AGENTVAULT_CONFIG / "e2e-values.yaml"
+        )
+        env["E2E_IMAGE_NETWORK"] = "NON_GFW"
+        Images.configure(env)
+        command = [
+            "docker",
+            "compose",
+            "-f",
+            str(Project.E2E_ROOT / "docker-compose.yaml"),
+        ]
+        for profile in ("infra", "payee", "apps", "payee-rust", "ingestor-rust", "web"):
+            command += ["--profile", profile]
+        services = json.loads(
+            subprocess.check_output(
+                [*command, "config", "--format", "json"],
+                env=env,
+                text=True,
+            )
+        )["services"]
+        shared = {
+            name: service
+            for name, service in services.items()
+            if service.get("network_mode", "").startswith(("service:", "container:"))
+        }
+        self.assertIn("jaeger", shared)
+        for name, service in shared.items():
+            self.assertFalse(service.get("ports"), name)
+            self.assertFalse(service.get("expose"), name)
+
     def test_compose_middleware_profiles_and_external_open_edge(self):
         root = Project.REPOSITORY_ROOT / "deploy/docker"
         env = {
