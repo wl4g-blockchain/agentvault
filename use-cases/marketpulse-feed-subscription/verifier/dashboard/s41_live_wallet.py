@@ -180,6 +180,7 @@ class E2ES41LiveWalletVerifier:
             expect(page.locator(".error-banner")).to_have_count(0)
 
         def capture(self, page: Page, name: str) -> None:
+            page.evaluate("window.scrollTo(0, 0)")
             page.screenshot(path=str(self.directory / f"{name}.png"), full_page=True)
             self.screenshots.append(name)
 
