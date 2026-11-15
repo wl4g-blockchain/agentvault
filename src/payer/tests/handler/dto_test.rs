@@ -1,5 +1,64 @@
 use super::*;
 use serde_json::json;
+
+#[test]
+fn http_query_pagination_accepts_browser_url_parameters() {
+    let uri = "/api/v1/admin/payments?direction=outbound&status=settled&offset=10&limit=25"
+        .parse()
+        .unwrap();
+    let query = axum::extract::Query::<PaymentListQuery>::try_from_uri(&uri)
+        .expect("browser pagination query")
+        .0
+        .into_domain()
+        .unwrap();
+    assert_eq!(query.page, PageRequest { offset: 10, limit: 25 });
+    assert_eq!(query.direction, Some(PaymentDirection::Outbound));
+    assert_eq!(query.status, Some(PaymentStatus::Settled));
+
+    let uri = "/api/v1/admin/ledger?wallet_id=wallet-1&offset=10&limit=25"
+        .parse()
+        .unwrap();
+    let ledger = axum::extract::Query::<LedgerListQuery>::try_from_uri(&uri)
+        .unwrap()
+        .0
+        .into_domain()
+        .unwrap();
+    assert_eq!(ledger.page, PageRequest { offset: 10, limit: 25 });
+    assert_eq!(ledger.wallet_id.as_deref(), Some("wallet-1"));
+    let uri = "/api/v1/admin/scenarios?client_id=client-1&offset=10&limit=25"
+        .parse()
+        .unwrap();
+    let query = axum::extract::Query::<ClientPageQuery>::try_from_uri(&uri).unwrap().0;
+    assert_eq!(query.client_id, "client-1");
+    assert_eq!(query.page.page().unwrap(), PageRequest { offset: 10, limit: 25 });
+}
+
+#[test]
+fn http_query_pagination_rejects_invalid_numbers_and_retains_json_compatibility() {
+    for query in [
+        "offset=-1",
+        "offset=18446744073709551616",
+        "limit=-1",
+        "limit=4294967296",
+        "limit=bad",
+        "limit=",
+    ] {
+        let uri = format!("/api/v1/admin/payments?{query}").parse().unwrap();
+        assert!(
+            axum::extract::Query::<PaymentListQuery>::try_from_uri(&uri).is_err(),
+            "{query}"
+        );
+    }
+    for limit in [0, PAGE_SIZE + 1] {
+        let uri = format!("/api/v1/admin/payments?limit={limit}").parse().unwrap();
+        let query = axum::extract::Query::<PaymentListQuery>::try_from_uri(&uri).unwrap().0;
+        assert!(query.into_domain().is_err());
+    }
+    let query: PaymentListQuery = serde_json::from_value(json!({"offset": 10, "limit": 25})).unwrap();
+    assert_eq!(query.into_domain().unwrap().page, PageRequest { offset: 10, limit: 25 });
+    let query: PaymentListQuery = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(query.into_domain().unwrap().page, PageRequest::default());
+}
 #[test]
 fn admin_pages_are_bounded_and_default_to_ten_rows() {
     assert_eq!(AdminPageQuery::default().page().unwrap(), PageRequest::default());

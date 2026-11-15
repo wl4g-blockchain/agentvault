@@ -144,11 +144,35 @@ impl CreateScenarioRequest {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub struct AdminPageQuery {
+    #[serde(default, deserialize_with = "AdminPageQuery::number")]
     pub offset: Option<u64>,
+    #[serde(default, deserialize_with = "AdminPageQuery::number")]
     pub limit: Option<u32>,
 }
 
 impl AdminPageQuery {
+    // URL query values buffered by serde(flatten) are strings. Accept typed JSON
+    // numbers as well, retaining this DTO's existing programmatic representation.
+    fn number<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: Deserialize<'de> + std::str::FromStr,
+        T::Err: std::fmt::Display,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Number<T> {
+            Value(T),
+            Text(String),
+        }
+        Option::<Number<T>>::deserialize(deserializer)?
+            .map(|value| match value {
+                Number::Value(value) => Ok(value),
+                Number::Text(value) => value.parse().map_err(serde::de::Error::custom),
+            })
+            .transpose()
+    }
+
     ///
     /// # Errors
     /// Returns an invalid-request error for an unsafe pagination range.
