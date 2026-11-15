@@ -24,7 +24,7 @@ use crate::{
     storage::ILedgerRepository, storage::IPolicyRepository, storage::IPriceRepository, storage::IWalletRepository,
     storage::LedgerQuery, storage::PageRequest, storage::PaymentQuery, Error, Result,
 };
-use agentvault_common::handler::scenario::ScenarioHandler;
+use agentvault_core::handler::scenario::ScenarioHandler;
 use agentvault_protocol::ProtocolRegistry;
 
 use crate::{

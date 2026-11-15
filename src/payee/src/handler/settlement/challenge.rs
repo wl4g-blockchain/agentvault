@@ -4,7 +4,7 @@ use super::{
     PolicyDecision, PolicyEngine, PolicyEvaluation, PreparedInboundChallenge, Result, SettlementCoordinator,
     SettlementFacts, Uuid, WalletBudget,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 
 impl SettlementCoordinator {
     /// Issues and durably records a challenge from server-owned price fields.

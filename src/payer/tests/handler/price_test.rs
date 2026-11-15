@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn stale_price_revision_cannot_restore_disabled_pricing() {
-    let (_directory, storage) = crate::storage::base_sqlite::tests::storage().await;
+    let (_directory, storage) = crate::storage::sqlite::tests::storage().await;
     let fixture = crate::storage::schema_tests::RepositoryFixture::create(std::sync::Arc::new(storage)).await;
     let service = PriceHandler::new(fixture.ports.prices);
     let mut price = fixture.price;

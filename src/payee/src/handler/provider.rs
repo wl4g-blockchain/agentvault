@@ -9,7 +9,7 @@ use reqwest::header::HeaderMap;
 use std::{collections::BTreeMap, collections::HashMap, sync::Arc, time::Duration};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 256 * 1024;
-pub use agentvault_common::storage::reconciliation::ExternalSettlementProvider;
+pub use agentvault_core::storage::reconciliation::ExternalSettlementProvider;
 
 /// Fixed protocol-to-provider routing. Challenge content cannot select or
 /// override a provider endpoint.

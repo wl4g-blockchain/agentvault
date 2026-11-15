@@ -1,0 +1,43 @@
+[package]
+name = "common-telemetry"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[dependencies]
+atty = "0.2"
+backtrace = "0.3"
+common-error.workspace = true
+console-subscriber = { version = "0.1", optional = true }
+lazy_static.workspace = true
+once_cell.workspace = true
+# Tracing Libraries.
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-log = "0.1"
+tracing-opentelemetry.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+opentelemetry-otlp.workspace = true
+opentelemetry-semantic-conventions = "0.13.0"
+parking_lot = { version = "0.12" }
+prometheus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+humantime.workspace = true
+humantime-serde.workspace = true
+# Inter-Process APM Libraries.
+pyroscope = { version = "0.5.7", optional = true }
+pyroscope_pprofrs = { version = "0.2.7", optional = true }
+
+[features]
+deadlock_detection = ["parking_lot/deadlock_detection"]
+profiling-tokio-console = ["console-subscriber", "tokio/tracing"]
+profiling-pyroscope = ["dep:pyroscope", "dep:pyroscope_pprofrs"]
+[dev-dependencies]
+tempfile = "3.21"

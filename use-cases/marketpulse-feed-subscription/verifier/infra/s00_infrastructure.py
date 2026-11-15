@@ -2461,7 +2461,7 @@ class E2ES00InfrastructureVerifier:
                         "test",
                         "--locked",
                         "--package",
-                        "agentvault-common",
+                        "agentvault-core",
                         "--lib",
                         name,
                         "--",

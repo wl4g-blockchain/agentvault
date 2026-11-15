@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn intent_queries_do_not_cross_scenario_ownership() {
-    let (_directory, storage) = crate::storage::base_sqlite::tests::storage().await;
+    let (_directory, storage) = crate::storage::sqlite::tests::storage().await;
     let fixture = crate::storage::schema_tests::RepositoryFixture::create(std::sync::Arc::new(storage)).await;
     let intent = fixture.challenge().await;
     let service = IntentHandler::new(fixture.ports.payments);

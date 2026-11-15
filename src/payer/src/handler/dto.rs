@@ -328,6 +328,6 @@ pub struct SubmitApprovalDecisionRequest {
 #[path = "../../tests/handler/dto_test.rs"]
 mod tests;
 
-pub use agentvault_common::model::{HttpCredentialDto, OperationContextDto, PaymentCredentialDto};
+pub use agentvault_core::model::{HttpCredentialDto, OperationContextDto, PaymentCredentialDto};
 
 pub use crate::protocol::PaymentCredentialProjection;

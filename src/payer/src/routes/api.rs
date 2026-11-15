@@ -10,7 +10,7 @@ use crate::{
     model::PaymentPrice, model::PaymentReceipt, storage::IdempotentWrite, storage::Page,
     storage::ScenarioConfiguration, Error,
 };
-use agentvault_common::util::principal_context::CallerPrincipal;
+use agentvault_core::util::principal_context::CallerPrincipal;
 use axum::{
     extract::Path, extract::Query, extract::State, http::header, http::StatusCode, response::IntoResponse,
     routing::get, routing::post, Json, Router,
@@ -319,4 +319,4 @@ impl PayerRoutes {
     }
 }
 
-use agentvault_common::util::api_error::ApiError;
+use agentvault_core::util::api_error::ApiError;

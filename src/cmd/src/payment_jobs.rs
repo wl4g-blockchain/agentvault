@@ -3,12 +3,12 @@ use crate::{
     model::AssetIdentity, storage::IApprovalRepository, storage::IIntentRepository, storage::IRepository,
     storage::IWalletBalanceRepository, storage::IWalletRepository,
 };
-use agentvault_common::storage::reconciliation::ReconciliationConfig as JobReconciliationConfig;
-use agentvault_common::storage::reconciliation::ReconciliationEvidenceSource;
-use agentvault_common::storage::reconciliation::ReconciliationJob;
-use agentvault_common::util::runtime::RuntimeComponent;
-use agentvault_common::util::runtime::RuntimeResource;
-use agentvault_common::util::runtime::Shutdown;
+use agentvault_core::storage::reconciliation::ReconciliationConfig as JobReconciliationConfig;
+use agentvault_core::storage::reconciliation::ReconciliationEvidenceSource;
+use agentvault_core::storage::reconciliation::ReconciliationJob;
+use agentvault_core::util::runtime::RuntimeComponent;
+use agentvault_core::util::runtime::RuntimeResource;
+use agentvault_core::util::runtime::Shutdown;
 use agentvault_payer::handler::balance::WalletBalanceSource;
 use agentvault_payer::handler::balance::WalletBalanceSyncJob;
 use agentvault_payer::handler::balance::WalletBalanceSynchronizer;
@@ -32,8 +32,7 @@ impl ReadinessProbe for StorageReadinessProbe {
 }
 
 pub(crate) struct PaymentRuntimeResources {
-    pub(crate) cache: Arc<dyn ICache>,
-    pub(crate) storage: Arc<dyn IRepository>,
+    pub(crate) providers: Arc<agentvault_core::context::state::RuntimeProviders>,
 }
 
 #[async_trait]
@@ -43,9 +42,7 @@ impl RuntimeResource for PaymentRuntimeResources {
     }
 
     async fn close(self: Box<Self>) -> anyhow::Result<()> {
-        let cache_result = self.cache.close().await.context("close cache provider");
-        let storage_result = self.storage.close().await.context("close storage provider");
-        cache_result.and(storage_result)
+        self.providers.close().await
     }
 }
 

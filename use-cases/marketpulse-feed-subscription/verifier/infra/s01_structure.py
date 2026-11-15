@@ -1734,11 +1734,19 @@ class E2ES01StructureVerifier:
                     and not line.lstrip().startswith(comment_prefixes)
                     for line in path.read_text(encoding="utf-8").splitlines()
                 )
-                if lines > 1024:
-                    oversized.append(f"{relative}:{lines}")
+                is_test = bool({"tests", "test"}.intersection(relative.parts))
+                limit = (
+                    1024
+                    if is_test
+                    else 500
+                    if relative.parts[:3] == ("core", "src", "modules")
+                    else 800
+                )
+                if lines > limit:
+                    oversized.append(f"{relative}:{lines}>{limit}")
             if oversized:
                 raise RuntimeError(
-                    "authored source must stay within 1024 code lines: "
+                    "source size limits exceeded (production 800, core domains 500, tests 1024): "
                     + ", ".join(sorted(oversized))
                 )
 
@@ -1747,88 +1755,79 @@ class E2ES01StructureVerifier:
             import tomllib
 
             source = Project.REPOSITORY_ROOT / "src"
-            expected = {"sdk", "common", "protocol", "payer", "payee", "cmd"}
-            actual = {path.name for path in source.iterdir()}
-            if actual != expected:
-                raise RuntimeError(
-                    f"unexpected Rust workspace structure: {sorted(actual)}"
-                )
+            expected = {"sdk", "common", "core", "protocol", "payer", "payee", "cmd"}
+            if {path.name for path in source.iterdir()} != expected:
+                raise RuntimeError("unexpected application/framework source layout")
             manifest = tomllib.loads(
                 (Project.REPOSITORY_ROOT / "Cargo.toml").read_text()
             )
-            if set(manifest["workspace"]["members"]) != {
-                f"src/{name}" for name in expected - {"sdk"}
-            }:
+            frameworks = {
+                "audit-log",
+                "context",
+                "error",
+                "macro",
+                "makestruct",
+                "mem-prof",
+                "pprof",
+                "telemetry",
+            }
+            expected_members = {
+                f"src/{name}" for name in expected - {"sdk", "common"}
+            } | {f"src/common/{name}" for name in frameworks}
+            if set(manifest["workspace"]["members"]) != expected_members:
                 raise RuntimeError(
-                    "Cargo workspace members must match the five domain crates"
+                    "workspace members must match core, service and shared framework crates"
                 )
-            common = source / "common/src"
-            if {p.name for p in (common / "config").iterdir()} != {
+            if {path.name for path in (source / "common").iterdir()} != frameworks:
+                raise RuntimeError(
+                    "common must contain only independent framework crates"
+                )
+            for name in frameworks:
+                directory = source / "common" / name
+                package = tomllib.loads((directory / "Cargo.toml").read_text())
+                if any(
+                    key.startswith("agentvault-")
+                    for key in package.get("dependencies", {})
+                ):
+                    raise RuntimeError(f"framework {name} depends on application code")
+                if not (directory / "src/lib.rs").is_file():
+                    raise RuntimeError(
+                        f"framework {name} is not an independent library"
+                    )
+            core = source / "core/src"
+            if {p.name for p in (core / "config").iterdir()} != {
                 "config.rs",
                 "constants.rs",
                 "validation.rs",
             }:
-                raise RuntimeError(
-                    "configuration must contain only config.rs, constants.rs and validation.rs"
-                )
-            model_files = {
-                "mod.rs",
-                "approval.rs",
-                "approver.rs",
-                "client.rs",
-                "event.rs",
-                "ledger.rs",
-                "outbox.rs",
-                "payment.rs",
-                "policy.rs",
-                "price.rs",
-                "scenario.rs",
-                "wallet.rs",
-                "wallet_balance.rs",
-                "wallet_key.rs",
-            }
-            if {p.name for p in (common / "model").iterdir()} != model_files:
-                raise RuntimeError(
-                    "shared models must be consolidated by persistence table domain"
-                )
-            allowed_repository_files = {
-                "mod.rs",
-                "postgres.rs",
-                "sqlite.rs",
-                "macro.rs",
-            }
-            for domain in (common / "storage").iterdir():
-                if (
-                    domain.is_dir()
-                    and not {p.name for p in domain.iterdir()}
-                    <= allowed_repository_files
-                ):
-                    raise RuntimeError(
-                        f"unexpected repository implementation files: {domain}"
-                    )
-            if {p.name for p in (common / "util").iterdir()} != {
-                "mod.rs",
-                "aead.rs",
-                "api_error.rs",
-                "clock.rs",
-                "error.rs",
-                "http.rs",
-                "principal_context.rs",
-                "runtime.rs",
-                "runtime_identity.rs",
-                "secret.rs",
-                "secure_material.rs",
-            }:
-                raise RuntimeError(
-                    "common utilities cannot own payment workflows or chain adapters"
-                )
-            for module, names in {
-                "apm": {"mod.rs", "metrics.rs", "pprof.rs", "telemetry.rs"},
-                "cache": {"mod.rs", "memory.rs", "redis.rs"},
-            }.items():
-                if {p.name for p in (common / module).iterdir()} != names:
-                    raise RuntimeError(f"redundant common {module} source files")
-            for name in expected - {"sdk"}:
+                raise RuntimeError("unexpected core configuration source layout")
+            for module in ("context", "mgmt", "cache", "storage", "modules", "util"):
+                if not (core / module).is_dir():
+                    raise RuntimeError(f"missing core integration module: {module}")
+            if not (core / "mgmt/apm/mod.rs").is_file():
+                raise RuntimeError("core must own its management/APM integration")
+            for domain in (core / "modules").iterdir():
+                if not domain.is_dir():
+                    continue
+                storage = domain / "storage"
+                if storage.is_dir():
+                    allowed = {"mod.rs", "postgres.rs", "sqlite.rs", "macro.rs"}
+                    if (
+                        not {p.name for p in storage.iterdir() if p.is_file()}
+                        <= allowed
+                    ):
+                        raise RuntimeError(
+                            f"unexpected public repository files: {storage}"
+                        )
+                    if not {p.name for p in storage.iterdir() if p.is_dir()} <= {
+                        "postgres",
+                        "sqlite",
+                        "macro",
+                    }:
+                        raise RuntimeError(
+                            f"repository internals must follow their implementation hierarchy: {storage}"
+                        )
+            for name in expected - {"sdk", "common"}:
                 crate = source / name
                 package = tomllib.loads((crate / "Cargo.toml").read_text())
                 dependencies = package.get("dependencies", {})
@@ -1838,11 +1837,11 @@ class E2ES01StructureVerifier:
                     in dependencies
                 ):
                     raise RuntimeError("payer and payee cannot depend on each other")
-                if name == "common" and any(
+                if name == "core" and any(
                     key.startswith("agentvault-") for key in dependencies
                 ):
                     raise RuntimeError(
-                        "common cannot depend on an application or protocol implementation"
+                        "core cannot depend on service or protocol implementations"
                     )
                 if not (crate / "src/lib.rs").is_file():
                     raise RuntimeError(f"{name} is not an independent Rust library")
@@ -1863,11 +1862,11 @@ class E2ES01StructureVerifier:
                         f"{role} is missing directional routes or handlers"
                     )
             for provider in ("sqlite", "postgres"):
-                base = common / "storage" / f"base_{provider}.rs"
+                base = core / "storage" / f"{provider}.rs"
                 if not base.is_file():
                     raise RuntimeError(f"missing shared {provider} repository base")
-                for adapter in (common / "storage").glob(f"*/{provider}.rs"):
-                    if f"base_{provider}" not in adapter.read_text():
+                for adapter in (core / "modules").glob(f"*/storage/{provider}.rs"):
+                    if f"storage::{provider}" not in adapter.read_text():
                         raise RuntimeError(
                             f"domain repository does not compose its base: {adapter}"
                         )

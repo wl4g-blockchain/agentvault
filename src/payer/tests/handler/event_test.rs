@@ -3,7 +3,7 @@ use crate::model::PaymentEventType;
 
 #[tokio::test]
 async fn transition_event_replay_cannot_change_its_payload() {
-    let (_directory, storage) = crate::storage::base_sqlite::tests::storage().await;
+    let (_directory, storage) = crate::storage::sqlite::tests::storage().await;
     let fixture = crate::storage::schema_tests::RepositoryFixture::create(std::sync::Arc::new(storage)).await;
     let intent = fixture.challenge().await;
     let service = EventHandler::new(fixture.ports.events);

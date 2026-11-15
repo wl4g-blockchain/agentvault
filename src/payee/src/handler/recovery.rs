@@ -3,9 +3,9 @@ use crate::model::PaymentIntent;
 use crate::storage::reconciliation::ReconciliationEvidence;
 use crate::storage::reconciliation::ReconciliationProviderObservation;
 use crate::Result;
-pub use agentvault_common::storage::reconciliation::ProviderReconciliationRequest;
-pub use agentvault_common::storage::reconciliation::VerifyOnlyProviderEvidence;
-use agentvault_common::{
+pub use agentvault_core::storage::reconciliation::ProviderReconciliationRequest;
+pub use agentvault_core::storage::reconciliation::VerifyOnlyProviderEvidence;
+use agentvault_core::{
     storage::reconciliation::ProviderEvidence, storage::reconciliation::ReconciliationEvidenceSource,
 };
 use async_trait::async_trait;

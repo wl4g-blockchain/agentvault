@@ -6,7 +6,7 @@ use crate::storage::IdempotentWrite;
 
 #[tokio::test]
 async fn confirmed_financial_facts_replay_once_and_cannot_change_amount() {
-    let (_directory, storage) = crate::storage::base_sqlite::tests::storage().await;
+    let (_directory, storage) = crate::storage::sqlite::tests::storage().await;
     let fixture = crate::storage::schema_tests::RepositoryFixture::create(std::sync::Arc::new(storage)).await;
 
     let service = LedgerHandler::new(fixture.ports.ledger);

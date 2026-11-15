@@ -2,7 +2,7 @@ use crate::{
     model::PaymentChallenge, model::PaymentPrice, storage::IPolicyRepository, storage::IPriceRepository,
     storage::IWalletRepository, Error, Result,
 };
-use agentvault_common::handler::scenario::ScenarioHandler;
+use agentvault_core::handler::scenario::ScenarioHandler;
 use agentvault_protocol::ProtocolRegistry;
 use std::sync::Arc;
 

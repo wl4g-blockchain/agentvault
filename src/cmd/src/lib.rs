@@ -1,12 +1,12 @@
-pub use agentvault_common::apm;
-pub use agentvault_common::cache;
-pub use agentvault_common::config;
-pub use agentvault_common::model;
-pub use agentvault_common::storage;
-pub use agentvault_common::util;
-pub use agentvault_common::AppConfig;
-pub use agentvault_common::Error;
-pub use agentvault_common::Result;
+pub use agentvault_core::apm;
+pub use agentvault_core::cache;
+pub use agentvault_core::config;
+pub use agentvault_core::model;
+pub use agentvault_core::storage;
+pub use agentvault_core::util;
+pub use agentvault_core::AppConfig;
+pub use agentvault_core::Error;
+pub use agentvault_core::Result;
 pub use agentvault_protocol as protocol;
 mod agentvault;
 mod approval;
@@ -25,4 +25,4 @@ mod routes_tests;
 #[path = "../tests/mod_test.rs"]
 mod tests;
 
-pub use agentvault_common::handler;
+pub use agentvault_core::handler;

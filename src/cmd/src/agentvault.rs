@@ -1,5 +1,5 @@
 use crate::{apm::AgentVaultMetrics, apm::ReadinessProbe, AppConfig};
-use agentvault_common::{util::runtime::RuntimeComponent, util::runtime::RuntimeResource};
+use agentvault_core::{util::runtime::RuntimeComponent, util::runtime::RuntimeResource};
 use anyhow::Context as _;
 use axum::Router;
 use std::sync::Arc;
@@ -27,11 +27,27 @@ impl AgentVaultServer {
     /// # Errors
     /// Returns a configuration, secret, storage or payment-component initialization failure.
     pub async fn assemble(config: AppConfig) -> anyhow::Result<Self> {
+        Self::assemble_in(config, agentvault_core::context::state::ApplicationScope::isolated()).await
+    }
+
+    /// Assembles the process entry point with the shared provider registry.
+    ///
+    /// # Errors
+    /// Returns configuration or provider initialization errors.
+    pub async fn assemble_shared(config: AppConfig) -> anyhow::Result<Self> {
+        Self::assemble_in(config, agentvault_core::context::state::ApplicationScope::shared()).await
+    }
+
+    async fn assemble_in(
+        config: AppConfig,
+        application: Arc<agentvault_core::context::state::ApplicationScope>,
+    ) -> anyhow::Result<Self> {
         config.validate_for_serve().context("validate service configuration")?;
         let mut server = Self::new(config.clone());
         if config.agentvault.enabled() {
             let payment =
-                super::payment_runtime::PaymentRuntimeFactory::assemble(&config, server.metrics.clone()).await?;
+                super::payment_runtime::PaymentRuntimeFactory::assemble(&config, server.metrics.clone(), application)
+                    .await?;
             server = server.with_readiness_probe(payment.storage_readiness);
             server = server.with_api_router(payment.router);
             server = server.with_component(payment.cache_health);

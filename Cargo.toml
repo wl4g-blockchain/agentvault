@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src/common", "src/protocol", "src/payer", "src/payee", "src/cmd"]
+members = ["src/core", "src/protocol", "src/payer", "src/payee", "src/cmd", "src/common/audit-log", "src/common/context", "src/common/error", "src/common/macro", "src/common/makestruct", "src/common/mem-prof", "src/common/pprof", "src/common/telemetry"]
 exclude = [
     "src/sdk/rust",
     "use-cases/marketpulse-feed-subscription/deploy/mock-payee-marketpulse-rust-service/source",
@@ -35,6 +35,7 @@ humantime-serde = "1.1"
 k256 = { version = "0.13", features = ["ecdsa"] }
 jsonwebtoken = { version = "9.3", default-features = false }
 libc = "0.2"
+lazy_static = "1.4"
 mpp = { version = "=0.15.1", default-features = false, features = ["client", "tempo"] }
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
@@ -61,7 +62,7 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting"] }
 tempo-alloy = { version = "=1.11.0", default-features = false }
-tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
+tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util", "fs"] }
 tonic = { version = "0.14", features = ["transport"] }
 tonic-prost = "0.14"
 tower = { version = "0.5", features = ["util"] }
@@ -74,10 +75,31 @@ x402-chain-eip155 = { version = "=1.4.11", features = ["client"] }
 x402-chain-solana = { version = "=1.4.11", features = ["client"] }
 x402-types = "=1.4.11"
 
-agentvault-common = { path = "src/common" }
+agentvault-core = { path = "src/core" }
+common-audit-log = { path = "src/common/audit-log" }
+common-context = { path = "src/common/context" }
+common-error = { path = "src/common/error" }
+common-macro = { path = "src/common/macro" }
+common-makestruct = { path = "src/common/makestruct" }
+common-mem-prof = { path = "src/common/mem-prof" }
+common-pprof = { path = "src/common/pprof" }
+common-telemetry = { path = "src/common/telemetry" }
+
 agentvault-protocol = { path = "src/protocol" }
 agentvault-payer = { path = "src/payer" }
 agentvault-payee = { path = "src/payee" }
+
+
+arc-swap = "1.7"
+chrono = { version = "0.4", features = ["serde"] }
+humantime = "2.1"
+once_cell = "1.19"
+parking_lot = "0.12"
+prometheus = "0.14"
+regex = "1.11"
+snafu = "0.8"
+strum = { version = "0.25", features = ["derive"] }
+sysinfo = "0.29.11"
 
 [profile.release]
 lto = "thin"

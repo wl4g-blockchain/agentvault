@@ -28,12 +28,12 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
-agentvault-common.workspace = true
+agentvault-core.workspace = true
 agentvault-protocol.workspace = true
 
 
 [dev-dependencies]
-agentvault-common = { workspace = true, features = ["test-support"] }
+agentvault-core = { workspace = true, features = ["test-support"] }
 tempfile = "3.21"
 tempo-primitives = { version = "=1.11.0", default-features = false }
 

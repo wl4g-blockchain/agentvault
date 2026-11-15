@@ -110,17 +110,17 @@ async fn import_live_solana_storage(
     config: &crate::config::AppConfig,
     manifest_path: &std::path::Path,
     manifest: &Value,
-) -> std::sync::Arc<crate::storage::base_sqlite::SqliteRepository> {
+) -> std::sync::Arc<crate::storage::sqlite::SqliteRepository> {
     std::fs::write(
         manifest_path,
-        agentvault_common::resource::ResourceImporter::encode_test_resource_documents(manifest),
+        agentvault_core::resource::ResourceImporter::encode_test_resource_documents(manifest),
     )
     .expect("write live Solana resource documents");
-    agentvault_common::resource::ResourceImporter::import_from_paths(config, &[manifest_path.to_path_buf()])
+    agentvault_core::resource::ResourceImporter::import_from_paths(config, &[manifest_path.to_path_buf()])
         .await
         .expect("import live Solana Vault resources");
     std::sync::Arc::new(
-        crate::storage::base_sqlite::SqliteRepository::connect(&config.storage.sqlite)
+        crate::storage::sqlite::SqliteRepository::connect(&config.storage.sqlite)
             .await
             .expect("open live Solana Vault storage"),
     )
@@ -469,11 +469,11 @@ async fn live_solana_x402_vault_handlers_reconcile_both_ledgers() {
     use crate::storage::PageRequest;
     use crate::util::secure_material::Aes256GcmMaterialProtector;
     use crate::util::secure_material::SensitiveMaterialProtector;
-    use agentvault_common::handler::scenario::ScenarioHandler;
-    use agentvault_common::storage::reconciliation::PaymentEvidenceRouter;
-    use agentvault_common::storage::reconciliation::ReconciliationConfig;
-    use agentvault_common::storage::reconciliation::ReconciliationEvidenceSource;
-    use agentvault_common::storage::reconciliation::ReconciliationJob;
+    use agentvault_core::handler::scenario::ScenarioHandler;
+    use agentvault_core::storage::reconciliation::PaymentEvidenceRouter;
+    use agentvault_core::storage::reconciliation::ReconciliationConfig;
+    use agentvault_core::storage::reconciliation::ReconciliationEvidenceSource;
+    use agentvault_core::storage::reconciliation::ReconciliationJob;
     use agentvault_payee::handler::facilitator::X402FacilitatorProvider;
     use agentvault_payee::handler::provider::SettlementProviderConfig;
     use agentvault_payee::handler::provider::SettlementProviderRegistry;

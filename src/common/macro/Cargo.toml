@@ -1,0 +1,34 @@
+[package]
+name = "common-macro"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2 = "1.0.66"
+quote = "1.0"
+syn = { version = "1.0", features = ["full"] }
+syn2 = { version = "2.0", package = "syn", features = [
+    "derive",
+    "parsing",
+    "printing",
+    "clone-impls",
+    "proc-macro",
+    "extra-traits",
+    "full",
+] }
+
+[dev-dependencies]
+arc-swap = "1.0"
+snafu.workspace = true
+static_assertions = "1.1.0"
+common-audit-log = { workspace = true }
+
+[features]
+default = []

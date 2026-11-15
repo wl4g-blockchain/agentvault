@@ -9,7 +9,7 @@ use crate::{
     storage::WalletKeyStatus, storage::WalletPaymentSigner, util::aead::UuidNonceCodec,
     util::aead::WALLET_KEY_ENCRYPTION_SCHEME, util::secure_material::SensitiveMaterialProtector, Error, Result,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;

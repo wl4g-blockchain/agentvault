@@ -4,7 +4,7 @@ use super::{
     PaymentLedgerEntry, PaymentPrice, PaymentReceipt, PaymentStatus, ReservationStatus, Result, SettleIncomingPayment,
     SettledIncomingPayment, SettlementProviderResult, Uuid, Value, VerifyIncomingPayment, X402Evm,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 
 pub(crate) struct SettlementFacts;
 

@@ -4,7 +4,7 @@ use crate::util::{
     clock::{SystemUnixClock, UnixClock},
     principal_context::CallerPrincipal,
 };
-use agentvault_common::util::api_error::ApiError;
+use agentvault_core::util::api_error::ApiError;
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
@@ -61,7 +61,7 @@ struct PriceApiFixture {
     _directory: tempfile::TempDir,
     _environment: PriceApiEnvironment,
     runtime: crate::payment_runtime::AssembledPaymentRuntime,
-    context: agentvault_common::util::principal_context::PrincipalContext,
+    context: agentvault_core::util::principal_context::PrincipalContext,
     signing_key: String,
     owner: crate::storage::schema_tests::RepositoryFixture,
     outsider: crate::storage::schema_tests::RepositoryFixture,
@@ -115,18 +115,22 @@ impl PriceApiFixture {
         config.server.authguard.enabled = true;
         config.server.authguard.direct_context_hmac_key = secret;
         let context =
-            agentvault_common::util::principal_context::PrincipalContext::from_config(&config.server.authguard)
-                .unwrap();
+            agentvault_core::util::principal_context::PrincipalContext::from_config(&config.server.authguard).unwrap();
         let mut chain = crate::config::ChainConfig::default();
         chain.rpc.endpoint = "http://127.0.0.1:18545".to_owned();
         chain.rpc.allow_insecure_loopback = true;
         config.agentvault.chains.insert("eip155:31337".to_owned(), chain);
-        let runtime =
-            crate::payment_runtime::PaymentRuntimeFactory::assemble(&config, crate::apm::AgentVaultMetrics::default())
-                .await
-                .unwrap();
-        let owner = crate::storage::schema_tests::RepositoryFixture::create(runtime.resources.storage.clone()).await;
-        let outsider = crate::storage::schema_tests::RepositoryFixture::create(runtime.resources.storage.clone()).await;
+        let runtime = crate::payment_runtime::PaymentRuntimeFactory::assemble(
+            &config,
+            crate::apm::AgentVaultMetrics::default(),
+            agentvault_core::context::state::ApplicationScope::isolated(),
+        )
+        .await
+        .unwrap();
+        let owner =
+            crate::storage::schema_tests::RepositoryFixture::create(runtime.resources.providers.storage.clone()).await;
+        let outsider =
+            crate::storage::schema_tests::RepositoryFixture::create(runtime.resources.providers.storage.clone()).await;
         Self {
             _directory: directory,
             _environment: environment,
@@ -192,8 +196,7 @@ impl PriceApiFixture {
     }
 
     async fn close(self) {
-        self.runtime.resources.cache.close().await.unwrap();
-        self.runtime.resources.storage.close().await.unwrap();
+        self.runtime.resources.providers.close().await.unwrap();
     }
 }
 

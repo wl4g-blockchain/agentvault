@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn disabled_client_cannot_authenticate() {
-    let (_directory, storage) = crate::storage::base_sqlite::tests::storage().await;
+    let (_directory, storage) = crate::storage::sqlite::tests::storage().await;
     let fixture = crate::storage::schema_tests::RepositoryFixture::create(std::sync::Arc::new(storage)).await;
     let service = PayClientHandler::new(fixture.ports.clients);
     assert_eq!(

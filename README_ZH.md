@@ -131,10 +131,17 @@ x402 EVM 五语言矩阵、x402 Solana 支付门禁与 MPP Tempo charge 门禁�
 
 Apache-2.0，见 [LICENSE](LICENSE)。
 
-Rust 服务端采用 `common`、`protocol`、`payer`、`payee`、`cmd` 五个独立 crate。
-配置结构与默认值集中在 `src/common/src/config/config.rs`，条件及跨字段校验位于 `config/validation.rs`。环境覆盖按层次通用加载，秘密引用通过配置树遍历发现；领域仓库组合 `base_sqlite.rs` 或
-`base_postgres.rs`；付款与收款各自拥有 handler、HTTP routes 和服务入口，并统一调用
-`ApmComponent` 启动管理与可观测组件。
+Rust 服务端由 `core`、`protocol`、`payer`、`payee`、`cmd` 五个应用 crate 组成。
+`src/common/` 包含独立的 context/provider 生命周期、error、macro、makestruct、
+telemetry、audit-log、mem-prof、pprof 框架库。`core` 按标杆结构组织配置、请求上下文、
+缓存、management/APM、数据库基类和 `modules/<domain>/{model,handler,storage}`。
+付款/收款 handler、HTTP routes 和多语言 SDK 的职责保持原样。
+
+配置仍集中在 `src/core/src/config/config.rs`，条件和跨字段校验归 `config/validation.rs`。
+通用 Serde 配置树环境覆盖由框架 context 库提供，保留 map/数组覆盖和 SecretRef 排除。
+领域仓库组合 `core::storage::postgres` 或 `core::storage::sqlite`，共享事务内部文件
+跟随实现层级组织。入口使用统一 `ApplicationContext`；测试使用独立上下文。停机仍先
+排空 HTTP/worker，再依次关闭缓存和 SQL，不额外启用提前关闭资源的信号钩子。
 
 准备好各自的 YAML、SecretRef 和监听端口后，可分别运行：
 

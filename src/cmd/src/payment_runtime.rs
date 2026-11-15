@@ -7,18 +7,17 @@ use super::{
 use crate::{
     apm::AgentVaultMetrics,
     apm::ReadinessProbe,
-    cache::CacheFactory,
     cache::ICache,
     handler::scenario::ScenarioHandler,
     storage::{
         IApprovalRepository, IApproverRepository, IIntentRepository, IPolicyRepository, IPriceRepository,
-        IWalletRepository, StorageFactory, StoragePorts, WalletKeyManager, WalletPaymentSigner,
+        IWalletRepository, StoragePorts, WalletKeyManager, WalletPaymentSigner,
     },
     util::secure_material::Aes256GcmMaterialProtector,
     util::secure_material::SensitiveMaterialProtector,
     AppConfig,
 };
-use agentvault_common::{
+use agentvault_core::{
     storage::reconciliation::PaymentEvidenceRouter, storage::reconciliation::ReconciliationEvidenceSource,
 };
 use agentvault_payee::{
@@ -51,18 +50,11 @@ impl PaymentRuntimeFactory {
     pub(crate) async fn assemble(
         config: &AppConfig,
         metrics: AgentVaultMetrics,
+        application: Arc<agentvault_core::context::state::ApplicationScope>,
     ) -> anyhow::Result<AssembledPaymentRuntime> {
-        let cache = CacheFactory::new()
-            .create(&config.cache)
-            .await
-            .context("initialize non-authoritative cache")?;
-        let storage = match StorageFactory::new().create(&config.storage).await {
-            Ok(storage) => storage,
-            Err(error) => {
-                let _ = cache.close().await;
-                return Err(error).context("initialize authoritative storage");
-            }
-        };
+        let providers = Arc::new(agentvault_core::context::state::RuntimeProviders::open(config, application).await?);
+        let cache = Arc::clone(&providers.cache);
+        let storage = Arc::clone(&providers.storage);
         let assembled = async {
             let ports = Arc::clone(&storage).ports();
             let scenarios = Arc::new(ScenarioHandler::new(
@@ -127,15 +119,13 @@ impl PaymentRuntimeFactory {
                     storage: Arc::clone(&storage),
                 }),
                 resources: PaymentRuntimeResources {
-                    cache: Arc::clone(&cache),
-                    storage: Arc::clone(&storage),
+                    providers: Arc::clone(&providers),
                 },
             })
         }
         .await;
         if assembled.is_err() {
-            let _ = cache.close().await;
-            let _ = storage.close().await;
+            let _ = providers.close().await;
         }
         assembled
     }

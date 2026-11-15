@@ -1,4 +1,4 @@
-pub use agentvault_common::{apm, config, model, storage, util, Error, Result};
+pub use agentvault_core::{apm, config, model, storage, util, Error, Result};
 // Payment protocol adapter boundary.
 
 pub mod mpp;
@@ -446,7 +446,7 @@ mod contract {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/contract_test.rs"));
     }
 }
-pub use agentvault_common::model::ProtocolSigningRequest;
+pub use agentvault_core::model::ProtocolSigningRequest;
 pub use contract::*;
 
 use model::{HttpCredentialDto, PaymentCredential, PaymentCredentialDto};
