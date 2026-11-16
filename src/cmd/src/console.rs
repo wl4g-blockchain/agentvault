@@ -17,7 +17,7 @@ use crate::{
     storage::LedgerQuery, storage::PageRequest, storage::PaymentQuery, storage::StorageFactory, storage::StoragePorts,
     AgentVaultServer, AppConfig,
 };
-use agentvault_common::resource::ResourceImporter;
+use agentvault_core::resource::ResourceImporter;
 
 #[derive(Debug, Parser)]
 #[command(name = "agentvault", version, about = "AgentVault payment infrastructure")]
@@ -459,7 +459,12 @@ impl ConsoleRunner {
         let cli = Cli::parse();
         let config = AppConfig::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
         match cli.command {
-            Command::Serve { role } => AgentVaultServer::assemble(role.select(config)).await?.run().await,
+            Command::Serve { role } => {
+                AgentVaultServer::assemble_shared(role.select(config))
+                    .await?
+                    .run()
+                    .await
+            }
             Command::Console {
                 operation: None | Some(ConsoleCommand::Shell),
             } => ConsoleRunner::run_shell(&config).await,

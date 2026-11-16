@@ -1,0 +1,74 @@
+{{- $name := default (printf "%s-postgres" .Release.Name) .Values.fullnameOverride -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: postgres, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: postgres, app.kubernetes.io/instance: {{ .Release.Name }} }
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          env:
+            - { name: POSTGRES_USER, value: {{ .Values.auth.username | quote }} }
+            - { name: POSTGRES_DB, value: {{ .Values.auth.database | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.auth.existingSecret | quote }}, key: {{ .Values.auth.passwordKey | quote }} }
+          ports: [{ name: postgres, containerPort: 5432 }]
+          startupProbe:
+            exec: { command: [pg_isready, -U, {{ .Values.auth.username | quote }}, -d, {{ .Values.auth.database | quote }}] }
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            exec: { command: [pg_isready, -U, {{ .Values.auth.username | quote }}, -d, {{ .Values.auth.database | quote }}] }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: postgres }
+            periodSeconds: 10
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ $name }} }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: { app.kubernetes.io/name: postgres, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports: [{ name: postgres, port: {{ .Values.service.port }}, targetPort: postgres }]
+{{- if .Values.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests: { storage: {{ .Values.persistence.size }} }
+{{- end }}

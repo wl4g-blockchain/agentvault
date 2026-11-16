@@ -72,6 +72,11 @@ x-agentvault-build: &agentvault-build
     RUNTIME_IMAGE: ${E2E_AGENTVAULT_RUNTIME_IMAGE:?required}
 
 services:
+  agentvault-web:
+    extends:
+      file: ./deploy/agentvault/docker-compose.yaml
+      service: agentvault-web
+
   # Network namespace anchor and EVM node. Host bindings for colocated E2E
   # processes live here because Compose forbids ports with network_mode.
   anvil:
@@ -104,6 +109,9 @@ services:
     restart: unless-stopped
 
   postgres:
+    extends:
+      file: ../../deploy/docker/middleware/postgres.yaml
+      service: postgres
     profiles: ["infra"]
     image: ${E2E_POSTGRES_IMAGE:?required}
     platform: ${E2E_IMAGE_PLATFORM:?required}
@@ -112,29 +120,16 @@ services:
       POSTGRES_USER: agentvault
       POSTGRES_PASSWORD: ${E2E_POSTGRES_PASSWORD:-agentvault-e2e-only}
       POSTGRES_DB: agentvault
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentvault -d agentvault"]
-      interval: 10s
-      timeout: 3s
-      retries: 30
-    restart: unless-stopped
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
 
   jaeger:
+    extends:
+      file: ../../deploy/docker/middleware/jaeger.yaml
+      service: jaeger
     profiles: ["infra"]
     image: ${E2E_JAEGER_IMAGE:?required}
     platform: ${E2E_IMAGE_PLATFORM:?required}
     network_mode: service:anvil
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:14269/"]
-      interval: 10s
-      timeout: 3s
-      retries: 30
-      start_period: 5s
-    restart: unless-stopped
 
   evm-fixture:
     profiles: ["payer", "payee"]

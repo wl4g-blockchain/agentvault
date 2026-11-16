@@ -7,7 +7,7 @@ use crate::{
     storage::IApprovalRepository, storage::IApproverRepository, storage::IIntentRepository, storage::OutboxMessage,
     storage::OutboxStatus, Error, Result,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;

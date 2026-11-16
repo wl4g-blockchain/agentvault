@@ -158,12 +158,21 @@ The x402 EVM language matrix, x402 Solana payment gate, and MPP Tempo charge gat
 
 Apache-2.0. See [LICENSE](LICENSE).
 
-The Rust server is a Cargo workspace with `common`, `protocol`, `payer`, `payee`
-and `cmd` crates. Shared configuration is defined in
-`src/common/src/config/config.rs`, with conditional checks in `config/validation.rs`.
-Environment overrides follow the serialized configuration tree without a field-path list; SQL adapters compose `base_sqlite.rs` or
-`base_postgres.rs`. Each payment direction owns its handlers, HTTP routes and
-service startup, with common APM and lifecycle components.
+The Rust server has `core`, `protocol`, `payer`, `payee` and `cmd` application crates.
+The independent framework crates live under `src/common/`: context/provider
+lifecycle, errors, macros, telemetry, audit logging and profilers. `core` owns
+configuration, request context, cache, management/APM integration, database bases
+and `modules/<domain>/{model,handler,storage}`. Service handlers, routes and SDKs
+keep their existing responsibilities.
+
+Configuration remains in `src/core/src/config/config.rs`, with conditional checks
+in `config/validation.rs`. The framework's generic Serde-tree environment overlay
+preserves nested map/array overrides and SecretRef exclusion. Domain SQL adapters
+compose `core::storage::postgres` or `core::storage::sqlite`; shared transaction
+internals follow their implementation directory. The application entry point
+uses the shared `ApplicationContext` while isolated hosts/tests can create an
+independent context. Provider shutdown follows HTTP/worker draining, in the
+established cache-before-SQL order.
 
 With an operator-configured YAML and secrets, start the services independently:
 

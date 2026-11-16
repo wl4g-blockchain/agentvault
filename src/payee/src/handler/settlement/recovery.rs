@@ -3,7 +3,7 @@ use super::{
     PaymentIntent, ReconciliationProviderObservation, Result, SealedSensitiveMaterial, SettlementCoordinator,
     SettlementFacts, SettlementOperation, SettlementProviderRequest, SettlementProviderResult, Value,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 
 impl SettlementCoordinator {
     /// Reconstructs settlement material exclusively from encrypted durable

@@ -12,6 +12,25 @@ from verifier.purchase.s30_matrix import E2ES30MatrixVerifier
 
 
 class LifecycleTest(unittest.TestCase):
+    def test_failed_scenario_keeps_a_summary_and_original_failure(self):
+        from runner import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("sys.argv", ["runner.py", "run", "--scenario", "structure"]),
+                patch("runner.create_run_root", return_value=("20261116000000", root)),
+                patch("runner.ProgressLogger"),
+                patch(
+                    "runner.verifier",
+                    return_value=Mock(side_effect=RuntimeError("scenario failed")),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "scenario failed"):
+                    main()
+            self.assertIn("FAILED", (root / "summary.md").read_text())
+            self.assertIn("RuntimeError", (root / "runner/failure.md").read_text())
+
     def test_all_registered_scenarios_have_three_phases(self):
         for scenario in SCENARIOS:
             with self.subTest(scenario=scenario.name):

@@ -10,8 +10,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web-arm64:
+    name: Verify web image (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Configure shared build images
+        env:
+          E2E_IMAGE_NETWORK: NON_GFW
+        run: python3 use-cases/marketpulse-feed-subscription/util/images.py >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build native arm64 web image
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: agentvault-web:ci-arm64
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            WEB_IMAGE=${{ env.WEB_IMAGE }}
+          cache-from: type=gha,scope=agentvault-web-arm64
+          cache-to: type=gha,mode=max,scope=agentvault-web-arm64,ignore-error=true
+
+      - name: Verify native runtime and generated assets
+        run: |
+          docker run --rm --platform linux/arm64 \
+            --entrypoint sh agentvault-web:ci-arm64 -ec \
+            'test "$(uname -m)" = aarch64 && test -s /usr/share/nginx/html/index.html && nginx -t'
+
   build-and-test:
     name: Build and test
+    needs: web-arm64
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -301,6 +340,8 @@ jobs:
     env:
       E2E_AGENTVAULT_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_RUNNER_PREBUILT_AGENTVAULT: "1"
+      E2E_AGENTVAULT_WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault-web:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_RUNNER_PREBUILT_WEB: "1"
     steps:
       - name: Reclaim ephemeral runner disk
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -326,6 +367,7 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check \
             --requirement use-cases/marketpulse-feed-subscription/requirements.txt
+          python3 -m playwright install --with-deps chromium
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -343,14 +385,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull immutable dirty runtime
-        run: docker pull "${E2E_AGENTVAULT_IMAGE}"
+        run: |
+          docker pull "${E2E_AGENTVAULT_IMAGE}"
+          docker pull "${E2E_AGENTVAULT_WEB_IMAGE}"
 
-      - name: Run all five HTTP SDK E2E combinations
+      - name: Run all HTTP SDK combinations and the live production Web UI
         run: |
           set -o pipefail
           mkdir -p use-cases/marketpulse-feed-subscription/reports
           python3 use-cases/marketpulse-feed-subscription/runner.py run \
-            --scenario matrix --e2e-sdk-scope full \
+            --scenario matrix,live-wallet --e2e-sdk-scope full \
             --reuse-build --cleanup-after-run --timeout 150m \
             2>&1 | tee use-cases/marketpulse-feed-subscription/reports/ci-docker-runner.log
 
@@ -394,6 +438,8 @@ jobs:
     env:
       E2E_AGENTVAULT_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_RUNNER_PREBUILT_AGENTVAULT: "1"
+      E2E_AGENTVAULT_WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/agentvault-web:${{ needs.build-and-test.outputs.dirty_tag }}
+      E2E_RUNNER_PREBUILT_WEB: "1"
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       E2E_QUANTSTREAM_UI_IMAGE: localhost/quantstream-admin-ui-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
       E2E_MARKETPULSE_RUST_IMAGE: localhost/marketpulse-rust-e2e:${{ needs.build-and-test.outputs.dirty_tag }}
@@ -425,6 +471,7 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check \
             --requirement use-cases/marketpulse-feed-subscription/requirements.txt
+          python3 -m playwright install --with-deps chromium
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -446,8 +493,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           docker pull "${E2E_AGENTVAULT_IMAGE}"
-          revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${E2E_AGENTVAULT_IMAGE}")
-          test "${revision}" = "${HEAD_SHA}"
+          docker pull "${E2E_AGENTVAULT_WEB_IMAGE}"
+          for image in "${E2E_AGENTVAULT_IMAGE}" "${E2E_AGENTVAULT_WEB_IMAGE}"; do
+            revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${image}")
+            test "${revision}" = "${HEAD_SHA}"
+          done
 
       - name: Create an isolated pinned K3s cluster
         run: |
@@ -460,12 +510,12 @@ jobs:
           sudo k3s kubectl --namespace kube-system wait --for=create deployment/local-path-provisioner --timeout=120s
           sudo k3s kubectl --namespace kube-system rollout status deployment/local-path-provisioner --timeout=120s
 
-      - name: Run the Rust and Go SDK matrix on Kubernetes
+      - name: Run the SDK matrix and live production Web UI on Kubernetes
         run: |
           set -o pipefail
           mkdir -p use-cases/marketpulse-feed-subscription/reports
           python3 use-cases/marketpulse-feed-subscription/runner.py run \
-            --deployer kubernetes --scenario matrix --e2e-sdk-scope simple --matrix-workers 1 \
+            --deployer kubernetes --scenario matrix,live-wallet --e2e-sdk-scope simple --matrix-workers 1 \
             --reuse-build --cleanup-after-run --timeout 30m \
             2>&1 | tee use-cases/marketpulse-feed-subscription/reports/ci-kubernetes-runner.log
 

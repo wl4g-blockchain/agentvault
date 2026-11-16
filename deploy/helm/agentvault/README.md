@@ -44,7 +44,7 @@ key versions remain in the authoritative Wallet SQL aggregate.
 
 ## Values and environment names
 
-The values file has three top-level ownership boundaries only:
+The values file separates these ownership boundaries:
 
 - `global`: settings shared by chart workloads.
 - `agentvault.backend`, `agentvault.frontend`, and
@@ -52,6 +52,24 @@ The values file has three top-level ownership boundaries only:
   Kubernetes resources, and an optional native `agentvault.yaml` override.
 - `authguard`: the unmodified AuthGuard dependency values contract; the
   dependency supplies the authentication/authorization middleware.
+- `postgres`, `redis`, `jaeger`: default-on middleware dependencies, sourced
+  from `deploy/helm/<name>`. These charts use the Helm release namespace and
+  are also reused directly by MarketPulse E2E with case-specific overrides.
+
+An empty cluster receives independent AgentVault PostgreSQL, Redis and Jaeger
+services. PostgreSQL uses a persistent PVC by default. Supply `POSTGRES_PASSWORD`
+and `REDIS_PASSWORD` in the pre-created `agentvault-secrets` Secret, and use those
+same passwords in the runtime URL keys. Default connection hosts are
+`<release>-postgres:5432`, `<release>-redis:6379` and `<release>-jaeger:4317`.
+AuthGuard keeps its own database/cache dependencies and Secret.
+
+For existing middleware, set `postgres.enabled=false`, `redis.enabled=false`
+and/or `jaeger.enabled=false`. Supply external PostgreSQL/Redis URLs through the
+runtime Secret and set
+`agentvault.backend.env.AGENTVAULT__MGMT__OTEL__ENDPOINT` for an external OTLP
+collector, or set `AGENTVAULT__MGMT__OTEL__ENABLED="false"` in that env map.
+Jaeger's default all-in-one trace store is bounded memory; use an external
+collector/storage deployment for retained traces. No password is stored in values.
 
 By default the chart does not duplicate or mount runtime defaults: the process
 uses the canonical `etc/agentvault.yaml` embedded in the runtime image. Set

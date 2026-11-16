@@ -281,7 +281,7 @@ fn plaintext_and_old_ecdh_envelopes_are_rejected() {
 async fn browser_public_key_encryption_reaches_kek_encrypted_sql() {
     use crate::{
         config::{SecretRefConfig, SqliteStorageConfig, WalletKeyRingConfig},
-        storage::{base_sqlite::SqliteRepository, IRepository as _},
+        storage::{sqlite::SqliteRepository, IRepository as _},
     };
 
     let directory = tempfile::TempDir::new().unwrap();

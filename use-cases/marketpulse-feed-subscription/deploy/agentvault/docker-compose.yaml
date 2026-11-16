@@ -13,3 +13,21 @@ services:
     volumes:
       - ${E2E_AGENTVAULT_CONFIG_PATH:?required}:/etc/agentvault/e2e.yaml:ro
     ports: ["${E2E_AGENTVAULT_PORT:-38080}:8080", "${E2E_AGENTVAULT_MGMT_PORT:-39091}:9091"]
+
+  agentvault-web:
+    profiles: [web]
+    image: ${E2E_AGENTVAULT_WEB_IMAGE:?required}
+    platform: ${E2E_IMAGE_PLATFORM:?required}
+    build:
+      context: ../../../../web
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:?required}
+        WEB_IMAGE: ${WEB_IMAGE:?required}
+    read_only: true
+    tmpfs: [/tmp:size=32m]
+    volumes:
+      - ${E2E_AGENTVAULT_WEB_ROUTES_PATH:-../../reports/.runtime/web}:/etc/nginx/agentvault:ro
+    ports: ["127.0.0.1:${E2E_AGENTVAULT_WEB_PORT:-38088}:8080"]
+    cpus: "0.25"
+    mem_limit: 128m

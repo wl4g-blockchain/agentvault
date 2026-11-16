@@ -6,7 +6,7 @@ use crate::{
     handler::PayeeApi,
     model::{PaymentChallenge, PaymentPrice},
 };
-use agentvault_common::{
+use agentvault_core::{
     util::api_error::ApiError, util::clock::SystemUnixClock, util::clock::UnixClock,
     util::principal_context::CallerPrincipal,
 };

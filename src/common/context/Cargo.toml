@@ -1,0 +1,18 @@
+[package]
+name = "common-context"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+regex.workspace = true
+sysinfo.workspace = true
+tokio.workspace = true
+tracing.workspace = true

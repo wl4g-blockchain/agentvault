@@ -1,3 +1,7 @@
+# The runner installs the same production middleware charts in the infra namespace.
+postgres: { enabled: false }
+redis: { enabled: false }
+jaeger: { enabled: false }
 agentvault:
   backend:
     fullnameOverride: agentvault
@@ -17,6 +21,7 @@ agentvault:
       AGENTVAULT__SERVER__HOST: "0.0.0.0"
       AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
       AGENTVAULT__MGMT__HOST: "0.0.0.0"
+      AGENTVAULT__MGMT__OTEL__ENDPOINT: "http://127.0.0.1:4317"
       AGENTVAULT__LOGGING__MODE: "JSON"
       AGENTVAULT__STORAGE__PROVIDER: "postgres"
       AGENTVAULT__CACHE__PROVIDER: "memory"

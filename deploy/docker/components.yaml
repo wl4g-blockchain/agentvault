@@ -1,0 +1,48 @@
+# Shared AgentVault service composition for authenticated and open edges.
+services:
+  agentvault-postgres:
+    extends: { file: middleware/postgres.yaml, service: postgres }
+    profiles: [postgres]
+    # Preserve the existing production image and volume layout.
+    image: registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3
+    environment:
+      POSTGRESQL_USERNAME: agentvault
+      POSTGRESQL_PASSWORD: ${HELPER_SECRET_POSTGRES_PASSWORD:-}
+      POSTGRESQL_DATABASE: agentvault
+    volumes: ["agentvault-postgres-data:/bitnami/postgresql"]
+
+  agentvault-redis:
+    extends: { file: middleware/redis.yaml, service: redis }
+    profiles: [redis]
+    environment:
+      REDIS_PASSWORD: ${HELPER_SECRET_REDIS_PASSWORD:-}
+      REDISCLI_AUTH: ${HELPER_SECRET_REDIS_PASSWORD:-}
+
+  agentvault-jaeger:
+    extends: { file: middleware/jaeger.yaml, service: jaeger }
+    profiles: [jaeger]
+    ports: ["127.0.0.1:16686:16686"]
+
+  agentvault:
+    image: ${HELPER_INTERNAL_AGENTVAULT_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_IMAGE in .env}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    command: [--config, /etc/agentvault/agentvault.yaml, serve]
+    env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
+    volumes:
+      - "./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro"
+    restart: unless-stopped
+    depends_on:
+      agentvault-postgres: { condition: service_healthy, required: false }
+      agentvault-redis: { condition: service_healthy, required: false }
+      agentvault-jaeger: { condition: service_healthy, required: false }
+    expose: [8080, 9091]
+    ports:
+      - "127.0.0.1:9091:9091"
+
+  agentvault-web:
+    image: ${HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE in .env}
+    build: { context: ../../web, dockerfile: Dockerfile }
+    expose: [8080]
+    restart: unless-stopped

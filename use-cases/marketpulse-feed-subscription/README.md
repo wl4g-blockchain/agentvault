@@ -2,9 +2,9 @@
 
 ## Functionality and execution
 
-The case verifies QuantStream payers buying MarketPulse news through AgentVault. It includes five SDK languages (Rust, Go, Python, TypeScript, Java), both HTTP control planes, x402/EVM on Anvil, x402/Solana with SPL tokens, MPP/Tempo charge and recovery, A2A boundaries, and Chromium dashboard journeys. A full isolated matrix contains 25 cases: 5 payers × 5 payees × 2 transports. The default simple scope contains 4 cases.
+The case verifies QuantStream payers buying MarketPulse news through AgentVault. It includes five SDK languages (Rust, Go, Python, TypeScript, Java), both HTTP control planes, x402/EVM on Anvil, x402/Solana with SPL tokens, MPP/Tempo charge and recovery, A2A boundaries, and Chromium dashboard journeys. A full isolated matrix contains 25 cases: 5 payers × 5 payees × HTTP. The default simple scope contains 4 cases.
 
-Deployment assets are grouped horizontally by service. Mock production sources and dependency manifests live in `deploy/<service>/source/`; native contracts are owned by their vertical scenarios under `verifier/<scenario>/contracts/`; SDK dependencies remain in the repository's `src/sdk/`. AgentVault's Dockerfile and Dockerfile.dockerignore link to production assets. Its component directory contains only those links, config/ overlays and docker-compose.yaml; Helm uses the repository's deploy/helm/agentvault directly. Middleware packages use upstream images and need no copied upstream source. Shared Helm overlays are configuration bundles, not additional workloads.
+Deployment assets are grouped horizontally by service. Mock production sources and dependency manifests live in `deploy/<service>/source/`; native contracts are owned by their vertical scenarios under `verifier/<scenario>/contracts/`; SDK dependencies remain in the repository's `src/sdk/`. AgentVault's backend and web/ Dockerfile links reuse production assets; Helm uses deploy/helm/agentvault directly. PostgreSQL and Jaeger reuse deploy/helm/{postgres,jaeger} and deploy/docker/middleware/; the case keeps only E2E overrides under deploy/agentvault/config/, with no separate middleware deployment directories. Production enables PostgreSQL, Redis and Jaeger by default, and supports disabling each for external connections. Shared Helm overlays are configuration bundles, not additional workloads.
 
 Verification is grouped vertically by scenario. Each `E2ES<NN><Description>Verifier` exposes `deploy(context)`, `init(context)`, and `verify(context)`. The runner calls them in that order and closes temporary forwarding sessions even on failure. Unused phases remain explicit no-op methods. Payment assertions stay in scenarios; `util/` contains reusable class operations. `verifier/context.py` owns case identities, resource fixtures, shared context and the runtime contract.
 
@@ -17,7 +17,7 @@ The purchase journey owns signing, settlement, balance observation and accountin
 
 Additional vertical scenarios cover authorization projection/Origin/expiry rejection and stable replay, approval decision boundaries, Price revisions and history, RSA Wallet import, signed identity isolation, delivery recovery and settled-payment restart. `budget-race`, `key-lifecycle` and `outbox-redelivery` exercise the real domain/SQL transaction contracts on SQLite and an isolated temporary PostgreSQL database. They complement the chain purchase and do not claim an additional live-chain or HTTP purchase for SQLite. The identity scenario uses a controlled issuer for the real Vault AuthGuard-context verifier; it does not claim to exercise AuthGuard IAM, the opaque-scope resolver or a deployed edge Gateway.
 
-`metrics`, `tracing`, `logs`, the purchase stages and the new boundary scenarios automatically require `full` in the same run. Purchase captures raw OpenMetrics before/after payment, verifies operation counters against histogram counts and expected signatures/approval, queries every logged trace through Jaeger with 100% sampling, and checks the SDK-producer → Vault-consumer parent link. Logs bind the same runs across SDK, Vault and merchant. These observations are captured in the purchase window before fault scenarios restart the process. `live-wallet` uses real Chromium Web Crypto and forwards browser API requests to the live Vault, then checks PostgreSQL custody. The existing `web` scenario retains report-derived fixtures for its matrix presentation checks.
+`metrics`, `tracing`, `logs`, the purchase stages and the new boundary scenarios automatically require `full` in the same run. Purchase captures raw OpenMetrics before/after payment, verifies operation counters against histogram counts and expected signatures/approval, queries every logged trace through Jaeger with 100% sampling, and checks the SDK-producer → Vault-consumer parent link. Logs bind the same runs across SDK, Vault and merchant. These observations are captured in the purchase window before fault scenarios restart the process. `live-wallet` automatically runs a real purchase, starts the production `web/Dockerfile` image using the Compose service or production Helm frontend, then uses Chromium against Nginx and the live API without browser request interception. It checks payer/payee records and filtering, ledger conservation against PostgreSQL, client ownership, approvals, health probes, encrypted wallet custody and atomic Scenario + Policy creation. Screenshots and HTTP evidence are saved under `live-wallet/`. Both Docker and Kubernetes CI invoke `matrix,live-wallet` with the immutable dirty Web image. The E2E deployment links the production frontend Dockerfile under `deploy/agentvault/web/`; its private routes expose only the two management health probes. The existing `web` scenario retains report-derived fixtures for its matrix presentation checks.
 
 ```text
 marketpulse-feed-subscription/
@@ -26,7 +26,7 @@ marketpulse-feed-subscription/
 ├── docker-compose.yaml
 ├── deploy/
 │   ├── agentvault/{Dockerfile->production,Dockerfile.dockerignore->production,config/,docker-compose.yaml}
-│   ├── <middleware>/{Dockerfile,docker-compose.yaml,helm/}
+│   ├── <case-fixture>/{Dockerfile,docker-compose.yaml,helm/}
 │   ├── evm/{source/{src/,artifacts/,*.sh},Dockerfile,docker-compose.yaml,helm/}
 │   ├── <mock-service>/{source/,Dockerfile,docker-compose.yaml,helm/}
 │   ├── mock-payee-marketpulse-shared-helm/{e2e-envoy.configmap.yaml,e2e-values.yaml}
@@ -64,7 +64,7 @@ python "$CASE/runner.py" --list
 E2E_IMAGE_NETWORK=IN_CN_GFW python "$CASE/runner.py" run \
   --deployer kubernetes --scenario structure,infrastructure
 E2E_IMAGE_NETWORK=IN_CN_GFW python "$CASE/runner.py" run \
-  --deployer kubernetes --scenario matrix,mpp-tempo,x402-solana,a2a,x402-evm,web \
+  --deployer kubernetes --scenario matrix,mpp-tempo,x402-solana,a2a,x402-evm,live-wallet,web \
   --e2e-sdk-scope full --matrix-workers 1 --timeout 45m --reuse-build \
   --cleanup-after-run
 ```

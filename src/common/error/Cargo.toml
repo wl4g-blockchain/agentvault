@@ -1,0 +1,12 @@
+[package]
+name = "common-error"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[dependencies]
+snafu.workspace = true
+strum.workspace = true

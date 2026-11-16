@@ -1,0 +1,8 @@
+fullnameOverride: postgres
+auth:
+  existingSecret: marketpulse-e2e-secrets
+  passwordKey: postgres-password
+persistence: { enabled: false }
+resources:
+  requests: { cpu: 20m, memory: 32Mi }
+  limits: { cpu: 1000m, memory: 512Mi }

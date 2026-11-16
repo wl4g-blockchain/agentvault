@@ -1,0 +1,34 @@
+[package]
+name = "common-audit-log"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+proc-macro = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Workspace dependencies
+common-error.workspace = true
+common-macro.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing = { version = "0.1", optional = true }
+
+# Optional dependencies for providers
+rumqttc = { version = "0.24", optional = true }
+
+[features]
+default = ["file-provider"]
+mqtt-provider = ["dep:rumqttc", "dep:tracing"]
+file-provider = []
+sigbot = ["mqtt-provider", "file-provider"]

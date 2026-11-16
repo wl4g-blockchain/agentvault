@@ -1,0 +1,35 @@
+use crate::{
+    storage::codec::SqliteAmountCodec as AmountCodec, storage::event::sqlite::EventSqliteRepository as EventRepository,
+    storage::outbox::sqlite::OutboxSqliteRepository as OutboxRepository,
+    storage::payment::sqlite::PaymentSqliteRepository as PaymentRepository,
+    storage::sqlite::dynamic_sqlite as dynamic_query, storage::sqlite::SqliteRepository as BaseRepository,
+};
+use sqlx::{sqlite::SqliteRow as DbRow, SqliteConnection as Connection};
+
+// Approval repository; transaction rules shared across SQLx drivers.
+
+type AmountValue = String;
+type JsonValue = String;
+
+impl ApprovalSqliteRepository {
+    fn lock_approval_intent(_connection: &mut Connection, _intent_id: &str) -> std::future::Ready<Result<()>> {
+        // BEGIN IMMEDIATE already owns the SQLite database write lock.
+        std::future::ready(Ok(()))
+    }
+}
+
+crate::storage::approval::r#macro::approval_repository!(ApprovalSqliteRepository, "", "", "", "", "", "", "");
+
+#[cfg(test)]
+#[path = "../../../../tests/storage/approval/sqlite_test.rs"]
+mod tests;
+
+#[derive(Clone)]
+pub struct ApprovalSqliteRepository {
+    base: BaseRepository,
+}
+impl ApprovalSqliteRepository {
+    pub(crate) fn new(base: BaseRepository) -> Self {
+        Self { base }
+    }
+}

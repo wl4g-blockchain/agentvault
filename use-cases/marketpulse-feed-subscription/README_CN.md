@@ -4,7 +4,7 @@
 
 验证 QuantStream 通过 AgentVault 购买 MarketPulse 新闻：覆盖 Rust、Go、Python、TypeScript、Java 五语言 SDK，HTTP 控制面，Anvil 上的 x402/EVM、Solana SPL 实付、MPP/Tempo charge 与交付恢复、A2A 边界和 Chromium Dashboard。完整隔离矩阵为 5×5×1=25 组，默认 simple 为 2×2×1=4 组。
 
-`deploy/` 按服务水平拆分，mock 的生产源码和依赖清单放在各自 `source/`，原生契约测试迁入所属纵向场景的 `contracts/`；SDK 仍引用仓库 `src/sdk/`。AgentVault 的 Dockerfile、Dockerfile.dockerignore 链接到正式部署文件；该组件根目录只保留两条链接、config/ 和 docker-compose.yaml。Helm 直接使用仓库 deploy/helm/agentvault，E2E 叠加配置放在 config/。中间件使用上游镜像，无须复制上游源码；shared-helm 目录仅保存共享叠加配置。
+`deploy/` 按服务水平拆分，mock 的生产源码和依赖清单放在各自 `source/`，原生契约测试迁入所属纵向场景的 `contracts/`；SDK 仍引用仓库 `src/sdk/`。AgentVault 后端与 web/ 下的 Dockerfile 链接到正式部署文件；Helm 直接复用 deploy/helm/agentvault。PG、Jaeger 直接复用 deploy/helm/{postgres,jaeger} 及 deploy/docker/middleware/，use case 不保留独立中间件部署目录，只在 deploy/agentvault/config/ 保存 E2E 叠加配置。正式部署默认开启 PG、Redis、Jaeger，支持关闭并使用外部连接；shared-helm 目录仅保存共享叠加配置。
 
 `verifier/` 按场景纵向拆分，每个 `E2ES<NN><Description>Verifier` 由 runner 按 `deploy(context) → init(context) → verify(context)` 调用，可选阶段无需额外操作；失败也会关闭临时转发。部署通用能力放在 `util/`，支付业务编排及断言放在对应场景。共享上下文、身份、资源 fixture 与运行契约统一在 `verifier/context.py`。
 
@@ -17,7 +17,7 @@
 
 新增纵向验收包括：授权投影、Origin、过期与稳定重放；审批决策边界；Price revision/历史约束；真实 RSA 钱包导入；签名身份隔离；交付恢复与已结算付款的进程重启。`budget-race`、`key-lifecycle`、`outbox-redelivery` 在 SQLite 和独立临时 PostgreSQL 数据库上执行真实领域/SQL 事务契约，补充实链购买证据，不把它们描述成 SQLite 的额外 HTTP/实链付款。身份场景用受控签发方测试真实 Vault AuthGuard Context 适配器，不声称已验收 AuthGuard IAM、opaque-scope resolver 或真实边缘 Gateway。
 
-`metrics`、`tracing`、`logs`、购买步骤及新增边界场景会自动在本轮先执行 `full`。购买窗口内抓取付款前后原始 OpenMetrics，交叉核对操作计数、Histogram 和签名/审批次数；Jaeger 对日志内每个 Trace ID 验证真实 SDK producer → Vault consumer 父子关系，E2E 固定 100% 采样；日志关联相同 run 在 SDK、Vault、商户的流转。观测证据在故障场景重启进程前完成采集，避免把重置后的计数当付款指标。`live-wallet` 使用真实 Chromium Web Crypto，将浏览器请求转发到真实 Vault API，再查询 PostgreSQL 托管结果；原 `web` 保留报告派生 fixture，用于矩阵展示验收。
+`metrics`、`tracing`、`logs`、购买步骤及新增边界场景会自动在本轮先执行 `full`。购买窗口内抓取付款前后原始 OpenMetrics，交叉核对操作计数、Histogram 和签名/审批次数；Jaeger 对日志内每个 Trace ID 验证真实 SDK producer → Vault consumer 父子关系，E2E 固定 100% 采样；日志关联相同 run 在 SDK、Vault、商户的流转。观测证据在故障场景重启进程前完成采集，避免把重置后的计数当付款指标。`live-wallet` 自动先执行真实购买，再通过 Compose 服务或正式 Helm 前端部署生产 `web/Dockerfile` 镜像。Chromium 直接经过 Nginx 访问真实 API，不拦截浏览器请求；覆盖付款/收款记录及筛选、账本守恒与 SQL 核对、Client 归属、审批、健康检查、加密钱包托管及 Scenario + Policy 原子创建。截图和 HTTP 证据保存至 `live-wallet/`。Docker、Kubernetes CI 都执行 `matrix,live-wallet`，复用同一提交的 dirty Web 镜像。前端 Dockerfile 链接位于 `deploy/agentvault/web/`，E2E 私有路由仅公开两个管理健康探针；原 `web` 保留报告派生 fixture，用于矩阵展示验收。
 
 ```text
 marketpulse-feed-subscription/
@@ -26,7 +26,7 @@ marketpulse-feed-subscription/
 ├── docker-compose.yaml
 ├── deploy/
 │   ├── agentvault/{Dockerfile->production,Dockerfile.dockerignore->production,config/,docker-compose.yaml}
-│   ├── <middleware>/{Dockerfile,docker-compose.yaml,helm/}
+│   ├── <case-fixture>/{Dockerfile,docker-compose.yaml,helm/}
 │   ├── evm/{source/{src/,artifacts/,*.sh},Dockerfile,docker-compose.yaml,helm/}
 │   ├── <mock-service>/{source/,Dockerfile,docker-compose.yaml,helm/}
 │   ├── mock-payee-marketpulse-shared-helm/{e2e-envoy.configmap.yaml,e2e-values.yaml}
@@ -64,7 +64,7 @@ python "$CASE/runner.py" --list
 E2E_IMAGE_NETWORK=IN_CN_GFW python "$CASE/runner.py" run \
   --deployer kubernetes --scenario structure,infrastructure
 E2E_IMAGE_NETWORK=IN_CN_GFW python "$CASE/runner.py" run \
-  --deployer kubernetes --scenario matrix,mpp-tempo,x402-solana,a2a,x402-evm,web \
+  --deployer kubernetes --scenario matrix,mpp-tempo,x402-solana,a2a,x402-evm,live-wallet,web \
   --e2e-sdk-scope full --matrix-workers 1 --timeout 45m --reuse-build \
   --cleanup-after-run
 ```

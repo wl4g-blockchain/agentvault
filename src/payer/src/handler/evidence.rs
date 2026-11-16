@@ -14,7 +14,7 @@ use crate::{
     storage::OutboundEvidenceWrite, util::secure_material::SealedSensitiveMaterial,
     util::secure_material::SensitiveMaterialProtector, Error, Result,
 };
-use agentvault_common::model::payment::PaymentValidation;
+use agentvault_core::model::payment::PaymentValidation;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -468,7 +468,7 @@ impl MerchantEvidenceRecorder {
 mod tests;
 
 #[async_trait::async_trait]
-impl agentvault_common::storage::reconciliation::ReconciliationEvidenceSource for MerchantEvidenceRecorder {
+impl agentvault_core::storage::reconciliation::ReconciliationEvidenceSource for MerchantEvidenceRecorder {
     async fn lookup(
         &self,
         intent: &crate::model::PaymentIntent,

@@ -14,7 +14,7 @@ use crate::model::PaymentPrice;
 use crate::storage::IPriceRepository;
 use crate::Error;
 use crate::Result;
-use agentvault_common::handler::scenario::ScenarioHandler;
+use agentvault_core::handler::scenario::ScenarioHandler;
 use std::sync::Arc;
 pub struct PayeeApi {
     pub scenarios: Arc<ScenarioHandler>,

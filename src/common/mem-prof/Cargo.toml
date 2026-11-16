@@ -1,0 +1,28 @@
+[package]
+name = "common-mem-prof"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[dependencies]
+common-error.workspace = true
+common-macro.workspace = true
+snafu.workspace = true
+tempfile = "3.4"
+tokio.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+tikv-jemalloc-ctl = { version = "0.6.0", features = ["use_std"] }
+# tikv-jemallocator = "0.6.0"
+
+[target.'cfg(not(windows))'.dependencies.tikv-jemalloc-sys]
+# see:https://crates.io/crates/tikv-jemalloc-sys
+features = ["stats", "profiling", "unprefixed_malloc_on_supported_platforms"]
+version = "0.6"

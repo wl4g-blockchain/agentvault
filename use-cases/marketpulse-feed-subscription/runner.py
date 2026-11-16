@@ -692,6 +692,17 @@ def main() -> None:
                 Project.REPORT_ROOT, protected=(run_id, args.matrix_evidence_run or "")
             )
             print(f"E2E scenarios passed; report={summary}")
+        except BaseException as error:
+            reports.record(
+                "runner",
+                "failure.md",
+                "FAILED",
+                round_number,
+                f"{type(error).__name__}: E2E run did not complete. "
+                "See the failing scenario's retained diagnostics and runner log.",
+            )
+            reports.write_summary()
+            raise
         finally:
             if args.cleanup_after_run:
                 cleanup(

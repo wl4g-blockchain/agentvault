@@ -1,58 +1,17 @@
-x-agentvault: &agentvault
-  image: ${HELPER_INTERNAL_AGENTVAULT_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_IMAGE in .env}
-  build:
-    context: ../..
-    dockerfile: deploy/docker/Dockerfile
-  command: [--config, /etc/agentvault/agentvault.yaml, serve]
-  env_file: ["${HELPER_INTERNAL_ENV_FILE:-.env}"]
-  environment:
-    AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
-  volumes:
-    - "./config/agentvault.yaml:/etc/agentvault/agentvault.yaml:ro"
-  restart: unless-stopped
-
+# Open edge overlay using the same production services and middleware definitions.
 services:
   agentvault-postgres:
-    image: registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3
-    environment:
-      POSTGRESQL_USERNAME: agentvault
-      POSTGRESQL_PASSWORD: ${HELPER_SECRET_POSTGRES_PASSWORD:?set HELPER_SECRET_POSTGRES_PASSWORD in .env}
-      POSTGRESQL_DATABASE: agentvault
-    volumes: ["agentvault-postgres-data:/bitnami/postgresql"]
-    healthcheck:
-      test: [CMD-SHELL, pg_isready -U agentvault -d agentvault]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-    restart: unless-stopped
-
+    extends: { file: components.yaml, service: agentvault-postgres }
   agentvault-redis:
-    image: redis:7.2-alpine
-    command: [redis-server, --save, "", --appendonly, "no", --requirepass, "${HELPER_SECRET_REDIS_PASSWORD:?set HELPER_SECRET_REDIS_PASSWORD in .env}"]
-    environment:
-      HELPER_SECRET_REDIS_PASSWORD: ${HELPER_SECRET_REDIS_PASSWORD:?set HELPER_SECRET_REDIS_PASSWORD in .env}
-    healthcheck:
-      test: [CMD-SHELL, 'redis-cli --no-auth-warning -a "$${HELPER_SECRET_REDIS_PASSWORD}" ping | grep -q PONG']
-      interval: 5s
-      timeout: 3s
-      retries: 30
-    restart: unless-stopped
-
+    extends: { file: components.yaml, service: agentvault-redis }
+  agentvault-jaeger:
+    extends: { file: components.yaml, service: agentvault-jaeger }
   agentvault:
-    <<: *agentvault
-    depends_on:
-      agentvault-postgres: { condition: service_healthy }
-      agentvault-redis: { condition: service_healthy }
-    expose: [8080, 9091, 50051]
-    ports:
-      - "127.0.0.1:9091:9091"
-
+    extends: { file: components.yaml, service: agentvault }
+    environment:
+      AGENTVAULT__SERVER__AUTHGUARD__ENABLED: "false"
   agentvault-web:
-    image: ${HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE:?set HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE in .env}
-    build: { context: ../../web, dockerfile: Dockerfile }
-    expose: [8080]
-    restart: unless-stopped
-
+    extends: { file: components.yaml, service: agentvault-web }
   envoy:
     image: registry.cn-shenzhen.aliyuncs.com/wl4g/envoyproxy_envoy:distroless-v1.36.4
     command: [-c, /etc/envoy/envoy.yaml, --log-level, info]
@@ -62,6 +21,5 @@ services:
       agentvault: { condition: service_started }
       agentvault-web: { condition: service_started }
     restart: unless-stopped
-
 volumes:
   agentvault-postgres-data: {}

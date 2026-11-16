@@ -1,5 +1,5 @@
 use crate::{model::ApprovalExpirationRun, storage::IApprovalRepository, Error, Result};
-use agentvault_common::{util::clock::SystemUnixClock, util::clock::UnixClock};
+use agentvault_core::{util::clock::SystemUnixClock, util::clock::UnixClock};
 use std::sync::Arc;
 
 const MAX_EXPIRATION_BATCH_SIZE: u32 = 10_000;

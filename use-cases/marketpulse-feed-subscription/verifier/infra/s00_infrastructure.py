@@ -351,7 +351,9 @@ class E2ES00InfrastructureVerifier:
         def _shared_overrides_for_chart(chart: Path) -> tuple[Path, ...]:
             if chart.resolve() == AGENTVAULT_CHART.resolve():
                 return (AGENTVAULT_VALUES,)
-            component = chart.parent.name
+            component = chart.parent.name if chart.name == "helm" else chart.name
+            if component in Project.PRODUCTION_MIDDLEWARE:
+                return (Project.AGENTVAULT_CONFIG / f"{component}-values.yaml",)
             if component.startswith("mock-payee-marketpulse-"):
                 return (MARKETPULSE_SHARED_VALUES,)
             if component.startswith("mock-payer-quantstream-service-"):
@@ -384,6 +386,11 @@ class E2ES00InfrastructureVerifier:
         def _chart_namespace(chart: Path) -> str:
             if chart.resolve() == AGENTVAULT_CHART.resolve():
                 return AGENTVAULT_NAMESPACE
+            if chart in (
+                Project.component_chart(component)
+                for component in Project.PRODUCTION_MIDDLEWARE
+            ):
+                return INFRA_NAMESPACE
             metadata = (chart / "Chart.yaml").read_text(encoding="utf-8")
             match = re.search(
                 r"(?m)^  agentvault\.io/e2e-namespace: (e2e-agentvault-[a-z0-9-]+)$",
@@ -762,15 +769,21 @@ class E2ES00InfrastructureVerifier:
                 Project.component_chart(component)
                 for component in Project.DEPLOY_COMPONENTS
             ]
-            expected = set(Project.DEPLOY_COMPONENTS)
+            expected = set(Project.DEPLOY_COMPONENTS) - set(
+                Project.PRODUCTION_MIDDLEWARE
+            )
             compose_components = {path.parent.name for path in compose_files}
             chart_components = {
                 "agentvault"
                 if path.resolve() == AGENTVAULT_CHART.resolve()
                 else path.parent.name
+                if path.name == "helm"
+                else path.name
                 for path in charts
             }
-            if compose_components != expected or chart_components != expected:
+            if compose_components != expected or chart_components != set(
+                Project.DEPLOY_COMPONENTS
+            ):
                 raise RuntimeError(
                     f"paired component manifests drifted: expected={sorted(expected)}, "
                     f"Compose={sorted(compose_components)}, Helm={sorted(chart_components)}"
@@ -1465,7 +1478,9 @@ class E2ES00InfrastructureVerifier:
                     self.environment,
                     self._image_loader.platform,
                 )
-            component = E2EImagesDefinitions.COMPONENT_KEYS.get(chart.parent.name)
+            component = E2EImagesDefinitions.COMPONENT_KEYS.get(
+                chart.parent.name if chart.name == "helm" else chart.name
+            )
             selected = {
                 **selected,
             }
@@ -1507,8 +1522,12 @@ class E2ES00InfrastructureVerifier:
             if role not in {"payer", "payee"}:
                 raise ValueError(f"unsupported payment role: {role}")
             for release in ("postgres", "jaeger"):
+                chart = self._component_chart(release)
                 self._helm_install(
-                    release, self._component_chart(release), INFRA_NAMESPACE
+                    release,
+                    chart,
+                    INFRA_NAMESPACE,
+                    values=self._shared_overrides_for_chart(chart),
                 )
             self._helm_install(
                 "anvil", self._component_chart("anvil"), PAYMENT_NAMESPACE
@@ -2461,7 +2480,7 @@ class E2ES00InfrastructureVerifier:
                         "test",
                         "--locked",
                         "--package",
-                        "agentvault-common",
+                        "agentvault-core",
                         "--lib",
                         name,
                         "--",

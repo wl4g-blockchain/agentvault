@@ -1,9 +1,13 @@
+import json
 import os
 import re
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import yaml
 from util.constant import E2EOtherDefinitions as Project
 from util.images import E2EImagesDefinitions as Images
 from util.kubernetes import E2EKubernetesDeployer
@@ -11,11 +15,238 @@ from util.process import E2EProcessHelper as Process
 
 
 class LayoutImagesTest(unittest.TestCase):
+    def test_e2e_telemetry_env_uses_the_case_collector_route(self):
+        values = Project.AGENTVAULT_CONFIG / "e2e-values.yaml"
+        native = yaml.safe_load(
+            yaml.safe_load(values.read_text())["agentvault"]["agentvault-config"]
+        )
+        output = subprocess.check_output(
+            [
+                "helm",
+                "template",
+                "agentvault",
+                str(Project.AGENTVAULT_CHART),
+                "--namespace",
+                "e2e-agentvault-system",
+                "--values",
+                str(values),
+                "--show-only",
+                "templates/server/deployment.yaml",
+            ],
+            text=True,
+        )
+        deployment = yaml.safe_load(output)
+        container = next(
+            item
+            for item in deployment["spec"]["template"]["spec"]["containers"]
+            if item["name"] == "agentvault"
+        )
+        env = {item["name"]: item.get("value") for item in container["env"]}
+        self.assertEqual(
+            env["AGENTVAULT__MGMT__OTEL__ENDPOINT"], native["mgmt"]["otel"]["endpoint"]
+        )
+
+    def test_shared_network_services_do_not_set_container_port_options(self):
+        env = {
+            key: os.environ[key]
+            for key in ("PATH", "HOME", "DOCKER_CONFIG")
+            if key in os.environ
+        }
+        env["E2E_AGENTVAULT_CONFIG_PATH"] = str(
+            Project.AGENTVAULT_CONFIG / "e2e-values.yaml"
+        )
+        env["E2E_IMAGE_NETWORK"] = "NON_GFW"
+        Images.configure(env)
+        command = [
+            "docker",
+            "compose",
+            "-f",
+            str(Project.E2E_ROOT / "docker-compose.yaml"),
+        ]
+        for profile in ("infra", "payee", "apps", "payee-rust", "ingestor-rust", "web"):
+            command += ["--profile", profile]
+        services = json.loads(
+            subprocess.check_output(
+                [*command, "config", "--format", "json"],
+                env=env,
+                text=True,
+            )
+        )["services"]
+        shared = {
+            name: service
+            for name, service in services.items()
+            if service.get("network_mode", "").startswith(("service:", "container:"))
+        }
+        self.assertIn("jaeger", shared)
+        for name, service in shared.items():
+            self.assertFalse(service.get("ports"), name)
+            self.assertFalse(service.get("expose"), name)
+
+    def test_compose_middleware_profiles_and_external_open_edge(self):
+        root = Project.REPOSITORY_ROOT / "deploy/docker"
+        env = {
+            **{
+                key: os.environ[key]
+                for key in ("PATH", "HOME", "USERPROFILE", "DOCKER_CONFIG")
+                if key in os.environ
+            },
+            "HELPER_INTERNAL_ENV_FILE": str(root / ".env.example"),
+        }
+        for topology in ("docker-compose.yaml", "docker-compose.open.yaml"):
+            rendered = subprocess.check_output(
+                [
+                    "docker",
+                    "compose",
+                    "--env-file",
+                    str(root / ".env.example"),
+                    "-f",
+                    str(root / topology),
+                    "config",
+                    "--format",
+                    "json",
+                ],
+                env=env,
+                text=True,
+            )
+
+            services = json.loads(rendered)["services"]
+            for name in ("postgres", "redis", "jaeger"):
+                self.assertIn("agentvault-" + name, services)
+            postgres = services["agentvault-postgres"]
+            self.assertEqual(
+                postgres["image"],
+                "registry.cn-shenzhen.aliyuncs.com/wl4g/bitnami_postgresql:18.3",
+            )
+            self.assertTrue(
+                any(
+                    volume.get("source") == "agentvault-postgres-data"
+                    and volume["target"] == "/bitnami/postgresql"
+                    for volume in postgres["volumes"]
+                )
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "external.env"
+            config.write_text(
+                "COMPOSE_PROFILES=\nHELPER_INTERNAL_AGENTVAULT_IMAGE=localhost/vault:review\n"
+                "HELPER_INTERNAL_AGENTVAULT_WEB_IMAGE=localhost/web:review\n"
+                "AGENTVAULT__STORAGE__POSTGRES__URL=postgres://external/db\n"
+                "AGENTVAULT__CACHE__REDIS__URLS=redis://external:6379/0\n"
+            )
+            env["HELPER_INTERNAL_ENV_FILE"] = str(config)
+            services = subprocess.check_output(
+                [
+                    "docker",
+                    "compose",
+                    "--env-file",
+                    str(config),
+                    "-f",
+                    str(root / "docker-compose.open.yaml"),
+                    "config",
+                    "--services",
+                ],
+                env=env,
+                text=True,
+            ).splitlines()
+            self.assertIn("agentvault", services)
+            self.assertTrue(
+                all(
+                    "agentvault-" + name not in services
+                    for name in ("postgres", "redis", "jaeger")
+                )
+            )
+
+    def test_production_middleware_defaults_and_external_switches(self):
+        chart = Project.AGENTVAULT_CHART
+        command = [
+            "helm",
+            "template",
+            "review",
+            str(chart),
+            "--namespace",
+            "review",
+            "--set",
+            "authguard.enabled=false",
+        ]
+        objects = list(yaml.safe_load_all(subprocess.check_output(command, text=True)))
+        deployments = {
+            item["metadata"]["name"]: item
+            for item in objects
+            if item and item["kind"] == "Deployment"
+        }
+        for name in ("postgres", "redis", "jaeger"):
+            deployment = deployments[f"review-{name}"]
+            self.assertEqual(deployment["metadata"]["namespace"], "review")
+        pg = deployments["review-postgres"]["spec"]["template"]["spec"]
+        self.assertEqual(
+            pg["volumes"][0]["persistentVolumeClaim"]["claimName"], "review-postgres"
+        )
+        password = next(
+            env
+            for env in pg["containers"][0]["env"]
+            if env["name"] == "POSTGRES_PASSWORD"
+        )
+        self.assertEqual(
+            password["valueFrom"]["secretKeyRef"]["name"], "agentvault-secrets"
+        )
+        for name in ("postgres", "redis", "jaeger"):
+            command += ["--set", f"{name}.enabled=false"]
+        command += [
+            "--set-string",
+            "agentvault.backend.env.AGENTVAULT__MGMT__OTEL__ENDPOINT=http://external-otel:4317",
+        ]
+        disabled = list(yaml.safe_load_all(subprocess.check_output(command, text=True)))
+        names = {item["metadata"]["name"] for item in disabled if item}
+        self.assertTrue(
+            all(
+                f"review-{name}" not in names
+                for name in ("postgres", "redis", "jaeger")
+            )
+        )
+        self.assertIn("http://external-otel:4317", str(disabled))
+
+    def test_e2e_reuses_production_middleware_with_disposable_storage(self):
+        for component in Project.PRODUCTION_MIDDLEWARE:
+            self.assertFalse((Project.DEPLOY_ROOT / component).exists())
+            chart = Project.component_chart(component)
+            self.assertEqual(chart, Project.REPOSITORY_ROOT / "deploy/helm" / component)
+            rendered = subprocess.check_output(
+                [
+                    "helm",
+                    "template",
+                    component,
+                    str(chart),
+                    "--namespace",
+                    "e2e-agentvault-infra-system",
+                    "--values",
+                    str(Project.AGENTVAULT_CONFIG / f"{component}-values.yaml"),
+                ],
+                text=True,
+            )
+            objects = [item for item in yaml.safe_load_all(rendered) if item]
+            self.assertTrue(
+                all(
+                    item["metadata"]["namespace"] == "e2e-agentvault-infra-system"
+                    for item in objects
+                )
+            )
+            self.assertTrue(
+                all(item["metadata"]["name"] == component for item in objects)
+            )
+            self.assertFalse(
+                any(item["kind"] == "PersistentVolumeClaim" for item in objects)
+            )
+
     def test_project_uses_production_links_and_only_mutable_config_below_config(self):
         directory = Project.AGENTVAULT_ROOT
         self.assertEqual(
             {p.name for p in directory.iterdir()},
-            {"Dockerfile", "Dockerfile.dockerignore", "config", "docker-compose.yaml"},
+            {
+                "Dockerfile",
+                "Dockerfile.dockerignore",
+                "config",
+                "docker-compose.yaml",
+                "web",
+            },
         )
         for name in ("Dockerfile", "Dockerfile.dockerignore"):
             self.assertTrue((directory / name).is_symlink())
@@ -27,6 +258,15 @@ class LayoutImagesTest(unittest.TestCase):
             Project.component_chart("agentvault"),
             Project.REPOSITORY_ROOT / "deploy/helm/agentvault",
         )
+        for name, target in (
+            ("Dockerfile", "Dockerfile"),
+            ("Dockerfile.dockerignore", ".dockerignore"),
+        ):
+            self.assertTrue((directory / "web" / name).is_symlink())
+            self.assertEqual(
+                (directory / "web" / name).resolve(),
+                Project.REPOSITORY_ROOT / "web" / target,
+            )
 
     def test_all_network_matrix_dependencies_have_explicit_correct_origins(self):
         for host in Images.MATRIX[Images.IN_GFW]:

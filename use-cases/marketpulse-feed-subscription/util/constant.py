@@ -46,9 +46,12 @@ class E2EOtherDefinitions:
         "solana",
         "tempo",
     )
-    # AgentVault reuses its production chart; other components own local charts.
+    PRODUCTION_MIDDLEWARE = ("postgres", "jaeger")
+    # Generic middleware and AgentVault reuse production definitions.
     COMPONENTS_WITH_LOCAL_CHART = tuple(
-        name for name in DEPLOY_COMPONENTS if name != "agentvault"
+        name
+        for name in DEPLOY_COMPONENTS
+        if name not in ("agentvault", "postgres", "jaeger")
     )
 
     LANGUAGES = ("rust", "go", "python", "typescript", "java")
@@ -58,6 +61,8 @@ class E2EOtherDefinitions:
 
     @classmethod
     def component_chart(cls, component: str) -> Path:
+        if component in cls.PRODUCTION_MIDDLEWARE:
+            return cls.REPOSITORY_ROOT / "deploy/helm" / component
         return (
             cls.AGENTVAULT_CHART
             if component == "agentvault"

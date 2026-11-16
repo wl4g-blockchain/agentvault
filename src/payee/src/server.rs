@@ -1,4 +1,4 @@
-use agentvault_common::{
+use agentvault_core::{
     apm::AgentVaultMetrics, apm::ApmComponent, apm::ReadinessProbe, config::AppConfig, util::http::HttpApiServer,
     util::principal_context::PrincipalContext, util::runtime::RuntimeComponent, util::runtime::RuntimeResource,
     util::runtime::ServerSupervisor,
