@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1630" viewBox="0 0 1760 1630" role="img" aria-labelledby="title desc">
+<title id="title">AgentVault logical architecture</title>
+<desc id="desc">Payment decisions, settlement evidence, and control boundaries Control boundaries separate the browser, AuthGuard, business applications, AgentVault, external services, and infrastructure. Connections are numbered per invocation flow; abbreviations and sequence prefixes are explained in the footer.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8abce5"/></marker><linearGradient id="backdrop" x2="1" y2="1"><stop stop-color="#06111f"/><stop offset="1" stop-color="#101b31"/></linearGradient><pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#20354b" stroke-opacity="0.22" stroke-width="0.6"/></pattern></defs>
+<style>text{font-family:Inter,"Segoe UI",Arial,sans-serif;fill:#e8f3ff}.eyebrow{font-size:14px;font-weight:700;letter-spacing:2px;fill:#9ab3cf}.title{font-size:32px;font-weight:750}.subtitle{font-size:17px;fill:#9ab3cf}.zone-title{font-size:20px;font-weight:700}.card-title{font-size:20px;font-weight:700}.body{font-size:16.5px;fill:#b9cde3}.small{font-size:14px;fill:#9ab3cf}.edge{fill:none;stroke:#8abce5;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;marker-end:url(#arrow)}.dashed{stroke-dasharray:6 5}.edge-label{font-size:14px;fill:#b9cde3}.glossary{font-size:14px;fill:#b9cde3}</style>
+<rect width="1760" height="1630" fill="url(#backdrop)"/><rect width="1760" height="1630" fill="url(#grid)"/><path d="M40 119H1720" stroke="#2dd4bf" stroke-opacity="0.2"/>
+<text x="40" y="40" class="eyebrow">AGENTVAULT / LOGICAL ARCHITECTURE</text>
+<text x="40" y="83" class="title">Payment decisions, settlement evidence, and control boundaries</text>
+<text x="40" y="111" class="subtitle">Implemented boundaries · standard HTTP SDKs · authoritative SQL · external settlement</text>
+
+<g id="boundaries">
+<g id="browser-control" data-boundary="browser-control"><rect x="40" y="130" width="760" height="235" rx="15" fill="#0a2529" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+<g id="authguard-control" data-boundary="authguard-control"><rect x="840" y="130" width="880" height="235" rx="15" fill="#201735" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+<g id="business-applications" data-boundary="business-applications"><rect x="40" y="410" width="360" height="650" rx="15" fill="#111e30" stroke="#647f9d" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+<g id="agentvault-core" data-boundary="agentvault-core"><rect x="440" y="410" width="840" height="650" rx="15" fill="#0d213c" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+<g id="external-settlement" data-boundary="external-settlement"><rect x="1320" y="410" width="400" height="650" rx="15" fill="#2b2118" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+<g id="infrastructure" data-boundary="infrastructure"><rect x="40" y="1120" width="1680" height="200" rx="15" fill="#0b252e" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="7 5"/></g>
+</g>
+<g id="connections">
+<path class="edge" data-call="A1" d="M 780 255 L 860 255"/>
+<path class="edge" data-call="A2" d="M 1250 255 L 1290 255"/>
+<path class="edge" data-call="P1" d="M 220 675 L 220 750"/>
+<path class="edge" data-call="A3" d="M 1055 320 L 1055 390 L 1000 390 L 1000 475"/>
+<path class="edge" data-call="P2" d="M 380 560 L 414 560 L 414 390 L 835 390 L 835 300 L 860 300"/>
+<path class="edge" data-call="I1" d="M 380 850 L 426 850 L 426 402 L 848 402 L 848 290 L 860 290"/>
+<path class="edge" data-call="P3" d="M 650 550 L 650 585"/>
+<path class="edge" data-call="I2" d="M 1070 550 L 1070 585"/>
+<path class="edge" data-call="P4" d="M 650 775 L 650 805"/>
+<path class="edge" data-call="I5" d="M 1070 775 L 1070 805"/>
+<path class="edge" data-call="P5" d="M 650 910 L 650 940"/>
+<path class="edge" data-call="R1" d="M 1070 910 L 1070 940"/>
+<path class="edge" data-call="I3" d="M 1260 625 L 1340 625"/>
+<path class="edge" data-call="I4" d="M 1515 640 L 1515 705"/>
+<path class="edge" data-call="P6/R2" d="M 1260 995 L 1300 995 L 1300 780 L 1340 780"/>
+<path class="edge" data-call="D1" d="M 780 910 L 780 925 L 430 925 L 430 1100 L 350 1100 L 350 1170"/>
+<path class="edge dashed" data-call="B1" d="M 860 1060 L 860 1120"/>
+</g>
+<g id="components-and-labels">
+<text x="60" y="159" class="zone-title">Browser / application UI control boundary</text>
+<g id="dashboard" data-component="dashboard" data-box="60,185,720,150"><rect x="60" y="185" width="720" height="150" rx="10" fill="#0c1b2c" stroke="#2dd4bf" stroke-width="1.3"/><text x="76" y="215" class="card-title" style="font-size:20px">Payment operations dashboard</text><text x="76" y="242" class="body">Payer Transactions · Payee Transactions · Approvals</text><text x="76" y="266" class="body">Balances &amp; Ledger · Clients · Scenarios · Wallets</text><text x="76" y="290" class="body">History reads · approval decisions · supported configuration</text></g>
+<text x="860" y="159" class="zone-title">AuthGuard independent control boundary</text>
+<g id="envoy-gateway" data-component="envoy-gateway" data-box="860,195,390,125"><rect x="860" y="195" width="390" height="125" rx="10" fill="#0c1b2c" stroke="#a78bfa" stroke-width="1.3"/><text x="876" y="225" class="card-title" style="font-size:20px">Envoy Gateway</text><text x="876" y="252" class="body">Routes UI + all protected APIs</text><text x="876" y="276" class="body">Delivers trusted principal context</text><text x="876" y="300" class="body">Shared routing / access boundary</text></g>
+<g id="authguard" data-component="authguard" data-box="1290,195,410,125"><rect x="1290" y="195" width="410" height="125" rx="10" fill="#0c1b2c" stroke="#a78bfa" stroke-width="1.3"/><text x="1306" y="225" class="card-title" style="font-size:20px">AuthGuard</text><text x="1306" y="252" class="body">Identity · sessions · IAM</text><text x="1306" y="276" class="body">Authenticates and authorizes access</text><text x="1306" y="300" class="body">Own identity storage stays internal</text></g>
+<g class="connection-label" data-call-label="A1"><rect x="803.5" y="244.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="820.0" y="259.0" text-anchor="middle" class="edge-label">A1</text></g>
+<g class="connection-label" data-call-label="A2"><rect x="1253.5" y="229" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1270" y="244" text-anchor="middle" class="edge-label">A2</text></g>
+<text x="60" y="439" class="zone-title">Business application boundary</text>
+<g id="business-payer-sdk" data-component="business-payer-sdk" data-box="60,475,320,200"><rect x="60" y="475" width="320" height="200" rx="10" fill="#0c1b2c" stroke="#647f9d" stroke-width="1.3"/><text x="76" y="505" class="card-title" style="font-size:18px">Business payer application</text><text x="76" y="532" class="body">HTTP / MCP / A2A client</text><text x="76" y="556" class="body">Embedded Payer SDK</text><text x="76" y="580" class="body">402 capture · paid retry</text><text x="76" y="604" class="body">Stable run_id · no wallet key</text><text x="76" y="628" class="body">Standard HTTP to AgentVault</text></g>
+<g id="business-payee-sdk" data-component="business-payee-sdk" data-box="60,750,320,205"><rect x="60" y="750" width="320" height="205" rx="10" fill="#0c1b2c" stroke="#647f9d" stroke-width="1.3"/><text x="76" y="780" class="card-title" style="font-size:18px">Business payee application</text><text x="76" y="807" class="body">Resource handlers / tasks</text><text x="76" y="831" class="body">Embedded Payee SDK</text><text x="76" y="855" class="body">Price → collect → deliver</text><text x="76" y="879" class="body">Application owns delivery state</text><text x="76" y="903" class="body">Standard HTTP to AgentVault</text></g>
+<g class="connection-label" data-call-label="P1"><rect x="124.75" y="705" width="190.5" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="220" y="720" text-anchor="middle" class="edge-label">P1 · paid resource call</text></g>
+<text x="60" y="1015" class="small">SDKs execute inside their host processes.</text>
+<text x="460" y="439" class="zone-title">AgentVault payment execution boundary</text>
+<g id="http-entry" data-component="http-entry" data-box="460,475,800,75"><rect x="460" y="475" width="800" height="75" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="476" y="505" class="card-title" style="font-size:20px">Payer / Payee / Admin HTTP APIs</text><text x="476" y="532" class="body">Trusted principal adapter → role-specific routes and handlers</text></g>
+<g class="connection-label" data-call-label="A3"><rect x="983.5" y="421.5" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1000.0" y="436.5" text-anchor="middle" class="edge-label">A3</text></g>
+<g class="connection-label" data-call-label="P2"><rect x="522.25" y="379" width="205.5" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="625" y="394" text-anchor="middle" class="edge-label">P2 · protected HTTP entry</text></g>
+<g class="connection-label" data-call-label="I1"><rect x="409.5" y="615.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="426.0" y="630.0" text-anchor="middle" class="edge-label">I1</text></g>
+<g id="payer" data-component="payer" data-box="460,585,380,190"><rect x="460" y="585" width="380" height="190" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="476" y="615" class="card-title" style="font-size:20px">Payer · OUTBOUND</text><text x="476" y="642" class="body">Validate · select Wallet · reserve</text><text x="476" y="666" class="body">Independent approval when required</text><text x="476" y="690" class="body">Live balance / gas · Intent-bound signing</text><text x="476" y="714" class="body">Confirm reported settlement evidence</text></g>
+<g id="payee" data-component="payee" data-box="880,585,380,190"><rect x="880" y="585" width="380" height="190" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="896" y="615" class="card-title" style="font-size:20px">Payee · INBOUND</text><text x="896" y="642" class="body">Resolve Price · issue Challenge</text><text x="896" y="666" class="body">Verify Credential · call Provider</text><text x="896" y="690" class="body">Settle before resource release</text><text x="896" y="714" class="body">No payer custody access</text></g>
+<g class="connection-label" data-call-label="P3"><rect x="633.5" y="556.5" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="650.0" y="571.5" text-anchor="middle" class="edge-label">P3</text></g>
+<g class="connection-label" data-call-label="I2"><rect x="1053.5" y="556.5" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1070.0" y="571.5" text-anchor="middle" class="edge-label">I2</text></g>
+<g id="shared-domain" data-component="shared-domain" data-box="460,805,800,105"><rect x="460" y="805" width="800" height="105" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="476" y="835" class="card-title" style="font-size:20px">Shared domain and SQL transaction boundary</text><text x="476" y="862" class="body">Client → Scenario → Policy → Wallet membership</text><text x="476" y="886" class="body">Intent · Approval · Event · Ledger · Outbox</text></g>
+<g class="connection-label" data-call-label="P4"><rect x="633.5" y="779.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="650.0" y="794.0" text-anchor="middle" class="edge-label">P4</text></g>
+<g class="connection-label" data-call-label="I5"><rect x="1053.5" y="779.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1070.0" y="794.0" text-anchor="middle" class="edge-label">I5</text></g>
+<g id="protocol-adapters" data-component="protocol-adapters" data-box="460,940,380,95"><rect x="460" y="940" width="380" height="95" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="476" y="970" class="card-title" style="font-size:20px">Protocol adapters</text><text x="476" y="997" class="body">x402: EVM / Solana · MPP: Tempo</text><text x="476" y="1021" class="body">Role-scoped signing / receipt plans</text></g>
+<g id="recovery-jobs" data-component="recovery-jobs" data-box="880,940,380,95"><rect x="880" y="940" width="380" height="95" rx="10" fill="#0c1b2c" stroke="#60a5fa" stroke-width="1.3"/><text x="896" y="970" class="card-title" style="font-size:20px">Recovery and runtime jobs</text><text x="896" y="997" class="body">Reconcile · approval expiry</text><text x="896" y="1021" class="body">Wallet Balance Sync</text></g>
+<g class="connection-label" data-call-label="P5"><rect x="633.5" y="914.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="650.0" y="929.0" text-anchor="middle" class="edge-label">P5</text></g>
+<g class="connection-label" data-call-label="R1"><rect x="1053.5" y="914.0" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1070.0" y="929.0" text-anchor="middle" class="edge-label">R1</text></g>
+<text x="1340" y="439" class="zone-title">External settlement trust boundary</text>
+<g id="external-provider" data-component="external-provider" data-box="1340,475,360,165"><rect x="1340" y="475" width="360" height="165" rx="10" fill="#0c1b2c" stroke="#fbbf24" stroke-width="1.3"/><text x="1356" y="505" class="card-title" style="font-size:18px">External Facilitator / Provider</text><text x="1356" y="532" class="body">x402 verification and settlement</text><text x="1356" y="556" class="body">MPP Tempo charge provider</text><text x="1356" y="580" class="body">Receipt / transaction evidence</text></g>
+<g id="chain-rpc" data-component="chain-rpc" data-box="1340,705,360,145"><rect x="1340" y="705" width="360" height="145" rx="10" fill="#0c1b2c" stroke="#fbbf24" stroke-width="1.3"/><text x="1356" y="735" class="card-title" style="font-size:20px">Blockchain RPC nodes</text><text x="1356" y="762" class="body">EVM / Solana / Tempo</text><text x="1356" y="786" class="body">Balances · gas · finality</text><text x="1356" y="810" class="body">Independent receipt observation</text></g>
+<g id="evidence-validation" data-component="evidence-validation" data-box="1340,880,360,155"><rect x="1340" y="880" width="360" height="155" rx="10" fill="#0c1b2c" stroke="#fbbf24" stroke-width="1.3"/><text x="1356" y="910" class="card-title" style="font-size:20px">Evidence acceptance criteria</text><text x="1356" y="937" class="body">Network · token · decimals</text><text x="1356" y="961" class="body">Amount · recipient · effect</text><text x="1356" y="985" class="body">Required confirmation depth</text></g>
+<g class="connection-label" data-call-label="I3"><rect x="1283.5" y="641" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1300" y="656" text-anchor="middle" class="edge-label">I3</text></g>
+<g class="connection-label" data-call-label="I4"><rect x="1511.0" y="669" width="138.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1580" y="684" text-anchor="middle" class="edge-label">I4 · chain calls</text></g>
+<g class="connection-label" data-call-label="P6/R2"><rect x="1272.25" y="857" width="55.5" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1300" y="872" text-anchor="middle" class="edge-label">P6/R2</text></g>
+<text x="60" y="1149" class="zone-title">Infrastructure boundary</text>
+<g id="authoritative-sql" data-component="authoritative-sql" data-box="60,1170,600,125"><rect x="60" y="1170" width="600" height="125" rx="10" fill="#0c1b2c" stroke="#22d3ee" stroke-width="1.3"/><text x="76" y="1200" class="card-title" style="font-size:20px">Authoritative SQL · PostgreSQL OR SQLite</text><text x="76" y="1227" class="body">Catalog + encrypted key versions + shared-wallet limits</text><text x="76" y="1251" class="body">Intent / Approval / Event / Ledger / Outbox</text><text x="76" y="1275" class="body">Atomic commits · ordered locks · leases · deduplication</text></g>
+<g id="cache" data-component="cache" data-box="700,1170,300,125"><rect x="700" y="1170" width="300" height="125" rx="10" fill="#0c1b2c" stroke="#22d3ee" stroke-width="1.3"/><text x="716" y="1200" class="card-title" style="font-size:20px">Memory / Redis cache</text><text x="716" y="1227" class="body">Short-lived sessions / lookups</text><text x="716" y="1251" class="body">Not authoritative payment state</text><text x="716" y="1275" class="body">Import sessions fail closed</text></g>
+<g id="secrets" data-component="secrets" data-box="1040,1170,300,125"><rect x="1040" y="1170" width="300" height="125" rx="10" fill="#0c1b2c" stroke="#22d3ee" stroke-width="1.3"/><text x="1056" y="1200" class="card-title" style="font-size:20px">Secret projection</text><text x="1056" y="1227" class="body">KEK / recovery keys</text><text x="1056" y="1251" class="body">Scoped provider credentials</text><text x="1056" y="1275" class="body">No business SDK key access</text></g>
+<g id="observability" data-component="observability" data-box="1380,1170,320,125"><rect x="1380" y="1170" width="320" height="125" rx="10" fill="#0c1b2c" stroke="#22d3ee" stroke-width="1.3"/><text x="1396" y="1200" class="card-title" style="font-size:20px">ApmComponent</text><text x="1396" y="1227" class="body">Logs · metrics · traces</text><text x="1396" y="1251" class="body">Private health / diagnostics</text><text x="1396" y="1275" class="body">No financial authority</text></g>
+<g class="connection-label" data-call-label="D1"><rect x="413.5" y="1077" width="33.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="430" y="1092" text-anchor="middle" class="edge-label">D1</text></g>
+<g class="connection-label" data-call-label="B1"><rect x="913.5" y="1081" width="183.0" height="22" rx="5" fill="#10273f" stroke="#42688a" stroke-width="0.7"/><text x="1005" y="1096" text-anchor="middle" class="edge-label">B1 · platform adapters</text></g>
+<text x="60" y="1344" class="small">Payment invariant: a signature is not settlement; only trusted evidence can commit a Ledger posting. No business message broker is required.</text>
+<rect x="40" y="1360" width="1680" height="245" rx="12" fill="#0b1729" stroke="#35506f"/><text x="60" y="1389" class="zone-title">Abbreviations and connection key</text>
+<text x="60" y="1550" class="glossary">Sequence IDs: A = access; P = outbound payment; I = inbound collection; R = recovery; B = bootstrap / projection.</text>
+<text x="60" y="1572" class="glossary">Independent calls: D1 = SQL; C1 = cache; T1 = telemetry; O1 = private operations; X1 = configured external infrastructure.</text>
+<text x="60" y="1593" class="glossary">Numbers follow each flow, not one global clock. Replies return on the same path; P1 repeats with the authorized Credential.</text>
+<text x="60" y="1417" class="glossary">API = Application Programming Interface</text>
+<text x="60" y="1441" class="glossary">HTTP = Hypertext Transfer Protocol</text>
+<text x="60" y="1465" class="glossary">TLS = Transport Layer Security</text>
+<text x="60" y="1489" class="glossary">HTTPS = HTTP over TLS</text>
+<text x="60" y="1513" class="glossary">UI = User Interface</text>
+<text x="475" y="1417" class="glossary">SDK = Software Development Kit</text>
+<text x="475" y="1441" class="glossary">MCP = Model Context Protocol</text>
+<text x="475" y="1465" class="glossary">A2A = Agent-to-Agent</text>
+<text x="475" y="1489" class="glossary">IAM = Identity and Access Management</text>
+<text x="475" y="1513" class="glossary">SQL = Structured Query Language</text>
+<text x="890" y="1417" class="glossary">EVM = Ethereum Virtual Machine</text>
+<text x="890" y="1441" class="glossary">MPP = Machine Payments Protocol</text>
+<text x="890" y="1465" class="glossary">RPC = Remote Procedure Call</text>
+<text x="890" y="1489" class="glossary">KEK = Key Encryption Key</text>
+<text x="890" y="1513" class="glossary">x402 = HTTP 402 payment protocol</text>
+<text x="1305" y="1417" class="glossary">APM = Application Performance Monitoring</text>
+<text x="1305" y="1441" class="glossary">OTLP = OpenTelemetry Protocol</text>
+<text x="1305" y="1465" class="glossary">Solid arrow: call; reply uses the same path</text>
+<text x="1305" y="1489" class="glossary">Dashed arrow: platform / optional access</text>
+<text x="1305" y="1513" class="glossary">Boundary boxes indicate ownership, not a hop</text>
+</g>
+</svg>
