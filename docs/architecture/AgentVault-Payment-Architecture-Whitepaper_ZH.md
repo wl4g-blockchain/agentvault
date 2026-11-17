@@ -127,6 +127,8 @@ SDK 强类型 DTO 与契约夹具定义 wire 边界；编号阶段不新增路�
 | 不确定结果 | `unknown` 继续接受基于证据的 Reconciliation。 |
 | 终态 | `settled`、`failed`、`expired`；迁移遵守领域规则与可用证据。 |
 
+Credential 语义指纹 MUST 在同一支付方向内唯一，MUST NOT 跨请求或资源兑换。同一部署服务两侧时，MAY 为一笔外部转账分别记录一次入站和一次出站事实，表达收款与付款钱包的两个会计视角，不代表两次结算。
+
 SQL 是状态迁移权威。PostgreSQL 使用有序行锁、条件更新和事务 Lease；SQLite 使用 `BEGIN IMMEDIATE`，由单个 AgentVault 进程写入。Ledger MUST 只追加，修正使用精确 Reversal；`(wallet_id, posting_key)` 去重资金事实，可信 `effect_ref` 区分同交易的本金、费用、退款等 Effect。
 
 本地提交失败不能回滚外部转账。运行时 MUST 保留恢复关键证据、在支持时幂等重试外部操作，并对账不确定结果，而不是伪造成功。恢复 MUST 读取精确 `(intent_id, event_type, attempt_no)` 证据，不从分页事件视图推断权威；每个进程使用唯一 SQL Lease Owner。

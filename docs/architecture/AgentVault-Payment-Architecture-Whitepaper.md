@@ -127,6 +127,8 @@ Inbound and outbound limits are independent within the Policy budget unit. Share
 | Uncertain outcome | `unknown` remains subject to evidence-based reconciliation. |
 | Terminal outcome | `settled`, `failed`, `expired`; transitions follow the domain rules and available evidence. |
 
+Credential semantic fingerprints MUST be unique within each payment direction and MUST NOT be redeemed across requests or resources. A deployment serving both sides MAY record one inbound and one outbound fact for the same external transfer: these represent the receiving and paying wallets, not two settlements.
+
 SQL is the authority for these transitions. PostgreSQL uses ordered row locks, conditional updates, and transaction leases; SQLite uses `BEGIN IMMEDIATE` with a single AgentVault writer process. Ledger entries MUST be append-only; correction uses exact reversal. `(wallet_id, posting_key)` deduplicates a financial effect, while trusted `effect_ref` distinguishes principal, fees, refunds, and other effects of a transaction.
 
 External settlement cannot be rolled back by a failed local commit. The runtime MUST preserve recovery-critical evidence, repeat external operations idempotently where supported, and reconcile uncertain outcomes rather than manufacture success. Recovery MUST read exact `(intent_id, event_type, attempt_no)` evidence, not infer authority from a paginated event view. Each process uses a unique SQL lease owner.
