@@ -8,12 +8,14 @@ AgentVault 通过 HTTP SDK，提供受策略约束的付款和以可信结算证
 
 - [Architecture overview — English](architecture/overview.md)
 - [架构概览 — 中文](architecture/overview_ZH.md)
+- [Payment architecture whitepaper — English](architecture/AgentVault-Payment-Architecture-Whitepaper.md)
+- [支付架构白皮书 — 中文](architecture/AgentVault-Payment-Architecture-Whitepaper_ZH.md)
 - [Logical architecture](architecture/assets/agentvault-logical-architecture.svg)
 - [Physical architecture](architecture/assets/agentvault—physical-architecture.svg)
 
-The overviews own architecture, domain invariants, payment flows, custody boundaries, and deployment topology. Both language editions reference the same English diagrams.
+The whitepapers define the architecture and interface requirements; the overviews provide the reading entry. Both language editions reference the same English diagrams.
 
-核心架构、领域不变量、支付流程、托管边界和部署拓扑统一维护在上述概览中。中英文版本引用同一组英文架构图。
+白皮书定义正式架构与接口要求，总览提供阅读入口。中英文版本引用同一组英文架构图。
 
 ## Implementation and operations / 实现与运维
 
