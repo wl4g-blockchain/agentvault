@@ -10,47 +10,41 @@ AgentVault 是面向 AI Agent 的双向支付基础设施。业务应用内嵌 P
 
 ![AgentVault 逻辑架构：UI、AuthGuard、业务 SDK、支付服务、外部结算与基础设施](assets/agentvault-logical-architecture.svg)
 
-### 调用时序编号
+### 主要调用时序
 
-每条连接都带时序编号；相同前缀属于同一调用链，数字表示该链的先后，不为独立请求虚构全局时钟。响应沿原连接返回，物理图收敛进程内部细节。
+图中使用连续数字编号，字母后缀表示并行的客户端或路由分支；响应和重试复用原连接。
 
-| 调用链 | 时序 |
+| 步骤 | 调用 |
 |---|---|
-| 访问 | **A1** 客户端请求 → **A2** Gateway/AuthGuard 访问检查 → **A3** protected API 路由，或物理图中的 **A4** 静态 UI 路由；SDK 的 P2/I1 入口复用 A2/A3。 |
-| 付款 | **P1** 资源请求/402 → **P2** Payer SDK 调 Gateway → **P3** Payer 路由 → **P4** 领域授权/预留 → **P5** 受约束协议计划 → **P6** 签名前实时链上余额/Gas 检查；取得 Credential 后重复 P1。 |
-| 收款 | **I1** Payee SDK 调 Gateway → **I2** Payee 路由/Price/Challenge → **I3** 外部 Verify/Settle → **I4** Provider 调链 → **I5** 领域结算提交。 |
-| 恢复 | **R1** 领取持久恢复任务 → **R2** 独立观察链上证据 → **D1** 提交结果；P6 与 R2 共用 RPC 连线。 |
-| 平台/运维 | **B1** bootstrap/配置依赖 → **B2** Secret 投射（物理图展开）。**D1** SQL、**C1** Cache、**T1** 遥测、**O1** 私有管理是独立交互；**X1** 选择外部端点替代对应内置实例。 |
+| 1 | 业务客户端请求资源；需要付款时，资源服务返回支付 Challenge。 |
+| 2a–2c | UI、Payer SDK、Payee SDK 分别经 Envoy Gateway 提交请求。 |
+| 3 | Gateway 调用 AuthGuard 完成身份和访问检查。 |
+| 4 | Gateway 将 protected API 请求路由至 AgentVault；物理图中 4a 提供 Web 静态资源，4b 路由后端 API。 |
+| 5 | AgentVault 检查实时链上余额/Gas，独立观察转账证据。 |
+| 6 | Payee 调用外部 Facilitator/Provider 验证并结算 Credential。 |
+| 7 | Provider 执行或确认链上结算。 |
+| 8 | AgentVault 读取或原子写入权威支付状态与已确认 Ledger；授权、审批、恢复复用此事务边界。 |
 
-| 控制边界 | 职责 | 归属约束 |
-|---|---|---|
-| Browser / 应用 UI | Payer Transactions、Payee Transactions、Approvals、Balances & Ledger、Clients、Scenarios、Wallets 和运行健康 | 资金历史只读；审批及支持的配置操作复用领域 API。 |
-| AuthGuard | 身份、会话、IAM 与路由访问授权 | Envoy Gateway 统一路由 UI 和所有已注册 protected APIs；AgentVault 消费可信 Principal 上下文。 |
-| 业务应用 | 出站客户端内嵌 Payer SDK，资源 Handler 内嵌 Payee SDK | SDK 是应用进程中的库，不是额外的 AgentVault 微服务；交付和任务状态归应用。 |
-| AgentVault | Payer、Payee、共享领域、协议适配和恢复任务 | 领域逻辑与 SQL 事务强制执行支付策略；只有 Payer 打开钱包托管能力。 |
-| 外部结算 | x402 Facilitator、MPP Provider 和已配置的链节点 | 始终处于 AgentVault 进程外，提供独立验证的可信结算证据。 |
-| 基础设施 | 权威 SQL、可选缓存、Secret 投射与可观测性 | 缓存和遥测不能授权资金；AuthGuard 保持自己的身份存储。 |
-
-Gateway 完成 HTTP 访问检查后，携带 AuthGuard 签名上下文或 opaque scope token 转发原请求。AgentVault 本地验证签名上下文，或通过 AuthGuard 内部 Scope 服务解析 opaque token。该内部集成及遥测传输独立于业务 SDK 的 HTTP 契约。图中刻意只保留 Gateway 和一个粗粒度 AuthGuard 组件。
-
-隔离可信网络可以显式关闭 AuthGuard。此操作开放 HTTP 身份边界，但不会关闭 Scenario 归属、Policy、审批、钱包、预算和结算校验。
-
-## 2. 实现分层
-
-| 层次 / 源码 | 职责 |
+| 控制边界 | 核心职责 |
 |---|---|
-| [`web/`](../../web/) | React 管理页面；使用同源 API，不在浏览器保存 Bearer Token。 |
-| [`src/sdk/`](../../src/sdk/) | Rust、Go、Python、TypeScript、Java HTTP SDK，提供拦截器、中间件与 HTTP/MCP/A2A 支付绑定。 |
-| [`src/payer/`](../../src/payer/) | Client 管理、授权、审批、签名、钱包导入、余额和付款证据的路由与 Handler。 |
-| [`src/payee/`](../../src/payee/) | Price 解析、Challenge 签发、Credential 校验、外部结算与恢复的路由与 Handler。 |
-| [`src/protocol/`](../../src/protocol/) | 按方向隔离的注册表、x402/MPP wire 语义、受约束签名计划、链 RPC 与回执观察。 |
-| [`src/core/`](../../src/core/) | 应用配置/上下文、共享领域模型和 Port、SQL 仓储、缓存集成、资源导入、Management 与 APM。 |
-| [`src/common/`](../../src/common/) | 独立框架 crate：生命周期与上下文、错误、宏、遥测、审计日志及性能剖析。 |
-| [`src/cmd/`](../../src/cmd/) | CLI、角色选择、依赖装配和任务生命周期。 |
+| Browser / 应用 UI | Payer Transactions、Payee Transactions、Approvals、Balances & Ledger、Clients、Scenarios、Wallets。历史只读，审批和支持的配置写入复用领域 API。 |
+| AuthGuard | 身份与访问检查。一个 Envoy Gateway 统一路由 Web 和已注册 protected APIs，一个粗粒度 AuthGuard 组件代表身份服务。 |
+| AgentVault | Payer 授权/签名、Payee 定价/结算、共享预算、权威状态和恢复。 |
+| 业务应用 | 内嵌 Payer/Payee SDK，保留自己的资源交付和任务状态。 |
+| 外部结算 | Facilitator、Provider 和已配置链 RPC 在 AgentVault 外提供可信证据。 |
 
-Payer 与 Payee 不相互依赖，通过 Core 共享能力并使用 Protocol 适配器；框架库不反向依赖支付领域。`ApplicationContext` 通过 `IProvider` 注册组件，进程统一初始化、排空请求和关闭资源，在途工作完成后缓存先于 SQL 关闭。
+Gateway 转发可信 Principal 上下文；AgentVault 检查 Client/Scenario 归属和支付策略，不重复实现身份管理。隔离可信网络可以显式关闭 AuthGuard，但支付领域校验仍然有效。
 
-领域仓储组合 PostgreSQL/SQLite 通用基类。实体宏提供列元数据和参数绑定，SQLx 解码行；资金聚合事务仍显式控制锁与条件更新，不拆成互不原子的 CRUD 调用。
+## 2. 核心职责
+
+| 组件 | 职责 |
+|---|---|
+| [Payer](../../src/payer/) | 验证 Scenario/Policy、选择 Wallet、预留预算、独立审批、受约束签名和付款证据确认。 |
+| [Payee](../../src/payee/) | 解析 Price、签发 Challenge、验证 Credential、调用外部结算，确认到账后允许业务交付。 |
+| [共享领域/状态](../../src/core/) | Client/Scenario/Policy 归属、钱包托管与 Key Version、Intent/Approval/Ledger 事务和幂等恢复。 |
+| [协议适配](../../src/protocol/) | 映射 x402/MPP 语义，取得可信链上证据。 |
+
+[Payer/Payee SDK](../../src/sdk/) 位于业务应用进程内，不是额外服务；[CLI](../../src/cmd/) 装配后端角色，[Web](../../web/) 通过受保护 HTTP 入口管理支付操作。
 
 ## 3. 资源、授权与预算
 
@@ -143,7 +137,7 @@ AgentVault 不部署业务 A2A/MCP Server；这些服务归接入应用，其内
 
 Dashboard/Console 共用领域 Port。资金历史与 Client 身份绑定在 UI 中只读，身份/目录注册由受控导入负责；Scenario、初始 Policy、多 Wallet membership 原子创建。Wallet UI/Console 提供创建和公开元数据读取，不提供私钥导出或任意密钥生命周期操作。Price 写入检查 revision、保留不可变归属和创建身份，不得删除历史引用。
 
-配置集中在 [`src/core/src/config/`](../../src/core/src/config/)，优先级为默认值 < 原生 YAML < `AGENTVAULT__...` 环境变量。通用 Serde 树遍历处理嵌套 Map/数组，`validation.rs` 检查跨字段约束；Secret 引用让秘密材料留在可序列化配置之外。框架根为 `server`、`mgmt`、`logging`、`storage`、`cache`、`secrets`；业务归 `agentvault`，Payer/Payee profile 分别启用。
+配置优先级为默认值 < 原生 YAML < `AGENTVAULT__...` 环境变量，Payer/Payee 分别启用。Secret 通过引用提供，不嵌入 SDK 配置；部署细节见 [Helm 指南](../../deploy/helm/agentvault/README.md)。
 
 ## 8. 物理部署与运行
 
@@ -151,20 +145,15 @@ Dashboard/Console 共用领域 Port。资金历史与 Client 身份绑定在 UI 
 
 图示为默认 Helm 拓扑：独立 Web 副本和多个**同时启用两种角色**的后端副本。Payer/Payee 是模块或进程角色，不是两个必需 Deployment。`agentvault serve --role payer` 与 `--role payee` 支持独立进程并保留相同 HTTP 契约；Compose 默认一个组合后端。
 
-| 端点 / 组件 | 部署行为 |
+| 组件 | 部署行为 |
 |---|---|
-| Envoy Gateway | 统一路由 UI、受保护 `/api/v1/*` 和已注册应用路由；生产配置边缘 TLS，Compose 开发入口为 HTTP `:8080`。 |
-| Web / Nginx | [`web/Dockerfile`](../../web/Dockerfile) 生产静态镜像，内部 `8080`；API 经 Gateway 保持同源。 |
-| 后端 | 业务和 Admin HTTP 使用 `8080`；Management `9091` 私网访问，不承载目录/支付写路由。 |
-| PostgreSQL / Redis / Jaeger | [`deploy/helm/`](../../deploy/helm/) 下默认启用的独立依赖；AuthGuard 数据库和缓存单独归属。 |
-| Secret 投射 | Kubernetes Secret 或 GCP/AWS/Vault 集成；安装前 bootstrap，支付密钥不进入 Helm values/SDK。 |
-| Provider / 链节点 | 外部运营方配置，不内嵌 AgentVault；本地链是一次性用例夹具。 |
+| Envoy Gateway / AuthGuard | 共享受保护入口；生产配置边缘 TLS，Compose 开发入口为 HTTP `:8080`。 |
+| Web | 独立生产 Nginx 镜像，内部 `8080`；浏览器经 Gateway 使用同源 API。 |
+| 后端 | 默认 Helm 部署两个组合 Payer/Payee 副本，业务和 Admin API 使用 `8080`。 |
+| PostgreSQL | 后端副本共用的权威数据库，持久保存加密钱包密钥、支付状态和 Ledger；SQLite 是单进程替代。 |
+| Facilitator / Provider / 链节点 | 独立运行的结算服务，由运营方配置，不由不可信 Challenge 选择。 |
 
-Helm 使用 `postgres.enabled`、`redis.enabled`、`jaeger.enabled`；Compose 使用 `.env.example` 中的 `COMPOSE_PROFILES`。连接自建 SQL/Cache/Collector 时关闭对应内置实例。SQLite 加本地持久卷是单进程替代，不是多副本共享数据库。
-
-`ApmComponent` 启动健康检查、指标、Trace 与已配置诊断。`/healthz` 检查进程；`/readyz` 有界探测 SQL，失败返回 503。缓存故障会被观测并降级加速能力，但不改写资金，也不单独摘除 SQL 正常的实例。
-
-Wallet Balance Sync 保存运营观察值；签名前仍检查实时余额/Gas，快照不能替代结算证据或 Ledger。结构化日志和 OpenTelemetry 在 SDK、Vault、Provider、RPC 间传播 Trace/Span，不约束业务正确性。长期存储可接外部 Collector，内置 Jaeger 使用有界内存。
+缓存、Secret 配置、健康检查和遥测属于配套部署细节，配置及外部端点见 [Docker](../../deploy/docker/README.md) 和 [Helm](../../deploy/helm/agentvault/README.md) 指南，不再单独展开架构区域。
 
 ## 9. 验证与相关文档
 
@@ -177,4 +166,4 @@ Docker/Kubernetes CI 还执行 `live-wallet`：Chromium 加载**生产 Web 容�
 - [Helm 部署与 Secret bootstrap](../../deploy/helm/agentvault/README.md)
 - [端到端场景与证据](../../use-cases/marketpulse-feed-subscription/README_CN.md)
 
-两图底部解释英文缩略语。正文补充：EOA 为外部账户，JWT 为 JSON Web Token，CRUD 为创建/读取/更新/删除，SQLx 为 Rust SQL 工具库，TTL 为存活时间。Wire 示例和运维命令继续由各自文档维护。
+图底部只解释领域缩写；托管章节中的 EOA 指外部账户。

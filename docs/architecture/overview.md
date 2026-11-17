@@ -10,47 +10,41 @@ This overview describes implemented service and deployment boundaries. Protocol-
 
 ![AgentVault logical architecture: UI, AuthGuard, business SDKs, payment services, external settlement, and infrastructure](assets/agentvault-logical-architecture.svg)
 
-### Numbered invocation paths
+### Main call sequence
 
-Every connection has a sequence ID. The same prefix identifies a call flow; numbers order that flow rather than imposing a global clock on independent requests. Replies use the same connection. The physical view collapses in-process interactions.
+The diagrams use consecutive numbers. Letter suffixes mark parallel client or routing branches; responses and retries reuse the same connections.
 
-| Flow | Call order |
+| Step | Call |
 |---|---|
-| Access | **A1** client request → **A2** Gateway/AuthGuard access check → **A3** protected API routing, or **A4** static UI routing in the physical view. SDK entry P2/I1 reuses A2/A3. |
-| Outbound payment | **P1** resource request/402 → **P2** Payer SDK calls Gateway → **P3** Payer route → **P4** domain authorization/reservation → **P5** bound protocol plan → **P6** live chain balance/gas checks before signing. The SDK repeats P1 with the returned Credential. |
-| Inbound collection | **I1** Payee SDK calls Gateway → **I2** Payee route/Price/Challenge → **I3** external verify/settle → **I4** Provider chain call → **I5** domain settlement commit. |
-| Recovery | **R1** claim durable recovery work → **R2** independently observe chain evidence → **D1** persist the outcome. P6 and R2 share the RPC connector. |
-| Platform / operations | **B1** bootstrap/configure dependencies → **B2** project Secrets into the runtime (expanded in the physical view). **D1** SQL, **C1** cache, **T1** telemetry, and **O1** private management are independent interactions. **X1** selects an external infrastructure endpoint instead of its bundled instance. |
+| 1 | Business client requests a resource; the resource service returns a payment Challenge when needed. |
+| 2a–2c | UI, Payer SDK, and Payee SDK submit their respective requests through Envoy Gateway. |
+| 3 | Gateway calls AuthGuard for identity and access checks. |
+| 4 | Gateway routes the protected API request to AgentVault. In the physical view, 4a serves Web assets and 4b routes backend APIs. |
+| 5 | AgentVault checks live chain balances/gas and independently observes transfer evidence. |
+| 6 | Payee invokes the external Facilitator/Provider to verify and settle a Credential. |
+| 7 | The Provider executes or confirms the chain settlement. |
+| 8 | AgentVault reads or atomically records authoritative payment state and confirmed Ledger effects in SQL. Authorization, approval, and recovery reuse this transaction boundary. |
 
-| Boundary | Responsibilities | Ownership constraints |
-|---|---|---|
-| Browser / application UI | Payer Transactions, Payee Transactions, Approvals, Balances & Ledger, Clients, Scenarios, Wallets, and runtime health | Financial history is read-only. Approvals and supported configuration operations use the domain APIs. |
-| AuthGuard | Identity, sessions, identity and access management, and routing authorization | Envoy Gateway routes the UI and all registered protected APIs. AgentVault consumes trusted principal context. |
-| Business applications | Payer SDKs in outbound clients; Payee SDKs in resource handlers | SDKs are embedded libraries, not additional AgentVault microservices. Applications own delivery and task state. |
-| AgentVault | Payer, Payee, shared domain, protocol adapters, and recovery jobs | Domain logic and SQL transactions enforce payment policy. Only Payer opens wallet custody. |
-| External settlement | x402 Facilitators, MPP settlement providers, and configured chain nodes | They remain outside AgentVault and supply independently verified settlement evidence. |
-| Infrastructure | Authoritative SQL, optional cache, Secret projection, and observability | Cache and telemetry cannot authorize funds. AuthGuard retains its own identity storage. |
-
-Gateway forwards the original request with signed AuthGuard context or an opaque scope token after HTTP access checks. AgentVault verifies signed context locally; an opaque token can be resolved through AuthGuard's internal scope service. That internal integration and telemetry transport are separate from the HTTP-only business SDK contract. The diagrams deliberately show just Gateway and one coarse-grained AuthGuard component.
-
-AuthGuard may be explicitly disabled for an isolated trusted network. This opens the HTTP identity boundary; Scenario ownership, Policy, approval, wallet, budget, and settlement constraints remain active.
-
-## 2. Implementation layers
-
-| Layer / source | Role |
+| Boundary | Main responsibility |
 |---|---|
-| [`web/`](../../web/) | React dashboard using same-origin APIs; no browser Bearer-token storage. |
-| [`src/sdk/`](../../src/sdk/) | Rust, Go, Python, TypeScript, and Java HTTP SDKs; interceptors, middleware, and HTTP/MCP/A2A payment bindings. |
-| [`src/payer/`](../../src/payer/) | Routes and handlers for client management, authorization, approval, signing, wallet import, balances, and outbound evidence. |
-| [`src/payee/`](../../src/payee/) | Routes and handlers for Price resolution, Challenge issuance, Credential validation, external settlement, and recovery. |
-| [`src/protocol/`](../../src/protocol/) | Direction-scoped registries, x402/MPP wire semantics, constrained signing plans, chain RPC, and receipt observation. |
-| [`src/core/`](../../src/core/) | Application config/context, shared domain models and ports, SQL repositories, cache integration, resource import, management, and APM. |
-| [`src/common/`](../../src/common/) | Independent framework crates: lifecycle/context, errors, macros, telemetry, audit logging, and profiling. |
-| [`src/cmd/`](../../src/cmd/) | CLI, role selection, dependency composition, and runtime job lifecycle. |
+| Browser / application UI | Payer Transactions, Payee Transactions, Approvals, Balances & Ledger, Clients, Scenarios, and Wallets. History is read-only; approvals and supported configuration writes use the same domain APIs. |
+| AuthGuard | Identity and access checks. One Envoy Gateway routes Web assets and every registered protected API; one coarse AuthGuard block represents its identity services. |
+| AgentVault | Payer authorization/signing, Payee pricing/settlement, shared budgets, authoritative state, and recovery. |
+| Business applications | Embed Payer/Payee SDKs. They own resource delivery and task state. |
+| External settlement | Facilitators, Providers, and configured chain RPC supply evidence outside AgentVault. |
 
-Payer and Payee do not depend on each other. They share Core capabilities and use Protocol adapters. Framework crates do not depend on payment domains. `ApplicationContext` registers providers through `IProvider`; the process owns initialization, request draining, and shutdown. Cache closes before SQL after active work drains.
+Gateway forwards trusted principal context. AgentVault checks Client/Scenario ownership and payment policy rather than reimplementing identity management. AuthGuard can be explicitly disabled for an isolated trusted network; payment-domain checks remain active.
 
-Domain repositories compose generic PostgreSQL/SQLite bases. Entity macros supply column metadata and parameter binding; SQLx decodes rows. Financial aggregate transactions retain explicit locks and conditional writes rather than becoming unrelated CRUD calls.
+## 2. Core responsibilities
+
+| Component | Responsibilities |
+|---|---|
+| [Payer](../../src/payer/) | Validate Scenario/Policy, select Wallet, reserve budget, request independent approval, sign constrained payment data, and verify outbound evidence. |
+| [Payee](../../src/payee/) | Resolve Price, issue Challenge, validate Credential, invoke external settlement, and confirm payment before business delivery. |
+| [Shared domain/state](../../src/core/) | Client/Scenario/Policy ownership, wallet custody and key versions, Intent/Approval/Ledger transactions, and idempotent recovery. |
+| [Protocol adapters](../../src/protocol/) | Map x402/MPP payment semantics and obtain trusted chain evidence. |
+
+[Payer/Payee SDKs](../../src/sdk/) run inside the integrating application, not as extra services. [The CLI](../../src/cmd/) composes the backend roles; [the Web application](../../web/) manages payment operations through the protected HTTP boundary.
 
 ## 3. Resources, authorization, and budgets
 
@@ -143,7 +137,7 @@ Browser import supports secp256k1 EOA keys and first obtains a short-lived ident
 
 Dashboard and console share domain ports. Transaction/Event/Ledger history and Client identity bindings are read-only in the UI; controlled resource import owns identity/catalog registration. Scenario creation atomically writes Scenario, initial Policy, and selected Wallet membership. Wallet UI/console supports creation and public metadata reads, not private-key export or arbitrary key lifecycle operations. Price writes check revisions, preserve immutable scope/creation identity, and cannot delete referenced history.
 
-Configuration lives in [`src/core/src/config/`](../../src/core/src/config/): defaults < native YAML < `AGENTVAULT__...` environment overrides. Generic Serde-tree traversal handles nested maps/arrays; `validation.rs` checks cross-field constraints. Secret references keep material outside serialized config. Framework roots are `server`, `mgmt`, `logging`, `storage`, `cache`, and `secrets`; business configuration belongs under `agentvault`, with independently enabled Payer/Payee profiles.
+Configuration uses defaults < native YAML < `AGENTVAULT__...` environment overrides. Payer and Payee profiles are independently enabled. Secrets are supplied through references, not embedded in SDK configuration; deployment details belong to the [Helm guide](../../deploy/helm/agentvault/README.md).
 
 ## 8. Physical deployment and operations
 
@@ -151,20 +145,15 @@ Configuration lives in [`src/core/src/config/`](../../src/core/src/config/): def
 
 The diagram depicts default Helm deployment: separate Web replicas and replicated **combined-role** backends. Payer and Payee are module/process roles, not two mandatory deployments. `agentvault serve --role payer` and `--role payee` support independent processes with the same HTTP contract. Compose defaults to one combined backend.
 
-| Endpoint / component | Deployment behavior |
+| Component | Deployment behavior |
 |---|---|
-| Envoy Gateway | Shared routing for UI, protected `/api/v1/*`, and registered application routes. Configure production edge TLS; Compose's development edge publishes HTTP `:8080`. |
-| Web / Nginx | Production static image [`web/Dockerfile`](../../web/Dockerfile), internal port `8080`; APIs remain same-origin through Gateway. |
-| Backend | Business and Admin HTTP routers on `8080`; management `9091` is private and hosts no catalog/payment write routes. |
-| PostgreSQL / Redis / Jaeger | Independent default-on dependencies from [`deploy/helm/`](../../deploy/helm/). AuthGuard owns its database/cache separately. |
-| Secret projection | Kubernetes Secret or configured GCP/AWS/Vault integration; bootstrap precedes installation. Payment keys are not Helm values or SDK configuration. |
-| Providers / chain nodes | External operator-configured dependencies, not embedded AgentVault containers. Local chain nodes are disposable use-case fixtures. |
+| Envoy Gateway / AuthGuard | Shared protected entry. Configure production edge TLS; Compose development entry is HTTP `:8080`. |
+| Web | Separate production Nginx image on internal `8080`; the browser uses same-origin APIs through Gateway. |
+| Backend | Default Helm deployment has two combined Payer/Payee replicas; business and administrative APIs use `8080`. |
+| PostgreSQL | Shared authoritative database for backend replicas; encrypted wallet keys, payment state, and Ledger remain durable. SQLite is a single-process alternative. |
+| Facilitator / Provider / chain nodes | Independently operated settlement services, selected by operator configuration rather than untrusted Challenges. |
 
-Helm uses `postgres.enabled`, `redis.enabled`, and `jaeger.enabled`; Compose uses the `COMPOSE_PROFILES` defaults in `.env.example`. Disable bundled instances and supply external SQL/cache/collector endpoints when reusing infrastructure. SQLite with a local durable volume is a single-process alternative, not a shared multi-replica database.
-
-`ApmComponent` starts health, metrics, tracing, and configured diagnostics. `/healthz` checks process liveness; `/readyz` probes authoritative SQL within a bounded timeout and returns 503 on failure. Cache failure is observed and can degrade acceleration, but neither rewrites funds nor alone marks SQL-ready instances unavailable.
-
-Wallet Balance Sync stores periodic chain observations for operations. Signing still checks live balance/gas; snapshots cannot replace settlement evidence or Ledger. Structured logs and OpenTelemetry propagate trace/span context through SDK, Vault, Provider, and RPC calls without imposing business constraints. External collectors can retain traces; bundled Jaeger uses bounded in-memory storage.
+Cache, Secret provisioning, health probes, and telemetry are supporting deployment concerns. Their configuration and optional external endpoints are covered by the [Docker](../../deploy/docker/README.md) and [Helm](../../deploy/helm/agentvault/README.md) guides. They are intentionally not expanded into additional architecture regions.
 
 ## 9. Verification and related documentation
 
@@ -177,4 +166,4 @@ Docker and Kubernetes CI also run `live-wallet`: Chromium loads the **production
 - [Helm deployment and Secret bootstrap](../../deploy/helm/agentvault/README.md)
 - [End-to-end scenarios and evidence](../../use-cases/marketpulse-feed-subscription/README.md)
 
-Diagram footers define their abbreviations. In this text: EOA = externally owned account; JWT = JSON Web Token; CRUD = create/read/update/delete; SQLx = the Rust SQL toolkit; TTL = time to live. Wire examples and operational commands remain in their owning documents.
+The diagram footer expands domain-specific acronyms only. EOA in the custody discussion means externally owned account.
