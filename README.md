@@ -33,7 +33,7 @@ Client 1 ── N Scenario 1 ── N Policy 1 ── N Wallet
 
 A wallet may be shared by multiple policies because enterprise scenarios can use one treasury wallet. Shared wallets require aggregate hard limits. Every policy has independent inbound and outbound per-payment, daily, approval-threshold, and approval-overage controls.
 
-Read the [architecture white paper](docs/index.md) for flows, invariants, table relationships, security boundaries, and deployment topology.
+Read the [architecture overview](docs/architecture/overview.md) for logical and physical diagrams, payment flows, domain invariants, custody boundaries, and deployment topology.
 
 ## Repository layout
 
@@ -41,11 +41,11 @@ Read the [architecture white paper](docs/index.md) for flows, invariants, table 
 src/          Rust service: apm, cache, cmd, config, controller, handler,
               model, protocol, storage, utils
 migrations/   matching PostgreSQL and SQLite 001_init DDL/DML
-src/sdk/ Rust, Go, Python, TypeScript, and Java SDKs plus shared transport proto
+src/sdk/ Rust, Go, Python, TypeScript, and Java HTTP SDKs plus shared identity protocol assets
 web/          AgentVault operations dashboard
 deploy/       Grafana, Docker, and Helm deployment assets
 use-cases/    real MarketPulse/QuantStream multi-process payment E2E
-docs/         one canonical architecture white paper
+docs/         documentation index and bilingual architecture overview
 ```
 
 There is no public API-description directory. SDK source DTOs and cross-language contract tests are the supported client boundary.

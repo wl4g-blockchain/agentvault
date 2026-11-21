@@ -33,7 +33,7 @@ Client 1 ── N Scenario 1 ── N Policy 1 ── N Wallet
 
 同一 Wallet 可以被多个 Policy 共享，用于企业公共资金池；共享时必须设置 Wallet 聚合硬限额。Policy 对 INBOUND 与 OUTBOUND 分别设置单笔、每日、审批阈值和审批追加额度，收款侧同样可以防止资源超卖。
 
-完整流程、数据表关系、一致性、安全和部署边界见 [架构白皮书](docs/index.md)。
+逻辑与物理架构图、支付流程、领域不变量、托管及部署边界见 [架构概览](docs/architecture/overview_ZH.md)。
 
 ## 仓库结构
 
@@ -41,11 +41,11 @@ Client 1 ── N Scenario 1 ── N Policy 1 ── N Wallet
 src/          Rust 服务：apm、cache、cmd、config、controller、handler、
               model、protocol、storage、utils
 migrations/   PostgreSQL/SQLite 对齐的 001_init DDL/DML
-src/sdk/ Rust、Go、Python、TypeScript、Java SDK 与共享传输 Proto
+src/sdk/ Rust、Go、Python、TypeScript、Java HTTP SDK 与共享身份协议资产
 web/          AgentVault 运维 Dashboard
 deploy/       Grafana、Docker、Helm 部署资源
 use-cases/    MarketPulse/QuantStream 真实多进程支付 E2E
-docs/         唯一架构白皮书入口
+docs/         文档导航与中英文架构概览
 ```
 
 项目不维护对外 API 描述目录。多语言 SDK 的强类型 DTO 和契约测试是客户端调用边界。
